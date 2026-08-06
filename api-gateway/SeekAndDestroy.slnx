@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="SeekAndDestroy.Api/SeekAndDestroy.Api.csproj" />
+  <Project Path="SeekAndDestroy.Application/SeekAndDestroy.Application.csproj" />
+  <Project Path="SeekAndDestroy.Domain/SeekAndDestroy.Domain.csproj" />
+  <Project Path="SeekAndDestroy.Infrastructure/SeekAndDestroy.Infrastructure.csproj" />
+  <Project Path="SeekAndDestroy.Tests/SeekAndDestroy.Tests.csproj" />
+</Solution>

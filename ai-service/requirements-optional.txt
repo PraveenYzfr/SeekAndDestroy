@@ -1,0 +1,10 @@
+# Optional extras. The platform runs fully without any of these.
+#
+# sentence-transformers replaces the built-in DeterministicHashEmbedder with a
+# real dense encoder. It pulls in torch, which has no CPython 3.14 wheel at the
+# time of writing - install under CPython 3.12 if you need it, then set
+# EMBEDDING_PROVIDER=sentence-transformers.
+sentence-transformers==3.4.1
+
+# LangSmith tracing. Enable with LANGSMITH_TRACING=true.
+langsmith==0.10.15

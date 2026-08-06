@@ -1,0 +1,63 @@
+# =============================================================================
+# SeekAndDestroy - root .gitignore
+# =============================================================================
+
+# --- secrets / local config --------------------------------------------------
+.env
+*.env.local
+**/appsettings.Development.json
+**/appsettings.*.local.json
+
+# --- Python -------------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+pip-wheel-metadata/
+build/
+dist/
+
+# --- runtime / generated state -------------------------------------------------
+.state/
+*.sqlite
+*.sqlite3
+*.db
+!database/*.sql
+
+# --- .NET -----------------------------------------------------------------------
+api-gateway/**/bin/
+api-gateway/**/obj/
+*.user
+*.suo
+.vs/
+
+# --- Node / React -----------------------------------------------------------------
+ui/node_modules/
+ui/dist/
+ui/build/
+ui/.vite/
+npm-debug.log*
+yarn-error.log*
+
+# --- Qdrant / docker local volumes --------------------------------------------
+docker/qdrant_storage/
+docker/.env
+
+# --- editors / OS -----------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Claude Code local tooling config (machine-specific, not project source) -----
+.claude/settings.local.json
+
+# --- logs ---------------------------------------------------------------------
+*.log
+logs/

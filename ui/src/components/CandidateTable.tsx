@@ -1,0 +1,71 @@
+import { Fragment, useState } from "react";
+import type { CandidateScore } from "@/types";
+
+export default function CandidateTable({ candidates }: { candidates: CandidateScore[] }) {
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Rank</th>
+          <th>Cluster</th>
+          <th>Status</th>
+          <th>Score</th>
+          <th>Est. Monthly Cost</th>
+          <th>Headroom %</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {candidates.map((c) => (
+          <Fragment key={c.cluster_id}>
+            <tr>
+              <td>{c.rank}</td>
+              <td>{c.cluster_code}</td>
+              <td>
+                <span className={`badge ${c.eligibility_status === "Eligible" ? "eligible" : "rejected"}`}>
+                  {c.eligibility_status}
+                </span>
+              </td>
+              <td>{c.overall_score ?? "—"}</td>
+              <td>{c.estimated_monthly_cost != null ? `$${c.estimated_monthly_cost.toLocaleString()}` : "—"}</td>
+              <td>{c.projected ? `${c.projected.projected_headroom_percent}%` : "—"}</td>
+              <td>
+                <button className="secondary" onClick={() => setExpanded(expanded === c.cluster_id ? null : c.cluster_id)}>
+                  {expanded === c.cluster_id ? "Hide" : "Detail"}
+                </button>
+              </td>
+            </tr>
+            {expanded === c.cluster_id && (
+              <tr>
+                <td colSpan={7}>
+                  <div className="explain-box">
+                    <strong>Rule evaluation</strong>
+                    <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                      {c.rule_results.map((r) => (
+                        <li key={r.rule_id} className={r.passed ? "rule-pass" : "rule-fail"}>
+                          {r.passed ? "PASS" : "FAIL"} {r.rule_id}: {r.reason}
+                        </li>
+                      ))}
+                    </ul>
+                    {c.subscores && (
+                      <>
+                        <strong style={{ display: "block", marginTop: 8 }}>Sub-scores</strong>
+                        <span>
+                          capacity={c.subscores.capacity} compatibility={c.subscores.compatibility} resiliency=
+                          {c.subscores.resiliency} cost={c.subscores.cost} dependency={c.subscores.dependency}{" "}
+                          historical={c.subscores.historical} risk={c.subscores.risk}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            )}
+          </Fragment>
+        ))}
+      </tbody>
+    </table>
+  );
+}

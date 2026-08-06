@@ -1,0 +1,39 @@
+# SeekAndDestroy AI service - pinned dependency set.
+# Resolved and verified on CPython 3.14.0 / Windows.
+
+# --- web / api ---
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+python-multipart==0.0.32
+
+# --- data / validation ---
+pydantic==2.13.4
+pydantic-settings==2.14.2
+numpy==2.5.1
+
+# --- persistence ---
+SQLAlchemy==2.0.51
+pyodbc==5.3.0
+
+# --- llm orchestration ---
+langchain==1.3.14
+langchain-core==1.5.3
+langgraph==1.2.10
+langgraph-checkpoint==4.1.1
+langgraph-checkpoint-sqlite==3.1.1
+
+# --- model context protocol ---
+mcp==2.0.0
+
+# --- retrieval ---
+qdrant-client==1.18.0
+redis==5.2.1
+
+# --- infrastructure ---
+httpx==0.28.1
+python-dotenv==1.2.2
+structlog==26.1.0
+
+# --- tests ---
+pytest==9.1.1
+pytest-asyncio==1.4.0
