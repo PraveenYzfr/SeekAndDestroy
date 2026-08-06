@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import structlog
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from app.api.auth import get_current_employee
 from app.cache.store import get_cache_store
 from app.repositories.base import fetch_one
 from app.retrieval.vector_store import get_vector_store
+from app.security.jwt_service import AuthenticatedEmployee
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["system"])
@@ -43,7 +45,10 @@ def ready():
 
 
 @router.post("/api/index/rebuild")
-def rebuild_index():
+def rebuild_index(current: AuthenticatedEmployee = Depends(get_current_employee)):
+    # /api/health and /api/ready stay unauthenticated on purpose (standard
+    # infra liveness/readiness probes never carry credentials) - this is the
+    # only mutating endpoint on this router, so it alone is protected.
     from app.retrieval.indexer import index_all
 
     count = index_all()

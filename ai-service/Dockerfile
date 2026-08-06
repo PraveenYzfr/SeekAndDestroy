@@ -1,4 +1,8 @@
-FROM python:3.12-slim
+# Pinned to Debian 12 (bookworm) explicitly, matching the packages.microsoft.com/.../debian/12/...
+# repo config below - "python:3.12-slim" now floats onto Debian 13 (trixie), whose apt
+# rejects Microsoft's still-SHA1-signed bookworm repo key under trixie's stricter OpenPGP
+# policy (no Debian 13 msodbcsql18 repo exists yet to switch to instead).
+FROM python:3.12-slim-bookworm
 
 # ODBC Driver 18 for SQL Server (Debian/Ubuntu apt repo)
 RUN apt-get update && apt-get install -y --no-install-recommends \

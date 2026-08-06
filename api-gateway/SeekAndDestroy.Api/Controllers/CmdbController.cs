@@ -1,9 +1,11 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SeekAndDestroy.Application.Interfaces;
 
 namespace SeekAndDestroy.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/cmdb")]
 public sealed class CmdbController(ICmdbRepository repository) : ControllerBase
 {

@@ -34,3 +34,24 @@ def _quiet_logging():
     import structlog
 
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))
+
+
+@pytest.fixture(scope="session")
+def auth_employee_id() -> int:
+    """The real, active Employee row every auth-related test authenticates
+    as (E1001 in the deterministic seed data)."""
+    return 1
+
+
+@pytest.fixture(scope="session")
+def auth_headers(auth_employee_id) -> dict:
+    """A valid Authorization header for API tests - obtained the same way a
+    real client would, via POST /api/auth/dev-token (SAD_AUTH__MODE=local is
+    the test-suite default)."""
+    from app.security.jwt_service import create_local_token
+
+    token = create_local_token(
+        employee_id=auth_employee_id, employee_number="E1001", display_name="Aditi Sharma",
+        email="aditi.sharma@seekanddestroy.example",
+    )
+    return {"Authorization": f"Bearer {token}"}

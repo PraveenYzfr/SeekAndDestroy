@@ -31,7 +31,7 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             base_url=settings.base_url or "https://api.openai.com/v1",
             model=settings.model, api_key=settings.api_key,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds,
+            timeout_seconds=settings.timeout_seconds, provider_name=provider,
         )
     if provider == "azure-openai":
         if not settings.azure_endpoint or not settings.azure_deployment:
@@ -43,13 +43,13 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             base_url=base_url, model=settings.model, api_key=settings.api_key,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds,
-            extra_headers={"api-key": settings.api_key} if settings.api_key else {},
+            extra_headers={"api-key": settings.api_key} if settings.api_key else {}, provider_name=provider,
         )
     if provider == "ollama":
         return HttpChatModel(
             base_url=settings.ollama_base_url.rstrip("/") + "/v1", model=settings.model,
             api_key="ollama", temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds,
+            timeout_seconds=settings.timeout_seconds, provider_name=provider,
         )
     raise ValueError(f"unknown SAD_LLM__PROVIDER: {provider}")
 
@@ -86,12 +86,16 @@ class FallbackChatModel(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
+        from app.observability.metrics import llm_fallback_total
+
         last_exc: Exception | None = None
-        for name, model in self.members:
+        for i, (name, model) in enumerate(self.members):
             try:
                 return model._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
             except Exception as exc:  # noqa: BLE001 - must try the next provider regardless of failure cause
                 logger.warning("llm_factory.fallback.provider_failed", provider=name, error=str(exc))
+                if i < len(self.members) - 1:
+                    llm_fallback_total.labels(from_provider=name).inc()
                 last_exc = exc
         raise RuntimeError(
             f"all LLM providers failed: {[n for n, _ in self.members]}"

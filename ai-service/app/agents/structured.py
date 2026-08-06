@@ -39,11 +39,15 @@ def _cache_key(system_prompt: str, human_prompt: str, output_model: type[BaseMod
 
 
 def run_structured(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_model: type[T]) -> T:
+    from app.observability.metrics import narration_cache_total
+
     store = get_cache_store()
     cache_key = _cache_key(system_prompt, human_prompt, output_model)
     cached = store.get(cache_key)
     if cached is not None:
+        narration_cache_total.labels(result="hit").inc()
         return output_model.model_validate_json(cached)
+    narration_cache_total.labels(result="miss").inc()
 
     parsed = _invoke(llm, system_prompt, human_prompt, output_model)
     store.set(cache_key, parsed.model_dump_json(), ttl_seconds=get_settings().cache.default_ttl_seconds)

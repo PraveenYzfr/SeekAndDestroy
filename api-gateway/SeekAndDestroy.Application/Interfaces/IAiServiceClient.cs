@@ -22,4 +22,10 @@ public interface IAiServiceClient
     Task<JsonNode?> GetInvestigationRecommendationsAsync(int investigationId, CancellationToken ct);
 
     Task<JsonNode?> SubmitRecommendationDecisionAsync(int recommendationId, RecommendationDecisionRequestDto request, CancellationToken ct);
+
+    /// <summary>Proxies to the AI service's own dev-token issuance
+    /// (SAD_AUTH__MODE=local only - 404s otherwise). This is the one call
+    /// that must NOT forward the caller's Authorization header, since there
+    /// isn't one yet - it's how a token is obtained in the first place.</summary>
+    Task<JsonNode?> IssueDevTokenAsync(DevTokenRequestDto request, CancellationToken ct);
 }

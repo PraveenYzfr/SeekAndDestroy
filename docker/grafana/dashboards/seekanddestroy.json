@@ -1,0 +1,107 @@
+{
+  "title": "SeekAndDestroy",
+  "uid": "seekanddestroy-overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "HTTP request rate (ai-service)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"ai-service\"}[5m])) by (handler, status)",
+          "legendFormat": "{{handler}} [{{status}}]"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "HTTP request rate (api-gateway)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_received_total{job=\"api-gateway\"}[5m])) by (code)",
+          "legendFormat": "status {{code}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Real LLM calls by provider/outcome",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_llm_calls_total[5m])) by (provider, outcome)",
+          "legendFormat": "{{provider}} [{{outcome}}]"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Real embedding calls by provider/outcome",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_embedding_calls_total[5m])) by (provider, outcome)",
+          "legendFormat": "{{provider}} [{{outcome}}]"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "LLM fallback activations",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_llm_fallback_total[5m])) by (from_provider)",
+          "legendFormat": "from {{from_provider}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Narration cache hit rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_narration_cache_total[5m])) by (result)",
+          "legendFormat": "{{result}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Spend-budget denials",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_budget_denied_total[5m])) by (namespace)",
+          "legendFormat": "{{namespace}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Investigations created by type",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_investigations_total[5m])) by (investigation_type)",
+          "legendFormat": "{{investigation_type}}"
+        }
+      ]
+    }
+  ]
+}

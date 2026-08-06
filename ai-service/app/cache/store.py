@@ -26,6 +26,7 @@ logger = structlog.get_logger(__name__)
 class CacheStore(Protocol):
     def get(self, key: str) -> str | None: ...
     def set(self, key: str, value: str, *, ttl_seconds: int | None = None) -> None: ...
+    def incr(self, key: str, *, ttl_seconds: int | None = None) -> int: ...
     def delete(self, key: str) -> None: ...
     def clear(self) -> None: ...
     def count(self) -> int: ...
@@ -53,6 +54,17 @@ class InMemoryCacheStore:
         else:
             self._expires_at.pop(key, None)
 
+    def incr(self, key: str, *, ttl_seconds: int | None = None) -> int:
+        # Single Python statement under the GIL - atomic within one process,
+        # which is all the "memory" backend ever promises (it isn't shared
+        # across worker processes either way; use "redis" for that).
+        self._evict_if_expired(key)
+        new_value = int(self._values.get(key, "0")) + 1
+        self._values[key] = str(new_value)
+        if ttl_seconds is not None:
+            self._expires_at[key] = time.time() + ttl_seconds
+        return new_value
+
     def delete(self, key: str) -> None:
         self._values.pop(key, None)
         self._expires_at.pop(key, None)
@@ -77,6 +89,15 @@ class RedisCacheStore:
 
     def set(self, key: str, value: str, *, ttl_seconds: int | None = None) -> None:
         self._client.set(key, value, ex=ttl_seconds)
+
+    def incr(self, key: str, *, ttl_seconds: int | None = None) -> int:
+        # Redis INCR is atomic and shared across every process/worker talking
+        # to the same instance - the whole reason a call-count budget is
+        # trustworthy under real concurrency only in "redis" mode.
+        new_value = self._client.incr(key)
+        if ttl_seconds is not None:
+            self._client.expire(key, ttl_seconds)
+        return new_value
 
     def delete(self, key: str) -> None:
         self._client.delete(key)

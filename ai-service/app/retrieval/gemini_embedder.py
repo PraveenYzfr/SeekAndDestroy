@@ -19,10 +19,13 @@ Auth is the ``x-goog-api-key`` header, not ``Authorization: Bearer``.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
 import httpx
 from langchain_core.embeddings import Embeddings
+
+from app.utils.http_retry import request_with_retry
 
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_MODEL = "gemini-embedding-001"
@@ -37,6 +40,7 @@ class GeminiEmbedder(Embeddings):
         base_url: str = DEFAULT_BASE_URL,
         batch_size: int = 64,
         timeout_seconds: int = 30,
+        batch_delay_seconds: float = 0.0,
         transport: Optional[httpx.BaseTransport] = None,
     ):
         self.api_key = api_key
@@ -44,6 +48,7 @@ class GeminiEmbedder(Embeddings):
         self.base_url = base_url.rstrip("/")
         self.batch_size = max(1, batch_size)
         self.timeout_seconds = timeout_seconds
+        self.batch_delay_seconds = batch_delay_seconds
         self._transport = transport  # test-only hook (httpx.MockTransport); None uses real networking
 
     def _headers(self) -> dict:
@@ -56,32 +61,35 @@ class GeminiEmbedder(Embeddings):
         return f"{self.base_url}/{self._model_path()}:batchEmbedContents"
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        from app.config import get_settings
+        from app.observability.metrics import embedding_calls_total
+        from app.services.spend_budget import check_and_increment
+
+        check_and_increment("embedding", get_settings().retrieval.embedding_daily_call_budget)
+
         model_path = self._model_path()
         payload: dict[str, Any] = {
             "requests": [{"model": model_path, "content": {"parts": [{"text": t}]}} for t in texts]
         }
-        for attempt in range(2):  # one retry on a transient (5xx / connection) failure
-            try:
-                with httpx.Client(timeout=self.timeout_seconds, transport=self._transport) as client:
-                    response = client.post(self._url(), headers=self._headers(), json=payload)
-                    response.raise_for_status()
-                    data = response.json()
-                return [item["values"] for item in data["embeddings"]]
-            except httpx.HTTPStatusError as exc:
-                if attempt == 0 and exc.response.status_code >= 500:
-                    continue
-                raise
-            except httpx.TransportError:
-                if attempt == 0:
-                    continue
-                raise
-        raise AssertionError("unreachable")  # loop always returns or raises
+        try:
+            with httpx.Client(timeout=self.timeout_seconds, transport=self._transport) as client:
+                response = request_with_retry(lambda: client.post(self._url(), headers=self._headers(), json=payload))
+            data = response.json()
+            result = [item["values"] for item in data["embeddings"]]
+        except Exception:
+            embedding_calls_total.labels(provider="gemini", outcome="error").inc()
+            raise
+        embedding_calls_total.labels(provider="gemini", outcome="success").inc()
+        return result
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
         vectors: list[list[float]] = []
-        for i in range(0, len(texts), self.batch_size):
+        batch_starts = range(0, len(texts), self.batch_size)
+        for n, i in enumerate(batch_starts):
+            if n > 0 and self.batch_delay_seconds > 0:
+                time.sleep(self.batch_delay_seconds)
             vectors.extend(self._embed_batch(texts[i : i + self.batch_size]))
         return vectors
 

@@ -1,6 +1,8 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using SeekAndDestroy.Application.Dtos;
 using SeekAndDestroy.Application.Exceptions;
@@ -11,7 +13,7 @@ namespace SeekAndDestroy.Infrastructure.AiService;
 /// <summary>Typed HttpClient over the FastAPI AI service. Registered via
 /// AddHttpClient in Program.cs with BaseAddress from configuration
 /// (AiService:BaseUrl) - never hardcoded here.</summary>
-public sealed class AiServiceClient(HttpClient httpClient, ILogger<AiServiceClient> logger) : IAiServiceClient
+public sealed class AiServiceClient(HttpClient httpClient, IHttpContextAccessor httpContextAccessor, ILogger<AiServiceClient> logger) : IAiServiceClient
 {
     private static readonly JsonSerializerOptions RequestOptions = new()
     {
@@ -19,9 +21,30 @@ public sealed class AiServiceClient(HttpClient httpClient, ILogger<AiServiceClie
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
     };
 
+    /// <summary>Forwards the caller's own Bearer token through to the AI
+    /// service unchanged, so it validates the exact same token the gateway
+    /// did - real defense in depth (nothing that skips the gateway can reach
+    /// the AI service unauthenticated either), not the gateway re-minting or
+    /// vouching for an identity on the caller's behalf. Absent for the one
+    /// unauthenticated call the gateway itself makes - issuing a dev token.</summary>
+    private AuthenticationHeaderValue? CallerAuthorizationHeader()
+    {
+        var header = httpContextAccessor.HttpContext?.Request.Headers["Authorization"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(header) || !AuthenticationHeaderValue.TryParse(header, out var parsed))
+        {
+            return null;
+        }
+        return parsed;
+    }
+
     private async Task<JsonNode?> PostAsync(string path, object body, CancellationToken ct)
     {
-        using var response = await httpClient.PostAsJsonAsync(path, body, RequestOptions, ct);
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = JsonContent.Create(body, options: RequestOptions),
+        };
+        request.Headers.Authorization = CallerAuthorizationHeader();
+        using var response = await httpClient.SendAsync(request, ct);
         var text = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
         {
@@ -33,7 +56,9 @@ public sealed class AiServiceClient(HttpClient httpClient, ILogger<AiServiceClie
 
     private async Task<JsonNode?> GetAsync(string path, CancellationToken ct)
     {
-        using var response = await httpClient.GetAsync(path, ct);
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        request.Headers.Authorization = CallerAuthorizationHeader();
+        using var response = await httpClient.SendAsync(request, ct);
         var text = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
         {
@@ -75,4 +100,19 @@ public sealed class AiServiceClient(HttpClient httpClient, ILogger<AiServiceClie
 
     public Task<JsonNode?> SubmitRecommendationDecisionAsync(int recommendationId, RecommendationDecisionRequestDto request, CancellationToken ct) =>
         PostAsync($"/api/recommendations/{recommendationId}/decision", request, ct);
+
+    public async Task<JsonNode?> IssueDevTokenAsync(DevTokenRequestDto request, CancellationToken ct)
+    {
+        // Deliberately does not go through PostAsync/CallerAuthorizationHeader -
+        // this is how a token is obtained in the first place, so there is
+        // never a caller Authorization header worth forwarding here.
+        using var response = await httpClient.PostAsJsonAsync("/api/auth/dev-token", request, RequestOptions, ct);
+        var text = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            logger.LogWarning("AI service /api/auth/dev-token returned {Status}: {Body}", (int)response.StatusCode, text);
+            throw new AiServiceException((int)response.StatusCode, text);
+        }
+        return string.IsNullOrWhiteSpace(text) ? null : JsonNode.Parse(text);
+    }
 }

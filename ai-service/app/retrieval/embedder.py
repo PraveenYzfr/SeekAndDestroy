@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import time
 from functools import lru_cache
 
 import httpx
@@ -21,6 +22,7 @@ import structlog
 from langchain_core.embeddings import Embeddings
 
 from app.config import get_settings
+from app.utils.http_retry import request_with_retry
 
 logger = structlog.get_logger(__name__)
 
@@ -74,6 +76,7 @@ class HttpEmbedder(Embeddings):
         api_version: str = "",
         batch_size: int = 64,
         timeout_seconds: int = 30,
+        batch_delay_seconds: float = 0.0,
         extra_headers: dict | None = None,
         transport: httpx.BaseTransport | None = None,
     ):
@@ -83,6 +86,7 @@ class HttpEmbedder(Embeddings):
         self.api_version = api_version
         self.batch_size = max(1, batch_size)
         self.timeout_seconds = timeout_seconds
+        self.batch_delay_seconds = batch_delay_seconds
         self.extra_headers = extra_headers or {}
         self._transport = transport  # test-only hook (httpx.MockTransport); None uses real networking
 
@@ -99,30 +103,33 @@ class HttpEmbedder(Embeddings):
         return url
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        from app.config import get_settings
+        from app.observability.metrics import embedding_calls_total
+        from app.services.spend_budget import check_and_increment
+
+        check_and_increment("embedding", get_settings().retrieval.embedding_daily_call_budget)
+
         payload = {"model": self.model, "input": texts}
-        for attempt in range(2):  # one retry on a transient (5xx / connection) failure
-            try:
-                with httpx.Client(timeout=self.timeout_seconds, transport=self._transport) as client:
-                    response = client.post(self._url(), headers=self._headers(), json=payload)
-                    response.raise_for_status()
-                    data = response.json()
-                items = sorted(data["data"], key=lambda item: item.get("index", 0))
-                return [item["embedding"] for item in items]
-            except httpx.HTTPStatusError as exc:
-                if attempt == 0 and exc.response.status_code >= 500:
-                    continue
-                raise
-            except httpx.TransportError:
-                if attempt == 0:
-                    continue
-                raise
-        raise AssertionError("unreachable")  # loop always returns or raises
+        try:
+            with httpx.Client(timeout=self.timeout_seconds, transport=self._transport) as client:
+                response = request_with_retry(lambda: client.post(self._url(), headers=self._headers(), json=payload))
+            data = response.json()
+            items = sorted(data["data"], key=lambda item: item.get("index", 0))
+            result = [item["embedding"] for item in items]
+        except Exception:
+            embedding_calls_total.labels(provider="api", outcome="error").inc()
+            raise
+        embedding_calls_total.labels(provider="api", outcome="success").inc()
+        return result
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
         vectors: list[list[float]] = []
-        for i in range(0, len(texts), self.batch_size):
+        batch_starts = range(0, len(texts), self.batch_size)
+        for n, i in enumerate(batch_starts):
+            if n > 0 and self.batch_delay_seconds > 0:
+                time.sleep(self.batch_delay_seconds)
             vectors.extend(self._embed_batch(texts[i : i + self.batch_size]))
         return vectors
 
@@ -162,6 +169,7 @@ def _build_embedder_and_fingerprint() -> tuple[Embeddings, str]:
             base_url=base_url, model=settings.embedding_model, api_key=settings.embedding_api_key,
             api_version=settings.embedding_api_version, batch_size=settings.embedding_batch_size,
             timeout_seconds=settings.embedding_timeout_seconds, extra_headers=extra_headers,
+            batch_delay_seconds=settings.embedding_batch_delay_seconds,
         )
         return _probe_or_fallback(candidate, provider_label="api", dimensions=settings.embedding_dimensions, model=settings.embedding_model)
 
@@ -173,6 +181,7 @@ def _build_embedder_and_fingerprint() -> tuple[Embeddings, str]:
             api_key=settings.embedding_api_key, model=settings.embedding_model or DEFAULT_MODEL,
             base_url=base_url, batch_size=settings.embedding_batch_size,
             timeout_seconds=settings.embedding_timeout_seconds,
+            batch_delay_seconds=settings.embedding_batch_delay_seconds,
         )
         return _probe_or_fallback(
             candidate, provider_label="gemini", dimensions=settings.embedding_dimensions,

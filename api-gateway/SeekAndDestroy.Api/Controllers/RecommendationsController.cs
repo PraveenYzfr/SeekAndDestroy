@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SeekAndDestroy.Application.Dtos;
 using SeekAndDestroy.Application.Interfaces;
@@ -6,10 +7,12 @@ namespace SeekAndDestroy.Api.Controllers;
 
 /// <summary>Every action here is a thin, validated pass-through to the Python
 /// AI service - this controller never computes a score, a rule result or a
-/// forecast itself. Approve/Reject require a reviewer identity, enforced by
-/// FluentValidation on the request and again by the AI service's own
-/// governance tools.</summary>
+/// forecast itself. Approve/Reject require a reviewer identity: the request's
+/// ReviewerEmployeeId is no longer trusted as-is, it's cross-checked against
+/// the caller's authenticated token by the AI service (which forwards the
+/// same Bearer token this controller received - see AiServiceClient).</summary>
 [ApiController]
+[Authorize]
 [Route("api/recommendations")]
 public sealed class RecommendationsController(IAiServiceClient aiServiceClient) : ControllerBase
 {

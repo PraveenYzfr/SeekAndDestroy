@@ -34,6 +34,14 @@ httpx==0.28.1
 python-dotenv==1.2.2
 structlog==26.1.0
 
+# --- auth ---
+PyJWT==2.13.0
+cryptography==50.0.0
+
+# --- observability ---
+prometheus-client==0.26.0
+prometheus-fastapi-instrumentator==8.1.0
+
 # --- tests ---
 pytest==9.1.1
 pytest-asyncio==1.4.0

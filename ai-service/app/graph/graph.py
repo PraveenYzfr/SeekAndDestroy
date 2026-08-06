@@ -119,6 +119,8 @@ def _summarize(final_state: dict) -> dict:
 
 
 def run_investigation(*, query: str, created_by: int) -> dict:
+    from app.observability.metrics import investigations_total
+
     investigation_id = investigation_repository.create(query, "Question", created_by)
     state = new_state(query, created_by)
     state["investigation_id"] = investigation_id
@@ -126,6 +128,7 @@ def run_investigation(*, query: str, created_by: int) -> dict:
     compiled = get_compiled_graph()
     config = _thread_config(investigation_id)
     result = compiled.invoke(state, config=config)
+    investigations_total.labels(investigation_type=result.get("investigation_type", "Unknown")).inc()
 
     if result.get("__interrupt__"):
         return {

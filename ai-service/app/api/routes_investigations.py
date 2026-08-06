@@ -5,21 +5,24 @@ the rest of the API works even while that module is under active development.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from app.utils.json_utils import to_jsonable
 
+from app.api.auth import get_current_employee, require_matching_employee_id
 from app.api.errors import ProblemDetailsError
 from app.api.schemas import CreateInvestigationRequest, ResumeInvestigationRequest
 from app.repositories import investigation_repository, recommendation_repository
+from app.security.jwt_service import AuthenticatedEmployee
 
 router = APIRouter(tags=["investigations"])
 
 
 @router.post("/api/investigations")
-def create_investigation(payload: CreateInvestigationRequest):
+def create_investigation(payload: CreateInvestigationRequest, current: AuthenticatedEmployee = Depends(get_current_employee)):
     from app.graph.graph import run_investigation
 
-    result = run_investigation(query=payload.query, created_by=payload.created_by_employee_id)
+    created_by = require_matching_employee_id(current, payload.created_by_employee_id)
+    result = run_investigation(query=payload.query, created_by=created_by)
     return to_jsonable(result)
 
 
@@ -32,15 +35,19 @@ def get_investigation(investigation_id: int):
 
 
 @router.post("/api/investigations/{investigation_id}/resume")
-def resume_investigation(investigation_id: int, payload: ResumeInvestigationRequest):
+def resume_investigation(
+    investigation_id: int, payload: ResumeInvestigationRequest,
+    current: AuthenticatedEmployee = Depends(get_current_employee),
+):
     from app.graph.graph import resume_investigation as graph_resume
 
     inv = investigation_repository.get_by_id(investigation_id)
     if inv is None:
         raise ProblemDetailsError(404, "Investigation not found", f"No investigation with id {investigation_id}.")
+    reviewer_employee_id = require_matching_employee_id(current, payload.reviewer_employee_id)
     result = graph_resume(
         investigation_id=investigation_id, decision=payload.decision,
-        reviewer_employee_id=payload.reviewer_employee_id, comments=payload.comments,
+        reviewer_employee_id=reviewer_employee_id, comments=payload.comments,
     )
     return to_jsonable(result)
 

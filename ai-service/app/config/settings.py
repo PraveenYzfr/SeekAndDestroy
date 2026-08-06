@@ -137,6 +137,12 @@ class LlmSettings(_Base):
     # azure_deployment for azure-openai, ollama_base_url for ollama, etc.), so
     # they must already be filled in for any fallback actually to work.
     fallback_providers: str = ""
+    # Spend/abuse control for real providers: max real (non-mock) chat-model calls
+    # allowed per UTC calendar day, process-wide (Redis-backed and thus shared
+    # across workers when SAD_CACHE__BACKEND=redis; per-process otherwise). 0 (the
+    # default) means unlimited - mock mode is always unlimited regardless of this
+    # value, since it costs nothing and calls nothing external.
+    daily_call_budget: int = 0
 
     @property
     def fallback_provider_list(self) -> list[str]:
@@ -167,6 +173,18 @@ class RetrievalSettings(_Base):
     embedding_api_version: str = ""
     embedding_batch_size: int = 64
     embedding_timeout_seconds: int = 30
+    # Same spend-control pattern as SAD_LLM__DAILY_CALL_BUDGET, for real (api/gemini)
+    # embedding providers. Counts embed_documents/embed_query invocations, not texts -
+    # a batched upsert of 200 documents is one call. 0 = unlimited (hash/sentence-
+    # transformers are always unlimited - only real, billed providers are budgeted).
+    embedding_daily_call_budget: int = 0
+    # Pause between consecutive batch calls within one embed_documents() run - a full
+    # reindex fires many batches back-to-back, which can burst past a provider's
+    # requests-per-minute quota even though each individual call already retries with
+    # backoff on a 429 (see app.utils.http_retry). Per-request backoff alone can't fix
+    # a sustained per-minute quota; this is what actually paces bulk operations under
+    # a strict free-tier limit. 0 (default) = no artificial delay.
+    embedding_batch_delay_seconds: float = 0.0
     top_k: int = 8
     memory_store_path: str = ".state/vectors.json"
 
@@ -247,6 +265,34 @@ class ForecastSettings(_Base):
     supported_horizons: tuple[int, ...] = (30, 60, 90, 180)
 
 
+class AuthSettings(_Base):
+    """JWT authentication. ``local`` (default) is a self-contained dev/demo
+    mode: this service issues its own HMAC-signed tokens (``POST
+    /api/auth/dev-token``) against a real Employee row - not a real login
+    flow, but not a rubber stamp either. ``oidc`` validates tokens issued by
+    a real external identity provider (Azure AD/Entra, Okta, ...) via
+    standard JWKS/RS256 - this service never issues tokens in that mode, and
+    the dev-token endpoint is disabled (404).
+
+    The .NET gateway and the MCP server's write tools validate the exact
+    same tokens - in ``local`` mode they need the same ``local_signing_key``
+    configured; in ``oidc`` mode they need the same ``oidc_authority``/
+    ``oidc_audience``.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE), env_prefix="SAD_AUTH__", extra="ignore", case_sensitive=False
+    )
+
+    mode: Literal["local", "oidc"] = "local"
+    local_signing_key: str = "dev-only-insecure-signing-key-change-me"
+    local_token_ttl_minutes: int = 60
+    algorithm_local: str = "HS256"
+    oidc_authority: str = ""
+    oidc_audience: str = ""
+    oidc_jwks_url: str = ""  # optional override; derived from oidc_authority if blank
+
+
 class CacheSettings(_Base):
     """LLM-narration and capacity-snapshot caching. ``memory`` (default) keeps
     everything in-process, no server needed; ``redis`` talks to a real Redis
@@ -297,6 +343,7 @@ class Settings:
         self.forecast = ForecastSettings()
         self.service = ServiceSettings()
         self.cache = CacheSettings()
+        self.auth = AuthSettings()
         self.repo_root = REPO_ROOT
 
     @property

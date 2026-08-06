@@ -18,16 +18,27 @@ RFC 7807 `application/problem+json`:
 }
 ```
 
+## Authentication
+
+Every endpoint on both services requires a `Authorization: Bearer <token>` header **except** `/api/health`, `/api/ready` (standard unauthenticated infra probes) and `/api/auth/dev-token` itself (how a token is obtained in the first place). Missing/invalid/expired tokens get a `401`.
+
+`SAD_AUTH__MODE` (ai-service) / `Auth:Mode` (gateway) - both must be set the same way:
+- **`local`** (default): `POST /api/auth/dev-token` `{"employee_number": "E1001"}` (gateway: `{"employeeNumber": "E1001"}`) issues a signed token against a real, active `Employee` row - no external identity provider needed. `SAD_AUTH__LOCAL_SIGNING_KEY` / `Auth:LocalSigningKey` must be the identical string on both services (symmetric key).
+- **`oidc`**: tokens come from a real external IdP (Azure AD/Entra, Okta, ...); `/api/auth/dev-token` returns `404`. `SAD_AUTH__OIDC_AUTHORITY`/`_AUDIENCE` (ai-service) and `Auth:OidcAuthority`/`OidcAudience` (gateway) must point at the same tenant/app registration.
+
+Every write endpoint's `*_employee_id`/`reviewerEmployeeId`-style body field is **advisory only** - the authenticated token's `employee_id` claim is what actually gets used. If a body value is also supplied and disagrees with the token, the request is rejected (`403`) rather than silently overridden. The gateway forwards the caller's own token through to the AI service unchanged (not a separately re-minted one), so both layers independently validate the same credential - a request that skips the gateway and hits the AI service directly is rejected exactly the same way.
+
 ## FastAPI AI service (`ai-service/app/api/`)
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| GET | `/api/health` | — | Liveness only. |
-| GET | `/api/ready` | — | Checks SQL Server + vector store; 503 if either fails. |
+| GET | `/api/health` | — | Liveness only. Unauthenticated. |
+| GET | `/api/ready` | — | Checks SQL Server + vector store + cache; 503 if any fails. Unauthenticated. |
+| POST | `/api/auth/dev-token` | `{employee_number}` | `local` mode only (404 in `oidc` mode). Unauthenticated - see Authentication above. |
 | POST | `/api/index/rebuild` | — | Rebuilds the retrieval index from current CMDB/capacity data. |
-| POST | `/api/investigations` | `{query, created_by_employee_id}` | Runs `InfrastructureRecommendationGraph`; returns `AwaitingReview` or `Completed`. |
+| POST | `/api/investigations` | `{query, created_by_employee_id?}` | Runs `InfrastructureRecommendationGraph`; returns `AwaitingReview` or `Completed`. |
 | GET | `/api/investigations/{id}` | — | Raw `Investigation` row. |
-| POST | `/api/investigations/{id}/resume` | `{decision, reviewer_employee_id, comments}` | Resumes a paused graph via `Command(resume=...)`. |
+| POST | `/api/investigations/{id}/resume` | `{decision, reviewer_employee_id?, comments}` | Resumes a paused graph via `Command(resume=...)`. |
 | GET | `/api/investigations/{id}/recommendations` | — | All `InfrastructureRecommendation` rows for the investigation. |
 | POST | `/api/hosting/recommendations` | `{application_code}` | Scenario A - ranked candidates for an existing application. |
 | POST | `/api/capacity/recommendations` | `{environment, cpu_cores, memory_gb, storage_gb, platform, availability_tier, data_classification, ...}` | Scenario B - ranked candidates for a raw requirement; also creates a `CapacityRequest` row. |
@@ -67,3 +78,5 @@ Gateway request bodies use `camelCase` (ASP.NET Core's default); `AiServiceClien
 ## MCP tools and resources
 
 See `docs/business-rules.md` and `mcp-server/server.py` for the full list of 27 tools / 7 resources; every tool's docstring is its MCP-visible description.
+
+The three identity-bearing write tools (`create_capacity_request`, `create_investigation`, `submit_recommendation_decision`) require an `access_token` parameter - a JWT from the same `POST /api/auth/dev-token` (local mode) or external IdP (oidc mode) as the HTTP surfaces, validated by `mcp-server/tools/_auth.py::authenticate`. A call missing it is rejected by the tool's own schema before any tool code runs; the token is never persisted to `AgentAuditLog`.

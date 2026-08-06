@@ -9,7 +9,7 @@
 | ODBC Driver 17 or 18 for SQL Server | either | Required by `pyodbc`. |
 | .NET SDK | 8.0+ (gateway targets `net8.0`) | Tested with SDK 10.0.302 building a net8.0 target. |
 | Node.js / npm | 18+ | **Not required to build/run the AI service, MCP server or .NET gateway** - only needed for the React UI. |
-| Docker (optional) | any recent | Only needed if you want a real Qdrant instance; the platform runs fully without it (in-memory vector store). |
+| Docker (optional) | any recent | Only needed for the containerized deployment path (§9) or a real Qdrant/Redis instance; the platform runs fully without it. |
 
 ## 1. SQL Server setup
 
@@ -131,7 +131,25 @@ cd api-gateway\SeekAndDestroy.Api && dotnet run --urls http://127.0.0.1:5090
 # Terminal 3 - React UI (requires Node.js)
 cd ui && npm run dev
 ```
-Or use `scripts/run-ai-service.ps1`, `scripts/run-mcp-server.ps1`, `docker/docker-compose.yml` (see `docs/demo-scenarios.md`).
+Or use `scripts/run-ai-service.ps1`, `scripts/run-mcp-server.ps1`.
+
+## 9. Run instructions (Docker, optional)
+
+Docker is never required - everything above runs natively. If you'd rather run it containerized, every service in `docker/docker-compose.yml` sits behind a profile, so a bare `up` starts nothing (7 containers, 2 of them JVM/Node-adjacent, is real idle memory you don't want by default):
+
+```bash
+# The actual app (qdrant, redis, ai-service, api-gateway, ui):
+docker compose -f docker/docker-compose.yml --profile core up --build
+
+# + Prometheus/Grafana, only when you're actively watching metrics:
+docker compose -f docker/docker-compose.yml --profile core --profile observability up --build
+
+# Stop - use the SAME --profile flag(s) you started with, or compose won't
+# know which containers to stop and silently does nothing:
+docker compose -f docker/docker-compose.yml --profile core --profile observability down
+```
+
+**Known limitation, verified live**: the containerized `ai-service`'s basic DB liveness check (`SELECT 1`) succeeds against a Windows-Integrated-Security-only SQL Server, but the .NET gateway's SQL health check fails outright (`Login failed for user ''`) under the same container networking - .NET's `SqlClient` does not accept the blank SQL-auth credentials the same way `pyodbc` tolerates them for a trivial no-table query. Real per-table CMDB access from a container was not verified end-to-end on a Windows-Integrated-Security-only SQL Server. If you need the containerized path to fully work against such an instance, either enable SQL Server Mixed Mode authentication and set `SAD_DB_USERNAME`/`SAD_DB_PASSWORD`, or keep SQL Server itself un-containerized and run the app services natively as above.
 
 ## 9. Test instructions
 

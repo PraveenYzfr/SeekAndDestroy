@@ -7,3 +7,5 @@ namespace SeekAndDestroy.Application.Dtos;
 public sealed record GatewayRightSizingRequestDto(string? ClusterCode, string? ApplicationCode);
 
 public sealed record ApproveRejectRequestDto(int ReviewerEmployeeId, string? Reason);
+
+public sealed record DevTokenRequestDto(string EmployeeNumber);

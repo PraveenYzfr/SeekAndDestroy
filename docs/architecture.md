@@ -79,7 +79,7 @@ Nothing in steps 1-10 or 13-15 is decided by the LLM. Step 11 is the *only* LLM 
 
 ## 5. MCP responsibilities
 
-`mcp-server/server.py` exposes the exact same `app/services` engines used by the FastAPI service and the LangGraph nodes as 27 typed, Pydantic-validated tools and 7 resources, with every invocation audited to `sad.AgentAuditLog`. There is no `execute_sql` tool and no tool that provisions, decommissions or migrates infrastructure - the only write tools touch governance tables (`CapacityRequest`, `Investigation`, `InfrastructureRecommendation`, `RecommendationDecision`).
+`mcp-server/server.py` exposes the exact same `app/services` engines used by the FastAPI service and the LangGraph nodes as 27 typed, Pydantic-validated tools and 7 resources, with every invocation audited to `sad.AgentAuditLog`. There is no `execute_sql` tool and no tool that provisions, decommissions or migrates infrastructure - the only write tools touch governance tables (`CapacityRequest`, `Investigation`, `InfrastructureRecommendation`, `RecommendationDecision`), and the three that carry an identity claim require the same JWT (`access_token`) validated everywhere else in the platform (`mcp-server/tools/_auth.py`, sharing `app.security.jwt_service` with the FastAPI and .NET layers) - see [business-rules.md § Human review is structural](business-rules.md#human-review-is-structural-not-a-convention).
 
 ## 6. SQL Server responsibilities
 
@@ -110,3 +110,9 @@ The React UI's default route (`/`) is a chat interface (`ui/src/pages/Chat.tsx`)
 ## 11. Security controls
 
 See [business-rules.md § Guardrails](business-rules.md#guardrails) for the full, itemized list.
+
+## 12. Observability
+
+Both HTTP surfaces expose Prometheus metrics at `GET /metrics`, unauthenticated (a scraper is another standard infra probe, same posture as `/api/health`/`/health`): the AI service via `prometheus-fastapi-instrumentator` (standard request rate/latency/status, auto-instrumented) plus platform-specific counters in `app/observability/metrics.py` - real LLM/embedding provider calls and outcomes, fallback-chain activations, narration cache hit rate, spend-budget denials, investigations created by type; the .NET gateway via `prometheus-net.AspNetCore` (`UseHttpMetrics`/`MapMetrics`) for the same standard request metrics on its own surface. `docker/docker-compose.yml` can run Prometheus (scraping both `/metrics` endpoints) and Grafana (pre-provisioned with Prometheus as a datasource and a starter dashboard) - see `docker/prometheus/` and `docker/grafana/`. Both sit behind `--profile observability`, separate from `--profile core` (the app itself), so they're only running when you're actually looking at them - see [setup.md § Run instructions (Docker, optional)](setup.md#9-run-instructions-docker-optional).
+
+Structured logging (`structlog`, JSON in production via `SAD_SERVICE__LOG_JSON=true`) and optional LangSmith tracing (`LANGSMITH_TRACING=true`) remain the two other observability channels, unchanged by this - metrics are for "is something wrong right now," tracing is for "why did this one LLM call behave that way," logs are for everything else.

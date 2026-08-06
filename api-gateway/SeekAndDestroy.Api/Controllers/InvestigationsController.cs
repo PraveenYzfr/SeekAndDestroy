@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SeekAndDestroy.Application.Dtos;
 using SeekAndDestroy.Application.Interfaces;
@@ -5,6 +6,7 @@ using SeekAndDestroy.Application.Interfaces;
 namespace SeekAndDestroy.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/investigations")]
 public sealed class InvestigationsController(IAiServiceClient aiServiceClient) : ControllerBase
 {

@@ -17,6 +17,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
+from app.utils.http_retry import request_with_retry
+
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system", "tool": "tool"}
 
 
@@ -37,6 +39,8 @@ class HttpChatModel(BaseChatModel):
     max_tokens: int = 2048
     timeout_seconds: int = 60
     extra_headers: dict = {}
+    provider_name: str = "unknown"  # metrics label only (see app.observability.metrics) - not sent on the wire
+    transport: Optional[httpx.BaseTransport] = None  # test-only hook (httpx.MockTransport); None uses real networking
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -51,6 +55,12 @@ class HttpChatModel(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
+        from app.config import get_settings
+        from app.observability.metrics import llm_calls_total
+        from app.services.spend_budget import check_and_increment
+
+        check_and_increment("llm_chat", get_settings().llm.daily_call_budget)
+
         headers = {"Content-Type": "application/json", **self.extra_headers}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -63,9 +73,13 @@ class HttpChatModel(BaseChatModel):
         if stop:
             payload["stop"] = stop
         url = self.base_url.rstrip("/") + "/chat/completions"
-        with httpx.Client(timeout=self.timeout_seconds) as client:
-            response = client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
+        try:
+            with httpx.Client(timeout=self.timeout_seconds, transport=self.transport) as client:
+                response = request_with_retry(lambda: client.post(url, headers=headers, json=payload))
             data = response.json()
+        except Exception:
+            llm_calls_total.labels(provider=self.provider_name, outcome="error").inc()
+            raise
+        llm_calls_total.labels(provider=self.provider_name, outcome="success").inc()
         content = data["choices"][0]["message"]["content"]
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])

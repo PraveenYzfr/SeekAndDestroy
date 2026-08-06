@@ -1,6 +1,10 @@
+using System.Text;
 using FluentValidation;
 using FluentValidation.AspNetCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.IdentityModel.Tokens;
+using Prometheus;
 using Serilog;
 using SeekAndDestroy.Application.Exceptions;
 using SeekAndDestroy.Application.Interfaces;
@@ -33,12 +37,49 @@ builder.Services.AddValidatorsFromAssemblyContaining<CapacityRecommendationReque
 builder.Services.AddScoped<ISqlConnectionFactory, SqlConnectionFactory>();
 builder.Services.AddScoped<ICmdbRepository, CmdbRepository>();
 
+// Needed so AiServiceClient can forward the caller's own Bearer token
+// straight through to the AI service (see comment there) instead of the
+// gateway re-minting or stripping it.
+builder.Services.AddHttpContextAccessor();
+
 builder.Services.AddHttpClient<IAiServiceClient, AiServiceClient>(client =>
 {
     var baseUrl = builder.Configuration["AiService:BaseUrl"] ?? "http://127.0.0.1:8088";
     client.BaseAddress = new Uri(baseUrl);
     client.Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("AiService:TimeoutSeconds", 60));
 });
+
+// JWT auth: "local" validates tokens this same platform issued itself (via
+// POST /api/auth/dev-token, proxied to the AI service - see AuthController)
+// using a symmetric key that must match SAD_AUTH__LOCAL_SIGNING_KEY on the AI
+// service exactly. "oidc" validates tokens from a real external identity
+// provider (Azure AD/Entra, Okta, ...) via standard JWKS - mirrors
+// app.security.jwt_service on the Python side so both layers trust the exact
+// same tokens.
+var authMode = builder.Configuration["Auth:Mode"] ?? "local";
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
+{
+    if (authMode == "oidc")
+    {
+        options.Authority = builder.Configuration["Auth:OidcAuthority"];
+        options.Audience = builder.Configuration["Auth:OidcAudience"];
+        options.RequireHttpsMetadata = true;
+    }
+    else
+    {
+        var signingKey = builder.Configuration["Auth:LocalSigningKey"]
+            ?? throw new InvalidOperationException("Auth:LocalSigningKey missing for Auth:Mode=local");
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey)),
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = true,
+        };
+    }
+});
+builder.Services.AddAuthorization();
 
 builder.Services.AddHealthChecks()
     .AddSqlServer(
@@ -87,10 +128,17 @@ app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 }));
 
 app.UseCors();
+app.UseAuthentication();
 app.UseAuthorization();
+
+// Standard HTTP request-rate/latency/status-code metrics at GET /metrics -
+// unauthenticated, matching /health (a Prometheus scraper is another
+// standard infra probe, not a platform client).
+app.UseHttpMetrics();
 
 app.MapControllers();
 app.MapHealthChecks("/health");
+app.MapMetrics();
 
 app.Run();
 

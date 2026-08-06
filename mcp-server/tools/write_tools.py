@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import Optional
 
 from tools._audit import audited, model_dict
+from tools._auth import authenticate
 
 from app.repositories import (
     application_repository,
@@ -24,15 +25,21 @@ from app.utils.json_utils import to_jsonable
 
 
 def create_capacity_request(
-    requested_by_employee_id: int, environment: str, required_cpu_cores: float, required_memory_gb: float,
-    required_storage_gb: float, required_availability_tier: str, required_platform: str,
+    requested_by_employee_id: int, access_token: str, environment: str, required_cpu_cores: float,
+    required_memory_gb: float, required_storage_gb: float, required_availability_tier: str, required_platform: str,
     data_classification: str, application_code: str = "", expected_growth_percent: float = 0.0,
     preferred_location: str = "", required_by_date: Optional[str] = None,
 ) -> dict:
-    """Create a Scenario-B raw capacity request (new infrastructure space need)."""
+    """Create a Scenario-B raw capacity request (new infrastructure space need).
+    access_token must be a valid JWT (see app.security.jwt_service) identifying
+    the requester - it is authoritative over requested_by_employee_id."""
     params = dict(locals())
+    params.pop("access_token", None)  # never persist a raw token to the audit log
 
     def run():
+        requested_by, error = authenticate(access_token, requested_by_employee_id)
+        if error:
+            return error
         app_id = None
         if application_code:
             app = application_repository.get_by_code(application_code)
@@ -41,7 +48,7 @@ def create_capacity_request(
             app_id = app.ApplicationId
         parsed_date = date.fromisoformat(required_by_date) if required_by_date else None
         new_id = capacity_request_repository.create(
-            application_id=app_id, requested_by=requested_by_employee_id, environment=environment,
+            application_id=app_id, requested_by=requested_by, environment=environment,
             required_cpu_cores=required_cpu_cores, required_memory_gb=required_memory_gb,
             required_storage_gb=required_storage_gb, expected_growth_percent=expected_growth_percent,
             required_availability_tier=required_availability_tier, required_platform=required_platform,
@@ -53,13 +60,18 @@ def create_capacity_request(
     return audited("create_capacity_request", params, run)
 
 
-def create_investigation(query: str, investigation_type: str, created_by_employee_id: int) -> dict:
+def create_investigation(query: str, investigation_type: str, created_by_employee_id: int, access_token: str) -> dict:
     """Create a new Investigation row. investigation_type must be one of Hosting, Capacity,
-    RightSizing, Consolidation, Forecast, Question, Refused."""
+    RightSizing, Consolidation, Forecast, Question, Refused. access_token must be a valid
+    JWT (see app.security.jwt_service) - it is authoritative over created_by_employee_id."""
     params = dict(locals())
+    params.pop("access_token", None)  # never persist a raw token to the audit log
 
     def run():
-        new_id = investigation_repository.create(query, investigation_type, created_by_employee_id)
+        created_by, error = authenticate(access_token, created_by_employee_id)
+        if error:
+            return error
+        new_id = investigation_repository.create(query, investigation_type, created_by)
         return model_dict(investigation_repository.get_by_id(new_id))
 
     return audited("create_investigation", params, run)
@@ -124,15 +136,18 @@ def list_recommendations(status: str = "", limit: int = 100) -> list[dict]:
 
 
 def submit_recommendation_decision(
-    recommendation_id: int, decision: str, reviewer_employee_id: int, reason: str = ""
+    recommendation_id: int, decision: str, reviewer_employee_id: int, access_token: str, reason: str = ""
 ) -> dict:
     """Record a human decision (Approve | Reject | RequestMoreAnalysis) on a recommendation.
-    Requires a non-empty reviewer identity - this tool refuses anonymous decisions."""
+    access_token must be a valid JWT (see app.security.jwt_service) identifying the reviewer -
+    it is authoritative over reviewer_employee_id, and this tool refuses anonymous decisions."""
     params = dict(locals())
+    params.pop("access_token", None)  # never persist a raw token to the audit log
 
     def run():
-        if not reviewer_employee_id:
-            return {"error": "reviewer_employee_id is required - decisions cannot be anonymous"}
+        reviewer_id, error = authenticate(access_token, reviewer_employee_id)
+        if error:
+            return error
         rec = recommendation_repository.get_by_id(recommendation_id)
         if rec is None:
             return {"error": f"recommendation {recommendation_id} not found"}
@@ -141,7 +156,7 @@ def submit_recommendation_decision(
         status_map = {"Approve": "Approved", "Reject": "Rejected", "RequestMoreAnalysis": "MoreAnalysisRequested"}
         decision_id = recommendation_repository.save_decision(
             recommendation_id=recommendation_id, decision=decision, decision_reason=reason or None,
-            decided_by=reviewer_employee_id,
+            decided_by=reviewer_id,
         )
         recommendation_repository.update_status(recommendation_id, status_map[decision])
         return {"decision_id": decision_id, "recommendation": model_dict(recommendation_repository.get_by_id(recommendation_id))}

@@ -12,10 +12,12 @@ import time
 import uuid
 
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.api import routes_cmdb, routes_forecast, routes_hosting, routes_investigations, routes_recommendations, routes_rightsizing, routes_system
+from app.api import auth, routes_cmdb, routes_forecast, routes_hosting, routes_investigations, routes_recommendations, routes_rightsizing, routes_system
+from app.api.auth import get_current_employee
 from app.api.errors import register_exception_handlers
 from app.config import get_settings
 
@@ -65,10 +67,28 @@ async def correlation_id_middleware(request: Request, call_next):
 
 register_exception_handlers(app)
 
+# Standard HTTP request-rate/latency/status-code metrics, auto-instrumented.
+# GET /metrics is unauthenticated, matching /api/health and /api/ready - a
+# Prometheus scraper is another standard infra probe, not a platform client.
+# Platform-specific counters (LLM/embedding calls, cache hit rate, spend-
+# budget denials, investigations created) live in app.observability.metrics
+# and are wired in at their own call sites, not here.
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+# /api/health, /api/ready (unauthenticated - standard infra probes) and
+# /api/index/rebuild (individually protected - see routes_system.py) live here.
 app.include_router(routes_system.router)
-app.include_router(routes_cmdb.router)
-app.include_router(routes_hosting.router)
-app.include_router(routes_rightsizing.router)
-app.include_router(routes_forecast.router)
-app.include_router(routes_investigations.router)
-app.include_router(routes_recommendations.router)
+# /api/auth/dev-token must itself be unauthenticated (that's how a token is
+# obtained in the first place); it validates the employee_number it's given
+# against a real, active Employee row instead.
+app.include_router(auth.router)
+
+# Every other route in the platform requires a valid Bearer token - applied at
+# the router level so no individual route can be added later and forgotten.
+_auth_dep = [Depends(get_current_employee)]
+app.include_router(routes_cmdb.router, dependencies=_auth_dep)
+app.include_router(routes_hosting.router, dependencies=_auth_dep)
+app.include_router(routes_rightsizing.router, dependencies=_auth_dep)
+app.include_router(routes_forecast.router, dependencies=_auth_dep)
+app.include_router(routes_investigations.router, dependencies=_auth_dep)
+app.include_router(routes_recommendations.router, dependencies=_auth_dep)

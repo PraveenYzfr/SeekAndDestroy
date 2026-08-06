@@ -100,15 +100,60 @@ async def test_score_hosting_candidates_returns_ranked_list(mcp_server):
 
 
 @pytest.mark.asyncio
-async def test_submit_decision_requires_reviewer_identity(mcp_server):
+async def test_submit_decision_requires_access_token(mcp_server):
+    # access_token has no default, so the MCP schema itself rejects a call
+    # missing it entirely with a Pydantic validation error (is_error=True) -
+    # that's the tool refusing to even accept an anonymous invocation, at the
+    # protocol layer, before any tool code runs.
     async with Client(mcp_server) as client:
         result = await client.call_tool(
             "submit_recommendation_decision",
-            {"recommendation_id": 1, "decision": "Approve", "reviewer_employee_id": 0, "reason": ""},
+            {"recommendation_id": 1, "decision": "Approve", "reviewer_employee_id": 1, "reason": ""},
+        )
+        assert result.is_error
+        assert "access_token" in result.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_submit_decision_rejects_empty_access_token(mcp_server):
+    async with Client(mcp_server) as client:
+        result = await client.call_tool(
+            "submit_recommendation_decision",
+            {"recommendation_id": 1, "decision": "Approve", "reviewer_employee_id": 1, "access_token": "", "reason": ""},
         )
         payload = json.loads(result.content[0].text)
         assert "error" in payload
-        assert "reviewer" in payload["error"].lower()
+        assert "anonymous" in payload["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_submit_decision_rejects_mismatched_reviewer_id(mcp_server, access_token, auth_employee_id):
+    async with Client(mcp_server) as client:
+        result = await client.call_tool(
+            "submit_recommendation_decision",
+            {
+                "recommendation_id": 1, "decision": "Approve",
+                "reviewer_employee_id": auth_employee_id + 1, "access_token": access_token, "reason": "",
+            },
+        )
+        payload = json.loads(result.content[0].text)
+        assert "error" in payload
+        assert "employee" in payload["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_submit_decision_succeeds_with_valid_token(mcp_server, access_token, auth_employee_id):
+    async with Client(mcp_server) as client:
+        result = await client.call_tool(
+            "submit_recommendation_decision",
+            {
+                "recommendation_id": 1, "decision": "RequestMoreAnalysis",
+                "reviewer_employee_id": auth_employee_id, "access_token": access_token, "reason": "test",
+            },
+        )
+        payload = json.loads(result.content[0].text)
+        assert "error" not in payload
+        assert payload["decision_id"] > 0
 
 
 @pytest.mark.asyncio

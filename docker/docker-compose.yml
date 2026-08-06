@@ -4,24 +4,57 @@
 # Containers reach it via `host.docker.internal` on Windows/Mac Docker
 # Desktop; on Linux Docker set `SAD_DB__SERVER` to the host's LAN address.
 #
-# Run from the repo root:
-#   docker compose -f docker/docker-compose.yml up --build
-version: "3.9"
+# Every service is behind a profile - a bare `docker compose up` starts
+# NOTHING, on purpose. 7 containers (2 of them JVM/Node-adjacent - Grafana,
+# Prometheus - plus a vector DB) is real memory you don't want idling when
+# you're not actually using it. Pick what you need, from the repo root:
+#
+#   docker compose -f docker/docker-compose.yml --profile core up --build
+#     -> qdrant, redis, ai-service, api-gateway, ui (the actual app)
+#
+#   docker compose -f docker/docker-compose.yml --profile observability up
+#     -> + prometheus, grafana (only when you're actively watching metrics)
+#
+#   docker compose -f docker/docker-compose.yml --profile core --profile observability up
+#     -> everything
+#
+# Stop everything and free the memory back up when you're done - use the SAME
+# --profile flag(s) you started with, or compose won't know which containers
+# it's supposed to be stopping and silently does nothing:
+#   docker compose -f docker/docker-compose.yml --profile core --profile observability down
 
 services:
   qdrant:
+    profiles: ["core"]
     image: qdrant/qdrant:latest
     ports:
       - "6333:6333"
     volumes:
       - qdrant_storage:/qdrant/storage
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/readyz"]
+      # The qdrant image ships neither wget nor curl - bash's own /dev/tcp
+      # redirection (no external binary needed) is enough to confirm the port
+      # is actually accepting connections.
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/6333"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    profiles: ["core"]
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   ai-service:
+    profiles: ["core"]
     build:
       context: ../ai-service
       dockerfile: Dockerfile
@@ -36,13 +69,25 @@ services:
       SAD_LLM__PROVIDER: "mock"
       SAD_RETRIEVAL__BACKEND: "qdrant"
       SAD_RETRIEVAL__QDRANT_URL: "http://qdrant:6333"
+      SAD_CACHE__BACKEND: "redis"
+      SAD_CACHE__REDIS_URL: "redis://redis:6379/0"
+      # local mode default - CHANGE SAD_AUTH__LOCAL_SIGNING_KEY (both here and on
+      # api-gateway's Auth__LocalSigningKey below - they must match exactly) in any
+      # shared/deployed environment. See docs/api-contracts.md § Authentication.
+      SAD_AUTH__MODE: "${SAD_AUTH_MODE:-local}"
+      SAD_AUTH__LOCAL_SIGNING_KEY: "${SAD_AUTH_LOCAL_SIGNING_KEY:-dev-only-insecure-signing-key-change-me}"
+      SAD_AUTH__OIDC_AUTHORITY: "${SAD_AUTH_OIDC_AUTHORITY:-}"
+      SAD_AUTH__OIDC_AUDIENCE: "${SAD_AUTH_OIDC_AUDIENCE:-}"
     depends_on:
       qdrant:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
   api-gateway:
+    profiles: ["core"]
     build:
       context: ../api-gateway
       dockerfile: Dockerfile
@@ -51,12 +96,18 @@ services:
     environment:
       ConnectionStrings__PraveenDB: "Data Source=host.docker.internal;Initial Catalog=PraveenDB;Integrated Security=False;User ID=${SAD_DB_USERNAME:-};Password=${SAD_DB_PASSWORD:-};TrustServerCertificate=True;"
       AiService__BaseUrl: "http://ai-service:8088"
+      # Must match ai-service's SAD_AUTH__* above exactly - both validate the same tokens.
+      Auth__Mode: "${SAD_AUTH_MODE:-local}"
+      Auth__LocalSigningKey: "${SAD_AUTH_LOCAL_SIGNING_KEY:-dev-only-insecure-signing-key-change-me}"
+      Auth__OidcAuthority: "${SAD_AUTH_OIDC_AUTHORITY:-}"
+      Auth__OidcAudience: "${SAD_AUTH_OIDC_AUDIENCE:-}"
     depends_on:
       - ai-service
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
   ui:
+    profiles: ["core"]
     build:
       context: ../ui
       dockerfile: Dockerfile
@@ -65,5 +116,36 @@ services:
     depends_on:
       - api-gateway
 
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    # No depends_on ai-service/api-gateway on purpose - this profile must work
+    # standalone (--profile observability without --profile core). Prometheus
+    # just retries scraping until a target exists; a target being down shows
+    # up as "down" in Prometheus, which is normal, not an error.
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   qdrant_storage:
+  redis_data:
+  prometheus_data:
+  grafana_data:

@@ -25,6 +25,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ai-service"))
 
 from client import call_tool, in_process_client  # noqa: E402
 
+
+def _demo_access_token(employee_id: int = 1) -> str:
+    """A local-mode dev token identifying this demo CLI as a real, seeded
+    Employee row (E1001) - write tools now require one. See
+    app.security.jwt_service; only works when SAD_AUTH__MODE=local."""
+    from app.security.jwt_service import create_local_token
+
+    return create_local_token(
+        employee_id=employee_id, employee_number="E1001", display_name="Aditi Sharma",
+        email="aditi.sharma@seekanddestroy.example",
+    )
+
 DEMO_QUERIES = [
     "Find the best clusters for hosting APP-PAYMENTS.",
     "Where can I place a workload requiring 16 CPU cores, 64 GB RAM and 2 TB storage?",
@@ -226,7 +238,8 @@ async def handle_compare(client, cluster_codes: list[str], app_code: str, tools_
 async def handle_report(client, tools_invoked: list[str]) -> None:
     tools_invoked.append("create_investigation")
     inv = await call_tool(client, "create_investigation", {
-        "query": "Generate a hosting recommendation report.", "investigation_type": "Question", "created_by_employee_id": 1,
+        "query": "Generate a hosting recommendation report.", "investigation_type": "Question",
+        "created_by_employee_id": 1, "access_token": _demo_access_token(),
     })
     _print_header("Investigation created")
     print(f"  {inv}")

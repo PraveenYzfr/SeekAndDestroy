@@ -14,13 +14,21 @@ from pydantic import BaseModel, Field
 
 class CreateInvestigationRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
-    created_by_employee_id: int
+    # Optional and no longer trusted as-is: the authenticated caller's employee_id
+    # (from their Bearer token, see app.api.auth) is always the value actually used.
+    # If both are present and disagree, the request is rejected (403) rather than
+    # silently preferring one - that mismatch means something is actually wrong.
+    created_by_employee_id: Optional[int] = None
 
 
 class ResumeInvestigationRequest(BaseModel):
     decision: str = Field(description="approve | reject | more_analysis")
-    reviewer_employee_id: int = Field(gt=0, description="Required - decisions cannot be anonymous")
+    reviewer_employee_id: Optional[int] = Field(None, description="No longer trusted - see app.api.auth")
     comments: Optional[str] = None
+
+
+class DevTokenRequest(BaseModel):
+    employee_number: str = Field(min_length=1, description="Must match an active Employee row")
 
 
 class HostingRecommendationRequest(BaseModel):
@@ -42,7 +50,7 @@ class CapacityRecommendationRequest(BaseModel):
     top_n: Optional[int] = Field(None, gt=0, description="Return only the top N eligible candidates")
     expected_growth_percent: float = 0.0
     required_by_date: Optional[date] = None
-    requested_by_employee_id: int
+    requested_by_employee_id: Optional[int] = Field(None, description="No longer trusted - see app.api.auth")
     application_id: Optional[int] = None
 
 
@@ -92,5 +100,5 @@ class ForecastRequest(BaseModel):
 
 class RecommendationDecisionRequest(BaseModel):
     decision: str = Field(description="Approve | Reject | RequestMoreAnalysis")
-    reviewer_employee_id: int = Field(gt=0, description="Required - decisions cannot be anonymous")
+    reviewer_employee_id: Optional[int] = Field(None, description="No longer trusted - see app.api.auth")
     reason: Optional[str] = None
