@@ -17,6 +17,15 @@ def get_by_cluster(cluster_id: int, limit: int = 200) -> list[ClusterNode]:
     return [ClusterNode(**r) for r in rows]
 
 
+def get_active_by_cluster(cluster_id: int, limit: int = 200) -> list[ClusterNode]:
+    rows = fetch_all(
+        f"SELECT TOP (:limit) * FROM {T('ClusterNode')} "
+        f"WHERE ClusterId = :cluster_id AND LifecycleStatus = 'Active' ORDER BY HostName",
+        {"cluster_id": cluster_id, "limit": limit},
+    )
+    return [ClusterNode(**r) for r in rows]
+
+
 def count_active_by_cluster(cluster_id: int) -> int:
     row = fetch_one(
         f"SELECT COUNT(*) AS Cnt FROM {T('ClusterNode')} "

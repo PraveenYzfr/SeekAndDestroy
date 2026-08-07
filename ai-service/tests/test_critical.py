@@ -1,7 +1,9 @@
-"""The 13 critical tests named explicitly in the specification (§21).
+"""The 13 critical tests named explicitly in the specification (§21), plus
+test 14, added when recommendations were extended from clusters down to
+individual hosts.
 
-Each test's docstring is the spec's own sentence, verbatim, so the mapping
-from requirement to test is unambiguous.
+Each of the first 13 tests' docstrings is the spec's own sentence, verbatim,
+so the mapping from requirement to test is unambiguous.
 """
 
 from __future__ import annotations
@@ -215,3 +217,44 @@ def test_every_recommendation_includes_evidence():
     for rec in recs:
         assert rec.EvidenceJson is not None
         assert len(rec.EvidenceJson) > 0
+
+
+# 14. A persisted shortlist names hosts, not just clusters, and comes back in
+#     display order: each cluster immediately followed by its own hosts.
+def test_persisted_shortlist_groups_hosts_under_their_cluster():
+    import json
+
+    from app.config import get_settings
+
+    policy = get_settings().policy
+    started = run_investigation(query="Find the best clusters for hosting APP-CRM.", created_by=1)
+    if started["status"] == "AwaitingReview":
+        resume_investigation(
+            investigation_id=started["investigation_id"], decision="Approve",
+            reviewer_employee_id=1, comments=None,
+        )
+    recs = recommendation_repository.list_for_investigation(started["investigation_id"])
+
+    clusters = [r for r in recs if r.CandidateEntityType == "Cluster"]
+    nodes = [r for r in recs if r.CandidateEntityType == "Node"]
+    assert clusters, "expected persisted cluster rows"
+    assert nodes, "expected persisted host rows - the shortlist must reach node level"
+    assert len(clusters) <= policy.top_clusters
+    assert len(nodes) <= policy.top_clusters * policy.top_nodes_per_cluster
+
+    # Rows arrive grouped: every Node row's parent is the most recent Cluster
+    # row above it, and node ranks restart at 1 inside each cluster.
+    current_cluster, seen_ranks = None, []
+    for r in recs:
+        if r.CandidateEntityType == "Cluster":
+            current_cluster = json.loads(r.EvidenceJson)["cluster_code"]
+            seen_ranks = []
+            continue
+        evidence = json.loads(r.EvidenceJson)
+        assert evidence["parent_cluster_code"] == current_cluster
+        seen_ranks.append(r.Rank)
+        assert seen_ranks == list(range(1, len(seen_ranks) + 1))
+        # Cluster-level sub-scores are the parent's to record, not the host's.
+        assert r.CompatibilityScore is None
+        assert r.ResiliencyScore is None
+        assert r.DependencyScore is None

@@ -42,6 +42,24 @@ def capacity_subscore(projected: ProjectedUtilization, *, target_headroom_percen
     return round2(clamp_d(raw))
 
 
+def node_capacity_subscore(projected: ProjectedUtilization) -> Decimal:
+    """clamp(headroom_pct, 0, 100) - the remaining headroom, used directly.
+
+    Deliberately *not* :func:`capacity_subscore`. That one divides by a target
+    headroom (20% by default) and clamps at 100, which is right when comparing
+    clusters across the estate but useless when comparing siblings: every host
+    that clears the target saturates at 100 and the ranking collapses to
+    alphabetical order by hostname. Hosts inside one cluster are near-identical
+    by construction, so the sub-score has to preserve small real differences
+    rather than flatten them.
+
+    Consequence worth knowing when reading a number: node scores are only
+    meaningful *relative to other nodes in the same cluster*. A host at 63 is
+    not "worse" than its cluster at 91 - the two are on different scales.
+    """
+    return round2(clamp_d(projected.projected_headroom_percent))
+
+
 # =============================================================================
 # Compatibility
 # =============================================================================
@@ -89,6 +107,12 @@ def resiliency_subscore(
 
 
 def cost_efficiency_scores(costs_by_cluster_id: dict[int, Decimal]) -> dict[int, Decimal]:
+    """Min-max normalization over whatever entity ids are passed in. Keyed by
+    cluster id for cluster candidates and by node id for node candidates - the
+    formula does not care, but the *set* matters: nodes are normalized within
+    their own cluster, so a node's cost score is relative to its siblings, not
+    to the whole estate.
+    """
     if not costs_by_cluster_id:
         return {}
     values = list(costs_by_cluster_id.values())
@@ -166,6 +190,43 @@ def historical_performance_subscore(incidents: list[Incident]) -> Decimal:
 # =============================================================================
 # Operational risk (higher = worse; the overall formula uses 100 - risk)
 # =============================================================================
+
+
+def node_operational_risk_score(
+    *,
+    lifecycle_status: str,
+    open_severe_incident_count: int,
+    staleness_days: int,
+    stale_after_days: int,
+    has_measurements: bool,
+) -> Decimal:
+    """Node-level risk (higher = worse; the node formula uses ``100 - risk``).
+
+    Deliberately not the cluster ``operational_risk_score``: that one is driven
+    by utilization *volatility*, which would mean pulling a full 30-day series
+    per node (hundreds of rows x every node in every shortlisted cluster) to
+    order at most a handful of siblings. The node signals that actually
+    discriminate are reporting freshness, lifecycle and open severe incidents.
+    """
+    risk = Decimal("0")
+
+    if lifecycle_status == "Deprecated":
+        risk += Decimal("30")
+    elif lifecycle_status != "Active":
+        risk += Decimal("15")
+
+    risk += min(Decimal("40"), Decimal(open_severe_incident_count) * Decimal("20"))
+
+    # A node that stopped reporting is a node nobody can vouch for. Ramps to
+    # the full 25 points over one further stale window.
+    if stale_after_days > 0 and staleness_days > stale_after_days:
+        overdue = Decimal(staleness_days - stale_after_days) / Decimal(stale_after_days)
+        risk += min(Decimal("25"), overdue * Decimal("25"))
+
+    if not has_measurements:
+        risk += Decimal("20")
+
+    return round2(clamp_d(risk))
 
 
 def operational_risk_score(

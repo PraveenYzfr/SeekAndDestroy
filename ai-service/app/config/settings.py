@@ -212,6 +212,15 @@ class PolicySettings(_Base):
     min_nodes_tier2: int = 2
     node_failure_tolerance: int = 1
 
+    # How much of the ranked result is proposed for human review: the top N
+    # clusters, and within each of those, the top M nodes. Ranking itself is
+    # never truncated - these only bound what reaches
+    # InfrastructureRecommendation (see app/graph/nodes.persist_recommendations).
+    top_clusters: int = 3
+    top_nodes_per_cluster: int = 3
+    node_incident_window_days: int = 90
+    node_stale_after_days: int = 7
+
 
 class ScoringSettings(_Base):
     model_config = SettingsConfigDict(
@@ -226,6 +235,27 @@ class ScoringSettings(_Base):
     weight_historical: float = 0.10
     weight_risk: float = 0.05
     min_confident_score: float = 55.0
+
+    # Node-level weights. Deliberately a smaller set than the cluster weights:
+    # compatibility, dependency locality and resiliency tier are properties of
+    # the *cluster* and are identical for every node inside it, so re-scoring
+    # them per node would add nothing but noise to the ordering.
+    node_weight_capacity: float = 0.50
+    node_weight_cost: float = 0.20
+    node_weight_reliability: float = 0.20
+    node_weight_risk: float = 0.10
+
+    @model_validator(mode="after")
+    def _node_weights_sum_to_one(self) -> "ScoringSettings":
+        total = (
+            self.node_weight_capacity
+            + self.node_weight_cost
+            + self.node_weight_reliability
+            + self.node_weight_risk
+        )
+        if abs(total - 1.0) > 1e-9:
+            raise ValueError(f"node scoring weights must sum to 1.0, got {total}")
+        return self
 
     @model_validator(mode="after")
     def _weights_sum_to_one(self) -> "ScoringSettings":
@@ -251,6 +281,14 @@ class ScoringSettings(_Base):
             "dependency": self.weight_dependency,
             "historical": self.weight_historical,
             "risk": self.weight_risk,
+        }
+
+    def node_weights_as_dict(self) -> dict[str, float]:
+        return {
+            "capacity": self.node_weight_capacity,
+            "cost": self.node_weight_cost,
+            "reliability": self.node_weight_reliability,
+            "risk": self.node_weight_risk,
         }
 
 

@@ -22,6 +22,42 @@ Implemented in `ai-service/app/rules/eligibility.py`. All ten always run against
 - **RULE-006** is a literal one-line spec ("apply mandatory or preferred location constraints"), but the schema only carries a *preferred* location, not a separate mandatory flag. We treat a location mismatch as a hard failure only when the workload's `DataClassification` is `Restricted` (a data-residency reading of "mandatory"); every other mismatch is scored, not rejected - see `docs/scoring-model.md`'s Compatibility sub-score.
 - **RULE-010** uses `active_node_count` from `ClusterNode` (live count), not `InfrastructureCluster.NodeCount` (a declared, possibly stale value). This is deliberate: it catches a cluster that *advertises* Tier-1 but cannot structurally back it (e.g. `cmh-03` in the seed data claims Tier-1 with only 2 active nodes - fewer than the 3 required).
 
+## 1b. Node eligibility rules (NODE-001 .. NODE-004)
+
+Implemented in `ai-service/app/rules/node_eligibility.py`. These run *after* RULE-001..010, only against hosts inside a cluster that already passed every cluster-level rule. A node inherits environment, platform, availability tier, classification, location, dependency locality and cluster lifecycle from its cluster - re-checking them per host would return the same answer for every sibling. What is left is strictly node-local.
+
+| Rule | Name | Logic |
+|---|---|---|
+| NODE-001 | Node lifecycle | `ClusterNode.LifecycleStatus` must be exactly `Active`. Stricter than RULE-007 on purpose: a cluster may legitimately be `Planned` and still be a valid target, but a *host* has to be live now to receive a workload. |
+| NODE-002 | Node absolute capacity | `available_* >= per-host portion of required_*_effective` for CPU, memory and storage. |
+| NODE-003 | Node capacity headroom | Projected per-host utilization after placement must stay under the same CPU/memory/storage thresholds RULE-009 uses. |
+| NODE-004 | Node is reporting | The host's `LastSeenAt` must be within `node_stale_after_days` (7) of the **freshest** `LastSeenAt` in its own cluster. |
+
+### How much of the workload each host is measured against
+
+`app/services/node_placement.py::per_host_requirement` decides this from the cluster's platform, and records the answer on every candidate as `evidence.placement_model` / `evidence.share_denominator`:
+
+| Platform | Model | Each host is measured against |
+|---|---|---|
+| Kubernetes, OpenShift, VMware, Hyper-V | `share` | `required_*_effective / active_node_count` |
+| BareMetal (or a cluster with one active host) | `whole` | the entire `required_*_effective` |
+
+The reason this is not simply "whole" everywhere: on a clustered platform the scheduler spreads a workload across hosts, so checking whether a single 6-core host can absorb a 16-core application rejects every host in the estate and returns an empty shortlist - technically true, operationally meaningless. The share is a plain even split, **not** a bin-packing simulation; read it as "this host's fair portion", not as a guaranteed scheduler placement.
+
+### NODE-004 is relative, not wall-clock
+
+Staleness is measured against the freshest host in the same cluster, not against `now()`. This matches how utilization windows already work (`app/repositories/utilization_repository.py`): seed and historical estates are not guaranteed to reach the current instant, and a wall-clock comparison would mark an entire archived estate stale.
+
+## 1c. What reaches a human reviewer
+
+`persist_recommendations` writes the **top 3 clusters and the top 3 hosts inside each** - `SAD_POLICY__TOP_CLUSTERS` and `SAD_POLICY__TOP_NODES_PER_CLUSTER`, both 3 by default. Ranking itself is never truncated; these bound only what becomes an `InfrastructureRecommendation` row.
+
+- Cluster rows use `CandidateEntityType = 'Cluster'`, node rows `'Node'`, both scoped to the same `InvestigationId`.
+- **`Rank` is scoped to its own level.** A node's rank is its position within its parent cluster (1..3), not within the investigation. `recommendation_repository.list_for_investigation` resolves each node back to its parent cluster's rank so rows come back in display order: cluster 1, its hosts, cluster 2, its hosts, and so on.
+- Node rows leave `CompatibilityScore` / `ResiliencyScore` / `DependencyScore` NULL by design - those are cluster properties, identical across sibling hosts, already recorded on the parent cluster's row.
+- Node `EvidenceJson` carries `parent_cluster_id`, `parent_cluster_code`, `parent_cluster_rank` and `reliability_score`, so a reader never has to join to know which cluster a host belongs to.
+- Node `Explanation` is **built by code**, not narrated by the LLM - it states projected CPU/memory/storage and remaining headroom, and numbers do not come from a language model anywhere in this platform.
+
 ## 2. Capacity formulas
 
 Implemented in `ai-service/app/services/capacity.py`, all in `decimal.Decimal`:
@@ -41,6 +77,12 @@ required_eff     = required_grown * (1 + safety_margin%/100)                # de
 projected_%      = (consumed_* + required_eff) / effective_* * 100
 headroom_%       = 100 - max(projected_cpu%, projected_mem%, projected_storage%)
 ```
+
+The same formulas run per host in `compute_node_capacity` / `compute_node_projected_utilization`, with two node-specific caveats:
+
+- A host inherits its **cluster's** reservation percentages - reservation is a platform-level overhead (kubelet/hypervisor/system daemons) and the schema records it once, on the cluster.
+- `allocated_*` counts only `ApplicationHosting` rows **pinned to that host** (`NodeId` is nullable and most hosting rows record only the cluster). On an unpinned estate a host's allocation is 0 and `consumed` is purely the measured figure; `has_measurements` reports whether any `NodeUtilization` samples existed in the window rather than silently scoring an unmonitored host as empty.
+- Growth and the safety margin are applied **once**, at cluster level. The node projection takes the already-effective requirement; recomputing it would inflate every host's numbers relative to its own cluster's.
 
 **Why `consumed = max(allocated, measured)`:** a cluster that has *declared* allocations (via `ApplicationHosting`) exceeding what's *actually measured* is still committed - those cores are reserved even if idle right now. A cluster with low measured use but high allocation is not truly overprovisioned; RIGHTSIZE-001 correctly refuses to call it so.
 

@@ -9,10 +9,18 @@ from decimal import Decimal
 
 from tools._audit import audited, model_list
 
+from app.config import get_settings
 from app.forecasting.engine import forecast_cluster
 from app.models.requirements import HostingRequirement
 from app.repositories import application_repository, cluster_repository
-from app.services import capacity, consolidation, placement, rightsizing, utilization_ranking
+from app.services import (
+    capacity,
+    consolidation,
+    node_placement,
+    placement,
+    rightsizing,
+    utilization_ranking,
+)
 from app.utils.json_utils import to_jsonable
 
 
@@ -89,11 +97,14 @@ def score_hosting_candidates(
     storage_gb: float | None = None, platform: str = "", environment: str = "",
     availability_tier: str = "", data_classification: str = "", growth_percent: float = 0.0,
     preferred_location: str = "", data_center: str = "", top_n: int = 0,
+    top_nodes_per_cluster: int = 0, include_nodes: bool = True,
 ) -> dict:
-    """Run the full eligibility + weighted-scoring pipeline and return ranked candidates.
-    Set data_center to restrict candidates to one data center (an engineer picking a
-    location first). Set top_n (e.g. 5 or 10) to cap how many eligible candidates come
-    back - rejected candidates are never truncated."""
+    """Run the full eligibility + weighted-scoring pipeline and return ranked candidates,
+    each carrying its best individual hosts under `top_nodes`. Set data_center to restrict
+    candidates to one data center (an engineer picking a location first). Set top_n to cap
+    how many eligible clusters come back and top_nodes_per_cluster to cap the hosts ranked
+    inside each (both default to policy: 3 and 3). Rejected clusters are never truncated.
+    Set include_nodes=False for cluster-level results only."""
     params = dict(locals())
 
     def run():
@@ -103,9 +114,16 @@ def score_hosting_candidates(
         )
         if error:
             return error
+        effective_top_n = top_n or get_settings().policy.top_clusters
         ranked = placement.find_and_score_candidates(
-            req, data_center=data_center or None, top_n=top_n or None,
+            req, data_center=data_center or None, top_n=effective_top_n,
         )
+        if include_nodes:
+            node_placement.attach_top_nodes(
+                req, ranked,
+                top_clusters=effective_top_n,
+                top_nodes_per_cluster=top_nodes_per_cluster or None,
+            )
         return {"candidates": model_list(ranked)}
 
     return audited("score_hosting_candidates", params, run)

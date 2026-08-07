@@ -1,4 +1,4 @@
-"""The 18 nodes of InfrastructureRecommendationGraph.
+"""The 19 nodes of InfrastructureRecommendationGraph.
 
 Every node is a plain function ``(state) -> partial_state_update``. Numbers
 only ever come from app.services / app.rules / app.scoring / app.forecasting;
@@ -14,6 +14,7 @@ LLM explains, it does not decide.
 
 from __future__ import annotations
 
+import json
 import re
 
 import structlog
@@ -30,6 +31,7 @@ from app.agents.llm_factory import get_chat_model
 from app.agents.mock_llm import MockChatModel
 from app.forecasting.engine import forecast_cluster
 from app.graph.state import InfrastructureRecommendationState
+from app.config import get_settings
 from app.models.enums import InvestigationType
 from app.models.requirements import HostingRequirement
 from app.models.scoring import CandidateScore
@@ -40,7 +42,7 @@ from app.repositories import (
     recommendation_repository,
 )
 from app.retrieval.vector_store import get_vector_store
-from app.services import consolidation, placement, rightsizing
+from app.services import consolidation, node_placement, placement, rightsizing
 from app.utils.json_utils import to_jsonable
 
 logger = structlog.get_logger(__name__)
@@ -338,6 +340,42 @@ def rank_candidates(state: InfrastructureRecommendationState) -> dict:
 
 
 # =============================================================================
+# 11b. select_candidate_nodes
+#
+# Added after the original 18-node spec: recommendations stopped at the
+# cluster boundary, which left an infra engineer to pick a host by hand. This
+# node drills the leading clusters down to their best individual hosts. It is
+# placed after ranking on purpose - it needs the final cluster order to know
+# which clusters are worth the per-host queries.
+# =============================================================================
+
+
+def select_candidate_nodes(state: InfrastructureRecommendationState) -> dict:
+    itype = state["investigation_type"]
+    if itype not in (InvestigationType.HOSTING, InvestigationType.CAPACITY) or not state.get("requirement"):
+        return {}
+
+    requirement = HostingRequirement.model_validate(state["requirement"])
+    try:
+        scored = [CandidateScore.model_validate(c) for c in state.get("candidate_scores", [])]
+        node_placement.attach_top_nodes(requirement, scored)
+    except Exception as exc:  # noqa: BLE001
+        # Node drill-down is an enrichment, not a precondition: a failure here
+        # degrades to cluster-only recommendations rather than losing the
+        # whole investigation.
+        logger.warning("graph.select_candidate_nodes_failed", error=str(exc))
+        return {"errors": [f"Node-level selection failed: {exc}"]}
+
+    candidate_scores = [to_jsonable(c) for c in scored]
+    return {
+        "candidate_scores": candidate_scores,
+        "eligible_candidates": [c for c in candidate_scores if c.get("eligibility_status") == "Eligible"],
+        "rejected_candidates": [c for c in candidate_scores if c.get("eligibility_status") != "Eligible"],
+        "candidate_nodes": [to_jsonable(n) for c in scored for n in c.top_nodes],
+    }
+
+
+# =============================================================================
 # 12. retrieve_related_context
 # =============================================================================
 
@@ -433,10 +471,17 @@ def assess_risk_and_confidence(state: InfrastructureRecommendationState) -> dict
 def human_review_interrupt(state: InfrastructureRecommendationState) -> dict:
     from langgraph.types import interrupt
 
+    top = state.get("candidate_scores", [])[: get_settings().policy.top_clusters]
     summary = {
         "investigation_id": state.get("investigation_id"),
         "investigation_type": state.get("investigation_type"),
-        "top_candidates": [c.get("cluster_code") for c in state.get("candidate_scores", [])[:3]],
+        "top_candidates": [c.get("cluster_code") for c in top],
+        # The hosts inside each shortlisted cluster - the reviewer approves a
+        # cluster *and* the hosts proposed within it, so both belong here.
+        "top_hosts_by_cluster": {
+            c.get("cluster_code"): [n.get("host_name") for n in (c.get("top_nodes") or [])]
+            for c in top
+        },
         "confidence": state.get("confidence"),
         "message": "Human review required before this recommendation is finalized.",
     }
@@ -503,22 +548,54 @@ def generate_final_report(state: InfrastructureRecommendationState) -> dict:
 # =============================================================================
 
 
+def _node_explanation(node: dict) -> str:
+    """Deterministic one-line summary for a node recommendation.
+
+    Built from the node's own computed values, never narrated by the LLM -
+    node-level explanations carry numbers, and numbers do not come from a
+    language model anywhere in this platform.
+    """
+    projected = node.get("projected") or {}
+    snapshot = node.get("snapshot") or {}
+    return (
+        f"Host {node.get('host_name')} in cluster {node.get('cluster_code')}: projected "
+        f"CPU {projected.get('projected_cpu_utilization_percent')}%, "
+        f"memory {projected.get('projected_memory_utilization_percent')}%, "
+        f"storage {projected.get('projected_storage_utilization_percent')}% after placement, "
+        f"leaving {projected.get('projected_headroom_percent')}% headroom "
+        f"({snapshot.get('measurement_sample_count', 0)} utilization samples in window)."
+    )
+
+
 def persist_recommendations(state: InfrastructureRecommendationState) -> dict:
+    """Writes the shortlist a human will review: the top N clusters and, inside
+    each, the top M hosts (``SAD_POLICY__TOP_CLUSTERS`` /
+    ``SAD_POLICY__TOP_NODES_PER_CLUSTER``, both 3 by default).
+
+    Node rows point at the same investigation and are linked to their cluster
+    through ``ClusterNode.ClusterId``, plus ``parent_cluster_code`` in
+    EvidenceJson so a reader never has to join to know what a host belongs to.
+    Node rows leave CompatibilityScore/ResiliencyScore/DependencyScore NULL by
+    design - those are cluster properties, identical for every sibling host,
+    and are already recorded on the parent cluster's row.
+    """
     itype = state["investigation_type"]
     if itype not in (InvestigationType.HOSTING, InvestigationType.CAPACITY):
         return {}
 
+    settings = get_settings()
     investigation_id = state["investigation_id"]
     app_id = (state.get("application_requirements") or {}).get("application_id")
     explanations_by_cluster = {e.get("cluster_code"): e for e in state.get("recommendation_explanations", [])}
+    rec_type = "HostingPlacement" if itype == InvestigationType.HOSTING else "NewCapacity"
 
     saved_ids = []
-    for c in state.get("candidate_scores", [])[:10]:
+    for c in state.get("candidate_scores", [])[: settings.policy.top_clusters]:
         explanation = explanations_by_cluster.get(c["cluster_code"])
         sub = c.get("subscores") or {}
         rec = {
             "InvestigationId": investigation_id, "CapacityRequestId": None, "ApplicationId": app_id,
-            "RecommendationType": "HostingPlacement" if itype == InvestigationType.HOSTING else "NewCapacity",
+            "RecommendationType": rec_type,
             "CandidateEntityType": "Cluster", "CandidateEntityId": c["cluster_id"], "Rank": c["rank"],
             "EligibilityStatus": c["eligibility_status"], "OverallScore": c.get("overall_score"),
             "CapacityScore": sub.get("capacity"), "CompatibilityScore": sub.get("compatibility"),
@@ -530,10 +607,45 @@ def persist_recommendations(state: InfrastructureRecommendationState) -> dict:
             "ProjectedHeadroomPercent": (c.get("projected") or {}).get("projected_headroom_percent"),
             "EstimatedMonthlyCost": c.get("estimated_monthly_cost"),
             "Explanation": explanation.get("summary") if explanation else None,
-            "EvidenceJson": __import__("json").dumps(c, default=str),
+            "EvidenceJson": json.dumps(c, default=str),
             "Status": "PendingReview",
         }
         saved_ids.append(recommendation_repository.save(rec))
+
+        for n in (c.get("top_nodes") or [])[: settings.policy.top_nodes_per_cluster]:
+            nsub = n.get("subscores") or {}
+            nprojected = n.get("projected") or {}
+            saved_ids.append(
+                recommendation_repository.save(
+                    {
+                        "InvestigationId": investigation_id, "CapacityRequestId": None, "ApplicationId": app_id,
+                        "RecommendationType": rec_type,
+                        "CandidateEntityType": "Node", "CandidateEntityId": n["node_id"], "Rank": n["rank"],
+                        "EligibilityStatus": n["eligibility_status"], "OverallScore": n.get("overall_score"),
+                        "CapacityScore": nsub.get("capacity"), "CompatibilityScore": None,
+                        "CostScore": nsub.get("cost"), "ResiliencyScore": None,
+                        "DependencyScore": None, "RiskScore": nsub.get("risk"),
+                        "ProjectedCpuUtilization": nprojected.get("projected_cpu_utilization_percent"),
+                        "ProjectedMemoryUtilization": nprojected.get("projected_memory_utilization_percent"),
+                        "ProjectedStorageUtilization": nprojected.get("projected_storage_utilization_percent"),
+                        "ProjectedHeadroomPercent": nprojected.get("projected_headroom_percent"),
+                        "EstimatedMonthlyCost": n.get("estimated_monthly_cost"),
+                        "Explanation": _node_explanation(n),
+                        "EvidenceJson": json.dumps(
+                            {
+                                **n,
+                                "parent_cluster_id": c["cluster_id"],
+                                "parent_cluster_code": c["cluster_code"],
+                                "parent_cluster_rank": c["rank"],
+                                "reliability_score": nsub.get("reliability"),
+                            },
+                            default=str,
+                        ),
+                        "Status": "PendingReview",
+                    }
+                )
+            )
+
     return {"errors": [] if saved_ids else ["No candidates were persisted."]}
 
 

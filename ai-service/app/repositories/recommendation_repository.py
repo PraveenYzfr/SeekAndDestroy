@@ -24,9 +24,31 @@ def get_by_id(recommendation_id: int) -> InfrastructureRecommendation | None:
 
 
 def list_for_investigation(investigation_id: int) -> list[InfrastructureRecommendation]:
+    """Ordered for display: each cluster followed immediately by the hosts
+    recommended inside it (cluster 1, its hosts 1..M, cluster 2, its hosts...).
+
+    Ranks are scoped to their own level - a node's Rank is its position within
+    its cluster, not within the investigation - so ordering by [Rank] alone
+    would interleave every cluster's rank-1 host with every other's. The joins
+    resolve each Node row back to its parent cluster's rank; a node whose
+    parent cluster was not persisted falls back to its own rank via COALESCE
+    rather than disappearing.
+    """
     rows = fetch_all(
-        f"SELECT * FROM {T('InfrastructureRecommendation')} "
-        f"WHERE InvestigationId = :id ORDER BY [Rank]",
+        f"""
+        SELECT r.* FROM {T('InfrastructureRecommendation')} r
+        LEFT JOIN {T('ClusterNode')} n
+               ON r.CandidateEntityType = 'Node' AND n.NodeId = r.CandidateEntityId
+        LEFT JOIN {T('InfrastructureRecommendation')} parent
+               ON parent.InvestigationId = r.InvestigationId
+              AND parent.CandidateEntityType = 'Cluster'
+              AND parent.CandidateEntityId = n.ClusterId
+        WHERE r.InvestigationId = :id
+        ORDER BY
+            COALESCE(parent.[Rank], r.[Rank]),
+            CASE WHEN r.CandidateEntityType = 'Cluster' THEN 0 ELSE 1 END,
+            r.[Rank]
+        """,
         {"id": investigation_id},
     )
     return [InfrastructureRecommendation(**r) for r in rows]

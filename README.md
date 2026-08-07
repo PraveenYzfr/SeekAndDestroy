@@ -42,6 +42,9 @@ requirement (from an app or a raw ask)
   → capacity + projected-utilization calculation (deterministic)
   → weighted scoring across 7 sub-scores (deterministic, reproducible)
   → ranking (total order, no ties)
+  → the top 3 clusters are drilled into their top 3 individual hosts
+      (NODE-001..004 + a 4-term node score - hosts are ranked on a separate
+       scale, comparable only to their siblings)
   → LLM narrates the already-computed result
   → app.agents.guards rejects any explanation whose numbers don't match the evidence
   → human review (LangGraph interrupt - a real pause, checkpointed to SQLite)
@@ -54,7 +57,7 @@ requirement (from an app or a raw ask)
 
 All layers are built and verified working end to end against a live SQL Server instance, seeded at production-representative scale: 256 clusters across 64 neighborhoods in 8 (fictional) US-city data centers, 15 lines of business, 40 applications.
 
-- **115 automated tests passing**: 83 Python (`ai-service/tests`, including the 13 critical tests named in the specification), 11 MCP server tests, 21 .NET tests.
+- **173 automated tests passing**: 132 Python (`ai-service/tests`, including the 13 critical tests named in the specification plus a 14th covering the cluster→host shortlist), 14 MCP server tests, 27 .NET tests.
 - FastAPI ↔ LangGraph ↔ LangChain ↔ deterministic engines ↔ SQL Server: verified live (hosting recommendations, right-sizing, consolidation, forecasting, human-review interrupt/resume).
 - MCP server: all 27 tools and 7 resources verified via an in-process client, including audit logging.
 - .NET gateway ↔ AI service ↔ SQL Server: verified live, including error propagation and validation.
@@ -64,8 +67,8 @@ All layers are built and verified working end to end against a live SQL Server i
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) — component diagram, end-to-end flow, per-component responsibilities.
-- [docs/business-rules.md](docs/business-rules.md) — RULE-001..010, RIGHTSIZE-001..006, capacity formulas, and the full **guardrails** section.
-- [docs/scoring-model.md](docs/scoring-model.md) — score formula, weights, every sub-score's exact math, a worked example.
+- [docs/business-rules.md](docs/business-rules.md) — RULE-001..010, NODE-001..004, RIGHTSIZE-001..006, capacity formulas, and the full **guardrails** section.
+- [docs/scoring-model.md](docs/scoring-model.md) — cluster and node score formulas, weights, every sub-score's exact math, a worked example.
 - [docs/api-contracts.md](docs/api-contracts.md) — every FastAPI and gateway endpoint.
 - [docs/setup.md](docs/setup.md) — prerequisites, install, run, test instructions for every component.
 - [docs/demo-scenarios.md](docs/demo-scenarios.md) — the 10 specification demo queries with real output.

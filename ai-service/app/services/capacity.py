@@ -21,8 +21,8 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.config import get_settings
-from app.models.capacity import ClusterCapacitySnapshot, ProjectedUtilization
-from app.models.entities import InfrastructureCluster
+from app.models.capacity import ClusterCapacitySnapshot, NodeCapacitySnapshot, ProjectedUtilization
+from app.models.entities import ClusterNode, InfrastructureCluster
 from app.repositories import hosting_repository, utilization_repository
 
 TWOPLACES = Decimal("0.01")
@@ -109,6 +109,129 @@ def compute_cluster_capacity(
         current_cpu_utilization_percent=current_cpu_util,
         current_memory_utilization_percent=current_mem_util,
         current_storage_utilization_percent=current_storage_util,
+    )
+
+
+def compute_node_capacity(
+    node: ClusterNode, cluster: InfrastructureCluster, *, window_days: int | None = None
+) -> NodeCapacitySnapshot:
+    """Per-node capacity, using the same formulas as
+    :func:`compute_cluster_capacity`.
+
+    The node inherits the *cluster's* reservation percentages - reservation is
+    a platform-level overhead (kubelet/hypervisor/system daemons) that applies
+    to every node in the cluster, and the schema records it once on the
+    cluster rather than per node.
+    """
+    settings = get_settings()
+    window = window_days if window_days is not None else settings.policy.utilization_window_days
+
+    effective_cpu = node.CpuCores * (Decimal("1") - cluster.ReservedCpuPercent / Decimal("100"))
+    effective_mem = node.MemoryGb * (Decimal("1") - cluster.ReservedMemoryPercent / Decimal("100"))
+    effective_storage = node.StorageGb
+
+    # Only hosting rows explicitly pinned to this node count as allocated;
+    # cluster-level rows (NodeId IS NULL) are already reflected in the
+    # cluster snapshot and must not be double-counted here.
+    hosting_rows = hosting_repository.get_active_for_node(node.NodeId)
+    allocated_cpu = sum((h.AllocatedCpuCores for h in hosting_rows), Decimal("0"))
+    allocated_mem = sum((h.AllocatedMemoryGb for h in hosting_rows), Decimal("0"))
+    allocated_storage = sum((h.AllocatedStorageGb for h in hosting_rows), Decimal("0"))
+
+    measured = utilization_repository.get_node_window_average(node.NodeId, window)
+    if measured:
+        measured_cpu_pct = d(measured["cpu_used_percent"])
+        measured_mem_pct = d(measured["memory_used_percent"])
+        measured_storage_pct = d(measured["storage_used_percent"])
+        sample_count = measured["sample_count"]
+    else:
+        measured_cpu_pct = measured_mem_pct = measured_storage_pct = None
+        sample_count = 0
+
+    measured_cpu = effective_cpu * (measured_cpu_pct / Decimal("100")) if measured_cpu_pct is not None else Decimal("0")
+    measured_mem = effective_mem * (measured_mem_pct / Decimal("100")) if measured_mem_pct is not None else Decimal("0")
+    measured_storage = (
+        effective_storage * (measured_storage_pct / Decimal("100")) if measured_storage_pct is not None else Decimal("0")
+    )
+
+    consumed_cpu = max(allocated_cpu, measured_cpu)
+    consumed_mem = max(allocated_mem, measured_mem)
+    consumed_storage = max(allocated_storage, measured_storage)
+
+    return NodeCapacitySnapshot(
+        node_id=node.NodeId,
+        cluster_id=node.ClusterId,
+        host_name=node.HostName,
+        effective_cpu_cores=round2(effective_cpu),
+        effective_memory_gb=round2(effective_mem),
+        effective_storage_gb=round2(effective_storage),
+        allocated_cpu_cores=round2(allocated_cpu),
+        allocated_memory_gb=round2(allocated_mem),
+        allocated_storage_gb=round2(allocated_storage),
+        measured_cpu_percent=round2(measured_cpu_pct) if measured_cpu_pct is not None else None,
+        measured_memory_percent=round2(measured_mem_pct) if measured_mem_pct is not None else None,
+        measured_storage_percent=round2(measured_storage_pct) if measured_storage_pct is not None else None,
+        measurement_sample_count=sample_count,
+        has_measurements=sample_count > 0,
+        consumed_cpu_cores=round2(consumed_cpu),
+        consumed_memory_gb=round2(consumed_mem),
+        consumed_storage_gb=round2(consumed_storage),
+        available_cpu_cores=round2(effective_cpu - consumed_cpu),
+        available_memory_gb=round2(effective_mem - consumed_mem),
+        available_storage_gb=round2(effective_storage - consumed_storage),
+        current_cpu_utilization_percent=round2(_safe_div(consumed_cpu, effective_cpu) * Decimal("100")),
+        current_memory_utilization_percent=round2(_safe_div(consumed_mem, effective_mem) * Decimal("100")),
+        current_storage_utilization_percent=round2(_safe_div(consumed_storage, effective_storage) * Decimal("100")),
+    )
+
+
+def compute_node_projected_utilization(
+    snapshot: NodeCapacitySnapshot,
+    *,
+    required_cpu_cores_effective: Decimal,
+    required_memory_gb_effective: Decimal,
+    required_storage_gb_effective: Decimal,
+) -> ProjectedUtilization:
+    """Projects the workload onto a single node.
+
+    Takes the *already grown and margined* requirement rather than the raw one,
+    so the node projection and the cluster projection are driven by byte-identical
+    effective figures - growth and safety margin are applied exactly once, in
+    :func:`compute_effective_requirement`.
+    """
+    settings = get_settings()
+
+    projected_cpu_pct = round2(
+        _safe_div(snapshot.consumed_cpu_cores + required_cpu_cores_effective, snapshot.effective_cpu_cores)
+        * Decimal("100")
+    )
+    projected_mem_pct = round2(
+        _safe_div(snapshot.consumed_memory_gb + required_memory_gb_effective, snapshot.effective_memory_gb)
+        * Decimal("100")
+    )
+    projected_storage_pct = round2(
+        _safe_div(snapshot.consumed_storage_gb + required_storage_gb_effective, snapshot.effective_storage_gb)
+        * Decimal("100")
+    )
+
+    headroom = round2(Decimal("100") - max(projected_cpu_pct, projected_mem_pct, projected_storage_pct))
+
+    fits_cpu = projected_cpu_pct < d(settings.policy.cpu_threshold_percent)
+    fits_mem = projected_mem_pct < d(settings.policy.memory_threshold_percent)
+    fits_storage = projected_storage_pct < d(settings.policy.storage_threshold_percent)
+
+    return ProjectedUtilization(
+        required_cpu_cores_effective=round2(required_cpu_cores_effective),
+        required_memory_gb_effective=round2(required_memory_gb_effective),
+        required_storage_gb_effective=round2(required_storage_gb_effective),
+        projected_cpu_utilization_percent=projected_cpu_pct,
+        projected_memory_utilization_percent=projected_mem_pct,
+        projected_storage_utilization_percent=projected_storage_pct,
+        projected_headroom_percent=headroom,
+        fits_cpu=fits_cpu,
+        fits_memory=fits_mem,
+        fits_storage=fits_storage,
+        fits_all=fits_cpu and fits_mem and fits_storage,
     )
 
 

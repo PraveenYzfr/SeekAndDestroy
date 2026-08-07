@@ -75,6 +75,32 @@ export interface ProjectedUtilization {
   fits_all: boolean;
 }
 
+/** Node sub-scores are a smaller set than cluster sub-scores: compatibility,
+ *  resiliency and dependency locality are cluster properties shared by every
+ *  host inside it, so they cannot order hosts within one cluster. */
+export interface NodeSubScores {
+  capacity: number;
+  cost: number;
+  reliability: number;
+  risk: number;
+}
+
+export interface NodeCandidateScore {
+  node_id: number;
+  host_name: string;
+  cluster_id: number;
+  cluster_code: string;
+  lifecycle_status: string;
+  eligibility_status: "Eligible" | "Rejected";
+  rule_results: RuleResult[];
+  subscores: NodeSubScores | null;
+  overall_score: number | null;
+  estimated_monthly_cost: number | null;
+  projected: ProjectedUtilization | null;
+  rank: number | null;
+  evidence: Record<string, unknown>;
+}
+
 export interface CandidateScore {
   cluster_id: number;
   cluster_code: string;
@@ -85,6 +111,10 @@ export interface CandidateScore {
   estimated_monthly_cost: number | null;
   projected: ProjectedUtilization | null;
   rank: number | null;
+  /** Best hosts inside this cluster, populated only for the leading clusters
+   *  (see SAD_POLICY__TOP_CLUSTERS / TOP_NODES_PER_CLUSTER). Empty otherwise -
+   *  not a signal that the cluster has no usable hosts. */
+  top_nodes: NodeCandidateScore[];
 }
 
 export interface HostingRecommendationResponse {
@@ -158,8 +188,12 @@ export interface InfrastructureRecommendation {
   InvestigationId: number;
   ApplicationId: number | null;
   RecommendationType: string;
+  /** "Cluster" or "Node". The API returns rows already ordered for display -
+   *  each cluster immediately followed by the hosts recommended inside it. */
   CandidateEntityType: string;
   CandidateEntityId: number;
+  /** Scoped to its own level: a Node's Rank is its position within its parent
+   *  cluster, not within the investigation. */
   Rank: number;
   EligibilityStatus: string;
   OverallScore: number | null;
@@ -168,8 +202,20 @@ export interface InfrastructureRecommendation {
   ProjectedMemoryUtilization: number | null;
   ProjectedHeadroomPercent: number | null;
   Explanation: string | null;
+  /** JSON blob of the full candidate. For Node rows it also carries
+   *  parent_cluster_code / parent_cluster_rank / host_name. */
+  EvidenceJson: string | null;
   Status: string;
   CreatedAt: string;
+}
+
+/** Fields the UI reads out of InfrastructureRecommendation.EvidenceJson. */
+export interface RecommendationEvidence {
+  cluster_code?: string;
+  host_name?: string;
+  parent_cluster_code?: string;
+  parent_cluster_rank?: number;
+  reliability_score?: number;
 }
 
 export interface RunInvestigationResult {
@@ -179,6 +225,7 @@ export interface RunInvestigationResult {
   confidence?: string;
   review_payload?: {
     top_candidates: string[];
+    top_hosts_by_cluster?: Record<string, string[]>;
     message: string;
   };
   final_report?: {

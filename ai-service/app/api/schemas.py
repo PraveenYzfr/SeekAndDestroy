@@ -31,13 +31,33 @@ class DevTokenRequest(BaseModel):
     employee_number: str = Field(min_length=1, description="Must match an active Employee row")
 
 
-class HostingRecommendationRequest(BaseModel):
+class _NodeDrillDownMixin(BaseModel):
+    """Shared knobs for the "top N clusters, top M hosts inside each" shape
+    that every placement endpoint now returns. Both default to the configured
+    policy (``SAD_POLICY__TOP_CLUSTERS`` / ``SAD_POLICY__TOP_NODES_PER_CLUSTER``,
+    3 and 3) rather than to a hardcoded literal, so the API and the graph
+    pipeline can never disagree about how deep a shortlist goes.
+    """
+
+    top_n: Optional[int] = Field(
+        None, gt=0,
+        description="Top N eligible clusters (default: policy top_clusters). Rejected candidates are never truncated.",
+    )
+    top_nodes_per_cluster: Optional[int] = Field(
+        None, gt=0,
+        description="Top M eligible hosts ranked inside each returned cluster (default: policy top_nodes_per_cluster).",
+    )
+    include_nodes: bool = Field(
+        True, description="Set false to skip per-host ranking and return cluster-level candidates only.",
+    )
+
+
+class HostingRecommendationRequest(_NodeDrillDownMixin):
     application_code: str
     data_center: Optional[str] = Field(None, description="Restrict candidates to this data center only")
-    top_n: Optional[int] = Field(None, gt=0, description="Return only the top N eligible candidates (rejected candidates are never truncated)")
 
 
-class CapacityRecommendationRequest(BaseModel):
+class CapacityRecommendationRequest(_NodeDrillDownMixin):
     environment: str
     cpu_cores: float = Field(gt=0)
     memory_gb: float = Field(gt=0)
@@ -47,14 +67,13 @@ class CapacityRecommendationRequest(BaseModel):
     data_classification: str
     preferred_location: Optional[str] = None
     data_center: Optional[str] = Field(None, description="Restrict candidates to this data center only")
-    top_n: Optional[int] = Field(None, gt=0, description="Return only the top N eligible candidates")
     expected_growth_percent: float = 0.0
     required_by_date: Optional[date] = None
     requested_by_employee_id: Optional[int] = Field(None, description="No longer trusted - see app.api.auth")
     application_id: Optional[int] = None
 
 
-class QuickRecommendationRequest(BaseModel):
+class QuickRecommendationRequest(_NodeDrillDownMixin):
     """A lightweight "just show me the best clusters for this shape of
     workload" lookup - no CapacityRequest row is created, unlike
     /api/capacity/recommendations. Every field except cpu_cores/memory_gb has
@@ -70,7 +89,6 @@ class QuickRecommendationRequest(BaseModel):
     availability_tier: str = "Tier-2"
     data_classification: str = "Internal"
     data_center: Optional[str] = None
-    top_n: int = Field(10, gt=0)
 
 
 class ClusterUtilizationRankingRequest(BaseModel):
