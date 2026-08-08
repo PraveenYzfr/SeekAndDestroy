@@ -35,6 +35,40 @@ To regenerate `database/seed.sql` (byte-for-byte reproducible - see `scripts/gen
 .venv\Scripts\python.exe scripts\generate_seed.py
 ```
 
+### 1a. A SQL login for containers and remote hosts
+
+Windows Integrated Security works when the services run natively on the same machine as SQL Server. It does **not** work from a container (no Windows identity) or from a remote host with no shared AD domain - both need SQL Server Authentication, which means enabling Mixed Mode (Server Properties -> Security -> "SQL Server and Windows Authentication mode") and **restarting the SQL Server service**. The login silently fails to authenticate until that restart happens.
+
+Do not give that login `sysadmin`, and do not map it to `db_owner`. The platform's write surface is exactly five governance tables - everything else, the whole CMDB, is read-only from every layer above SQL Server (see [business-rules.md § No infrastructure mutation](business-rules.md)). Granting only what the app uses turns that design claim into something the database itself enforces:
+
+```sql
+USE master;
+GO
+CREATE LOGIN sad_app WITH PASSWORD = 'PUT-A-STRONG-PASSWORD-HERE',
+    CHECK_POLICY = ON, DEFAULT_DATABASE = PraveenDB;
+GO
+
+USE PraveenDB;
+GO
+CREATE USER sad_app FOR LOGIN sad_app;
+GO
+
+-- Read everything in the app schema.
+GRANT SELECT ON SCHEMA::sad TO sad_app;
+
+-- Write to the five governance tables only.
+GRANT INSERT, UPDATE ON sad.Investigation                TO sad_app;
+GRANT INSERT, UPDATE ON sad.InfrastructureRecommendation TO sad_app;
+GRANT INSERT         ON sad.RecommendationDecision       TO sad_app;
+GRANT INSERT         ON sad.CapacityRequest              TO sad_app;
+GRANT INSERT         ON sad.AgentAuditLog                TO sad_app;
+GO
+```
+
+No DDL rights are needed at runtime: LangGraph checkpoints go to SQLite (`.state/checkpoints.db`) and the vector index to a JSON file, not to SQL Server. Apply `schema.sql` / `seed.sql` as yourself over Windows auth instead - that step does need DDL.
+
+Point the services at it with `SAD_DB__INTEGRATED_SECURITY=false` plus `SAD_DB__USERNAME` / `SAD_DB__PASSWORD` (`SAD_DB_USERNAME` / `SAD_DB_PASSWORD` for `docker/docker-compose.yml`, which reads them from the environment). Keep the password in your shell or an ignored env file - never in the repo.
+
 ## 2. Python setup
 
 ```bash
