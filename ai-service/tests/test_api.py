@@ -41,6 +41,40 @@ def test_hosting_recommendations_endpoint_respects_configurable_top_n(auth_heade
     assert len(eligible) <= 5
 
 
+def test_hosting_recommendations_default_to_the_policy_shortlist_with_hosts(auth_headers):
+    from app.config import get_settings
+
+    policy = get_settings().policy
+    response = client.post(
+        "/api/hosting/recommendations", json={"application_code": "APP-CRM"}, headers=auth_headers
+    )
+    assert response.status_code == 200
+    candidates = response.json()["candidates"]
+
+    eligible = [c for c in candidates if c["eligibility_status"] == "Eligible"]
+    assert len(eligible) <= policy.top_clusters
+
+    drilled = [c for c in candidates if c["top_nodes"]]
+    assert drilled, "the shortlist must name individual hosts, not stop at the cluster"
+    for c in drilled:
+        assert len(c["top_nodes"]) <= policy.top_nodes_per_cluster
+        for node in c["top_nodes"]:
+            assert node["host_name"]
+            assert node["cluster_id"] == c["cluster_id"]
+            # Four node sub-scores, not seven - see docs/scoring-model.md.
+            assert set(node["subscores"]) == {"capacity", "cost", "reliability", "risk"}
+
+
+def test_hosting_recommendations_can_opt_out_of_host_drill_down(auth_headers):
+    response = client.post(
+        "/api/hosting/recommendations",
+        json={"application_code": "APP-CRM", "include_nodes": False},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert all(c["top_nodes"] == [] for c in response.json()["candidates"])
+
+
 def test_hosting_recommendations_404_for_unknown_application(auth_headers):
     response = client.post(
         "/api/hosting/recommendations", json={"application_code": "APP-DOES-NOT-EXIST"}, headers=auth_headers

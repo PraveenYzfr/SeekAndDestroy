@@ -22,7 +22,7 @@
 ┌───────────▼─────────────┐                    ┌────────────▼────────────────────────────────┐
 │  SQL Server              │                    │  FastAPI AI Service (ai-service/)             │
 │  PraveenDB, schema `sad` │◄───SQLAlchemy──────┤  api/        REST endpoints, ProblemDetails    │
-│  17 tables, full audit   │      Core +        │  graph/      LangGraph (18 nodes)              │
+│  17 tables, full audit   │      Core +        │  graph/      LangGraph (19 nodes)              │
 │  trail (AgentAuditLog)   │      pyodbc,       │  agents/     LangChain chains + multi-LLM      │
 └───────────────────────────┘  parameterized     │              fallback (explain + extract)      │
             ▲                   only              │  rules/      RULE-001..010 (deterministic)     │
@@ -57,12 +57,13 @@ Every "optional real backend" above (LLM provider, vector store, cache) is a sin
 7. `calculate_current_capacity` / `calculate_projected_utilization` compute the exact `ClusterCapacitySnapshot` / `ProjectedUtilization` (`app/services/capacity.py`) for every eligible candidate.
 8. `run_capacity_forecast` runs the OLS forecaster (`app/forecasting/engine.py`) on the top candidates, feeding the operational-risk sub-score.
 9. `analyze_dependencies` / `calculate_candidate_scores` / `rank_candidates` produce the seven sub-scores and the final weighted, totally-ordered ranking (`app/scoring/`).
+9b. `select_candidate_nodes` drills the leading clusters down to individual hosts (`app/services/node_placement.py`): NODE-001..004 plus a four-term node score, so the answer is *"cluster nyc-p006, host nyc-p006-NODE-15"* rather than stopping at the cluster boundary. Bounded to the top 3 clusters × top 3 hosts (`SAD_POLICY__TOP_CLUSTERS` / `TOP_NODES_PER_CLUSTER`) - a failure here degrades to cluster-only results rather than losing the investigation.
 10. `retrieve_related_context` pulls grounding documents from the vector store.
 11. `generate_recommendation_explanations` calls the LLM (`app/agents/chains.explain_candidate`) to narrate the **already-computed** top candidates. `app/agents/guards.assert_no_number_drift` rejects any explanation whose numbers don't match the evidence.
 12. `assess_risk_and_confidence` sets `human_review_required = True`.
 13. `human_review_interrupt` calls `langgraph.types.interrupt(...)`, checkpointing to SQLite and pausing execution. The API returns `status: "AwaitingReview"`.
 14. An engineer reviews the ranked candidates (UI's Recommendation Approval screen, or `submit_recommendation_decision`) and resumes the graph with `Command(resume=...)`.
-15. `generate_final_report` → `persist_recommendations` → `complete_investigation` write the final `InfrastructureRecommendation` and `RecommendationDecision` rows.
+15. `generate_final_report` → `persist_recommendations` → `complete_investigation` write the final `InfrastructureRecommendation` and `RecommendationDecision` rows - one `'Cluster'` row per shortlisted cluster, plus a `'Node'` row per recommended host inside it.
 
 Nothing in steps 1-10 or 13-15 is decided by the LLM. Step 11 is the *only* LLM involvement, and its output is verified against the same evidence before it is trusted.
 
@@ -75,7 +76,7 @@ Nothing in steps 1-10 or 13-15 is decided by the LLM. Step 11 is the *only* LLM 
 
 ## 4. LangGraph responsibilities
 
-`app/graph/graph.py` compiles `InfrastructureRecommendationGraph`: 18 named nodes (`app/graph/nodes.py`), two conditional-edge routers (`app/graph/router.py`), 17 state fields (`app/graph/state.py`), and a `SqliteSaver` checkpointer so a run can pause at `human_review_interrupt` and resume in a different process. Routing (`classify_investigation_type`) is deterministic keyword matching, not an LLM call - see [business-rules.md](business-rules.md#guardrails).
+`app/graph/graph.py` compiles `InfrastructureRecommendationGraph`: 19 named nodes (`app/graph/nodes.py` - the 18 from the original specification plus `select_candidate_nodes`, added when recommendations were extended from clusters to individual hosts), two conditional-edge routers (`app/graph/router.py`), 17 state fields (`app/graph/state.py`), and a `SqliteSaver` checkpointer so a run can pause at `human_review_interrupt` and resume in a different process. Routing (`classify_investigation_type`) is deterministic keyword matching, not an LLM call - see [business-rules.md](business-rules.md#guardrails).
 
 ## 5. MCP responsibilities
 

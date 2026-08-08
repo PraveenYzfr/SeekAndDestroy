@@ -39,9 +39,9 @@ Every write endpoint's `*_employee_id`/`reviewerEmployeeId`-style body field is 
 | POST | `/api/investigations` | `{query, created_by_employee_id?}` | Runs `InfrastructureRecommendationGraph`; returns `AwaitingReview` or `Completed`. |
 | GET | `/api/investigations/{id}` | — | Raw `Investigation` row. |
 | POST | `/api/investigations/{id}/resume` | `{decision, reviewer_employee_id?, comments}` | Resumes a paused graph via `Command(resume=...)`. |
-| GET | `/api/investigations/{id}/recommendations` | — | All `InfrastructureRecommendation` rows for the investigation. |
-| POST | `/api/hosting/recommendations` | `{application_code}` | Scenario A - ranked candidates for an existing application. |
-| POST | `/api/capacity/recommendations` | `{environment, cpu_cores, memory_gb, storage_gb, platform, availability_tier, data_classification, ...}` | Scenario B - ranked candidates for a raw requirement; also creates a `CapacityRequest` row. |
+| GET | `/api/investigations/{id}/recommendations` | — | All `InfrastructureRecommendation` rows for the investigation, ordered for display: each `'Cluster'` row followed by its `'Node'` rows. |
+| POST | `/api/hosting/recommendations` | `{application_code, top_n?, top_nodes_per_cluster?, include_nodes?}` | Scenario A - ranked candidates for an existing application, each carrying its best hosts in `top_nodes`. |
+| POST | `/api/capacity/recommendations` | `{environment, cpu_cores, memory_gb, storage_gb, platform, availability_tier, data_classification, top_n?, top_nodes_per_cluster?, include_nodes?, ...}` | Scenario B - ranked candidates for a raw requirement; also creates a `CapacityRequest` row. |
 | POST | `/api/right-sizing/clusters` | `{cluster_code?}` | One cluster, or all if omitted. |
 | POST | `/api/right-sizing/applications` | `{application_code?}` | One application, or all if omitted. |
 | POST | `/api/consolidation/analyze` | `{environment?}` | Consolidation candidates. |
@@ -50,6 +50,33 @@ Every write endpoint's `*_employee_id`/`reviewerEmployeeId`-style body field is 
 | GET | `/api/clusters/{id}/capacity` | — | Full `ClusterCapacitySnapshot`. |
 | GET | `/api/clusters/{id}/utilization?days=N` | — | Raw utilization series. |
 | POST | `/api/recommendations/{id}/decision` | `{decision, reviewer_employee_id, reason?}` | `reviewer_employee_id` must be `> 0`. |
+
+### Placement responses: clusters carrying their hosts
+
+Every placement endpoint (`/api/hosting/recommendations`, `/api/capacity/recommendations`, `/api/hosting/quick-recommendations`) returns clusters with a `top_nodes` array — the best individual hosts inside each, ranked. Defaults come from policy (top 3 clusters, top 3 hosts each) rather than from a literal in the route, so the API and the LangGraph pipeline can never disagree about how deep a shortlist goes.
+
+```jsonc
+{
+  "candidates": [
+    {
+      "cluster_code": "nyc-p006", "rank": 1, "overall_score": 91.80,
+      "subscores": { "capacity": 100.0, "compatibility": 90.0, "...": "..." },
+      "top_nodes": [
+        {
+          "host_name": "nyc-p006-NODE-15", "rank": 1, "overall_score": 64.26,
+          "eligibility_status": "Eligible",
+          // four sub-scores, not seven - see docs/scoring-model.md
+          "subscores": { "capacity": 28.52, "cost": 100.0, "reliability": 100.0, "risk": 0.0 },
+          "projected": { "projected_headroom_percent": 28.52, "...": "..." },
+          "evidence": { "placement_model": "share", "share_denominator": 20, "...": "..." }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Three knobs, all optional: `top_n` (clusters), `top_nodes_per_cluster` (hosts inside each), `include_nodes: false` to skip the per-host ranking entirely. **Node scores are only comparable to sibling hosts, never to the cluster row above them** — the node capacity sub-score uses a different scale (docs/scoring-model.md).
 
 Field naming: request/response bodies use the exact `snake_case` field names of their Pydantic models (e.g. `application_code`, `cpu_cores`) unless the payload is a pass-through of a SQL-mapped entity, in which case it uses the entity's `PascalCase` column names (e.g. `ApplicationCode`, `CpuRequirement`) - see `docs/architecture.md` and `ui/src/types/index.ts` for exactly which shape each endpoint returns.
 

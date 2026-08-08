@@ -154,17 +154,18 @@ docker compose -f docker/docker-compose.yml --profile core --profile observabili
 ## 9. Test instructions
 
 ```bash
-# Python (36 tests: capacity, rules, forecasting, scoring, seed determinism, 13 critical tests, API)
+# Python (132 tests: capacity, rules, node placement, forecasting, scoring,
+# seed determinism, the 14 critical tests, API, auth, cache, embeddings)
 cd ai-service && ..\.venv\Scripts\python.exe -m pytest tests\ -v
 
-# MCP server (8 tests)
+# MCP server (14 tests)
 cd mcp-server && ..\.venv\Scripts\python.exe -m pytest tests\ -v
 
-# .NET gateway (21 tests)
+# .NET gateway (27 tests)
 cd api-gateway && dotnet test SeekAndDestroy.slnx
 ```
 
-All 65 tests pass against the seeded database as of this writing - see `scripts/run-tests.ps1` to run everything in one pass.
+All 173 tests pass against the seeded database as of this writing - see `scripts/run-tests.ps1` to run everything in one pass.
 
 ## 10. Demo instructions
 

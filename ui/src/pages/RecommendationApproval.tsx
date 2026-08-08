@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, ApiError } from "@/api/client";
 import type { InfrastructureRecommendation } from "@/types";
+import { describeCandidate, isNodeRow } from "@/utils/recommendations";
 
 export default function RecommendationApproval() {
   const [investigationId, setInvestigationId] = useState("");
@@ -63,9 +64,15 @@ export default function RecommendationApproval() {
       {message && <div className="card" style={{ borderColor: "var(--green)" }}>{message}</div>}
 
       {recommendations.map((r) => (
-        <div className="card" key={r.RecommendationId}>
+        <div
+          className="card"
+          key={r.RecommendationId}
+          style={isNodeRow(r) ? { marginLeft: 28 } : undefined}
+        >
           <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <strong>#{r.RecommendationId} - rank {r.Rank} - {r.CandidateEntityType} #{r.CandidateEntityId}</strong>
+            <strong>
+              #{r.RecommendationId} - {isNodeRow(r) ? "host" : "cluster"} rank {r.Rank} - {describeCandidate(r)}
+            </strong>
             <span className="badge eligible">{r.Status}</span>
           </div>
           <p style={{ fontSize: 13 }}>{r.Explanation ?? "No explanation available."}</p>

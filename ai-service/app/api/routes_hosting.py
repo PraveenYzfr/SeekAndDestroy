@@ -7,13 +7,35 @@ from fastapi import APIRouter, Depends
 from app.api.auth import get_current_employee, require_matching_employee_id
 from app.api.errors import ProblemDetailsError
 from app.api.schemas import CapacityRecommendationRequest, HostingRecommendationRequest, QuickRecommendationRequest
+from app.config import get_settings
 from app.models.requirements import HostingRequirement
 from app.repositories import application_repository, capacity_request_repository
 from app.security.jwt_service import AuthenticatedEmployee
-from app.services import placement
+from app.services import node_placement, placement
 from app.utils.json_utils import to_jsonable
 
 router = APIRouter(tags=["hosting"])
+
+
+def _shortlist(requirement, payload) -> list:
+    """Top N clusters for ``requirement``, each carrying its top M hosts.
+
+    One helper for all three placement endpoints so they cannot drift: the
+    same defaults, the same drill-down, the same "rejections are never
+    truncated" contract.
+    """
+    policy = get_settings().policy
+    top_n = payload.top_n if payload.top_n is not None else policy.top_clusters
+    candidates = placement.find_and_score_candidates(
+        requirement, data_center=payload.data_center, top_n=top_n
+    )
+    if payload.include_nodes:
+        node_placement.attach_top_nodes(
+            requirement, candidates,
+            top_clusters=top_n,
+            top_nodes_per_cluster=payload.top_nodes_per_cluster,
+        )
+    return candidates
 
 
 @router.post("/api/hosting/recommendations")
@@ -22,7 +44,7 @@ def hosting_recommendations(payload: HostingRecommendationRequest):
     if app is None:
         raise ProblemDetailsError(404, "Application not found", f"No application with code {payload.application_code!r}.")
     requirement = placement.requirement_for_application(app)
-    candidates = placement.find_and_score_candidates(requirement, data_center=payload.data_center, top_n=payload.top_n)
+    candidates = _shortlist(requirement, payload)
     return to_jsonable(
         {"application": app, "requirement": requirement, "candidates": candidates}
     )
@@ -42,7 +64,7 @@ def capacity_recommendations(payload: CapacityRecommendationRequest, current: Au
     )
     req = capacity_request_repository.get_by_id(capacity_request_id)
     requirement = HostingRequirement.from_capacity_request(req)
-    candidates = placement.find_and_score_candidates(requirement, data_center=payload.data_center, top_n=payload.top_n)
+    candidates = _shortlist(requirement, payload)
     return to_jsonable(
         {"capacity_request": req, "requirement": requirement, "candidates": candidates}
     )
@@ -61,5 +83,5 @@ def quick_recommendations(payload: QuickRecommendationRequest):
         availability_tier=payload.availability_tier, data_classification=payload.data_classification,
         criticality="Medium",
     )
-    candidates = placement.find_and_score_candidates(requirement, data_center=payload.data_center, top_n=payload.top_n)
+    candidates = _shortlist(requirement, payload)
     return to_jsonable({"requirement": requirement, "candidates": candidates})

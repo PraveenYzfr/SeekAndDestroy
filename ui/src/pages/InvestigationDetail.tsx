@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { api, ApiError } from "@/api/client";
 import type { Investigation, InfrastructureRecommendation, RunInvestigationResult } from "@/types";
+import { describeCandidate, isNodeRow } from "@/utils/recommendations";
 
 const GRAPH_STAGES = [
   "parse_user_request", "load_application_requirements", "create_investigation_plan",
   "identify_candidate_infrastructure", "apply_hard_eligibility_rules", "calculate_current_capacity",
   "calculate_projected_utilization", "run_capacity_forecast", "analyze_dependencies",
-  "calculate_candidate_scores", "rank_candidates", "retrieve_related_context",
+  "calculate_candidate_scores", "rank_candidates", "select_candidate_nodes", "retrieve_related_context",
   "generate_recommendation_explanations", "assess_risk_and_confidence", "human_review_interrupt",
   "generate_final_report", "persist_recommendations", "complete_investigation",
 ];
@@ -98,6 +99,15 @@ export default function InvestigationDetail() {
           <strong>Awaiting human review</strong>
           <p style={{ fontSize: 13 }}>{runResult.review_payload.message}</p>
           <div>Top candidates: {runResult.review_payload.top_candidates.join(", ")}</div>
+          {runResult.review_payload.top_hosts_by_cluster && (
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 13 }}>
+              {Object.entries(runResult.review_payload.top_hosts_by_cluster).map(([cluster, hosts]) => (
+                <li key={cluster}>
+                  {cluster}: {hosts.length > 0 ? hosts.join(", ") : "no eligible hosts"}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -111,8 +121,11 @@ export default function InvestigationDetail() {
             <tbody>
               {recommendations.map((r) => (
                 <tr key={r.RecommendationId}>
-                  <td>{r.Rank}</td>
-                  <td>#{r.CandidateEntityId}</td>
+                  <td style={isNodeRow(r) ? { paddingLeft: 20, opacity: 0.75 } : undefined}>{r.Rank}</td>
+                  <td style={isNodeRow(r) ? { paddingLeft: 20, opacity: 0.85 } : undefined}>
+                    {isNodeRow(r) ? "↳ " : ""}
+                    {describeCandidate(r)}
+                  </td>
                   <td><span className={`badge ${r.EligibilityStatus === "Eligible" ? "eligible" : "rejected"}`}>{r.EligibilityStatus}</span></td>
                   <td>{r.OverallScore ?? "—"}</td>
                   <td>{r.EstimatedMonthlyCost != null ? `$${r.EstimatedMonthlyCost}` : "—"}</td>

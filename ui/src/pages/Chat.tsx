@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/api/client";
 import type { InfrastructureRecommendation, RunInvestigationResult } from "@/types";
+import { describeCandidate, isNodeRow } from "@/utils/recommendations";
 
 type MessageStatus = "loading" | "awaiting_review" | "completed" | "error";
 
@@ -244,8 +245,11 @@ function ChatBubble({
                 <tbody>
                   {message.recommendations.map((r) => (
                     <tr key={r.RecommendationId}>
-                      <td>{r.Rank}</td>
-                      <td>#{r.CandidateEntityId}</td>
+                      <td style={isNodeRow(r) ? { paddingLeft: 20, opacity: 0.75 } : undefined}>{r.Rank}</td>
+                      <td style={isNodeRow(r) ? { paddingLeft: 20, opacity: 0.85 } : undefined}>
+                        {isNodeRow(r) ? "↳ " : ""}
+                        {describeCandidate(r)}
+                      </td>
                       <td>
                         <span className={`badge ${r.EligibilityStatus === "Eligible" ? "eligible" : "rejected"}`}>
                           {r.EligibilityStatus}

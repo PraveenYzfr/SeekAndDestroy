@@ -22,7 +22,9 @@ export default function CandidateTable({ candidates }: { candidates: CandidateSc
           <Fragment key={c.cluster_id}>
             <tr>
               <td>{c.rank}</td>
-              <td>{c.cluster_code}</td>
+              <td>
+                <strong>{c.cluster_code}</strong>
+              </td>
               <td>
                 <span className={`badge ${c.eligibility_status === "Eligible" ? "eligible" : "rejected"}`}>
                   {c.eligibility_status}
@@ -37,6 +39,25 @@ export default function CandidateTable({ candidates }: { candidates: CandidateSc
                 </button>
               </td>
             </tr>
+            {/* Recommended hosts inside this cluster. Their scores are only
+                comparable to their siblings, never to the cluster row above -
+                the node capacity sub-score uses a different scale (see
+                docs/scoring-model.md). */}
+            {(c.top_nodes ?? []).map((n) => (
+              <tr key={`node-${n.node_id}`} className="node-row">
+                <td style={{ paddingLeft: 24, opacity: 0.75 }}>{c.rank}.{n.rank}</td>
+                <td style={{ paddingLeft: 24, opacity: 0.85 }}>↳ {n.host_name}</td>
+                <td>
+                  <span className={`badge ${n.eligibility_status === "Eligible" ? "eligible" : "rejected"}`}>
+                    {n.eligibility_status}
+                  </span>
+                </td>
+                <td>{n.overall_score ?? "—"}</td>
+                <td>{n.estimated_monthly_cost != null ? `$${n.estimated_monthly_cost.toLocaleString()}` : "—"}</td>
+                <td>{n.projected ? `${n.projected.projected_headroom_percent}%` : "—"}</td>
+                <td />
+              </tr>
+            ))}
             {expanded === c.cluster_id && (
               <tr>
                 <td colSpan={7}>

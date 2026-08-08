@@ -40,6 +40,7 @@ def _build_graph() -> StateGraph:
     g.add_node("analyze_dependencies", nodes.analyze_dependencies)
     g.add_node("calculate_candidate_scores", nodes.calculate_candidate_scores)
     g.add_node("rank_candidates", nodes.rank_candidates)
+    g.add_node("select_candidate_nodes", nodes.select_candidate_nodes)
     g.add_node("retrieve_related_context", nodes.retrieve_related_context)
     g.add_node("generate_recommendation_explanations", nodes.generate_recommendation_explanations)
     g.add_node("assess_risk_and_confidence", nodes.assess_risk_and_confidence)
@@ -68,7 +69,8 @@ def _build_graph() -> StateGraph:
     g.add_edge("run_capacity_forecast", "analyze_dependencies")
     g.add_edge("analyze_dependencies", "calculate_candidate_scores")
     g.add_edge("calculate_candidate_scores", "rank_candidates")
-    g.add_edge("rank_candidates", "retrieve_related_context")
+    g.add_edge("rank_candidates", "select_candidate_nodes")
+    g.add_edge("select_candidate_nodes", "retrieve_related_context")
 
     g.add_edge("retrieve_related_context", "generate_recommendation_explanations")
     g.add_edge("generate_recommendation_explanations", "assess_risk_and_confidence")
@@ -111,6 +113,7 @@ def _summarize(final_state: dict) -> dict:
         "eligible_candidates": final_state.get("eligible_candidates"),
         "rejected_candidates": final_state.get("rejected_candidates"),
         "candidate_scores": final_state.get("candidate_scores"),
+        "candidate_nodes": final_state.get("candidate_nodes"),
         "forecast_results": final_state.get("forecast_results"),
         "recommendation_explanations": final_state.get("recommendation_explanations"),
         "final_report": final_state.get("final_report"),
