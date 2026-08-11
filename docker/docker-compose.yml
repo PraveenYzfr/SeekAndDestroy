@@ -24,6 +24,62 @@
 #   docker compose -f docker/docker-compose.yml --profile core --profile observability down
 
 services:
+  # SQL Server as a container rather than a host install. Two things this buys
+  # beyond convenience: the image is SQL-authentication only, so the "enable
+  # Mixed Mode and restart the service" step disappears entirely (a container
+  # has no Windows identity to use anyway); and the whole estate rebuilds from
+  # a deterministic 6.6 MB seed, so there is nothing precious on this volume -
+  # losing it costs about two minutes.
+  #
+  # Set SAD_DB_HOST=host.docker.internal in docker/.env to point at an external
+  # SQL Server instead and this service simply goes unused.
+  sqlserver:
+    profiles: ["core"]
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${SAD_SA_PASSWORD:?set SAD_SA_PASSWORD in docker/.env - 8+ chars, mixed case, digit and symbol, or SQL Server exits on startup}"
+      MSSQL_PID: "Developer"
+    # 14330, not 1433: a laptop running SQL Server natively already owns 1433,
+    # and silently colliding with it is a confusing way to lose an evening.
+    # Loopback-bound - reach it on a VM through an SSH tunnel, never an NSG rule.
+    ports:
+      - "127.0.0.1:${SAD_SA_HOST_PORT:-14330}:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+    healthcheck:
+      # -C trusts the self-signed cert the container generates; -b makes a
+      # failed query a non-zero exit so the healthcheck actually fails.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -b -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # One-shot: creates PraveenDB, applies schema + migrations + seed, then exits.
+  # Guarded so a restart never re-seeds - schema.sql creates tables
+  # unconditionally and seed.sql would duplicate all 96k rows.
+  db-init:
+    profiles: ["core"]
+    # The server image, not a separate tools image: it already ships sqlcmd at
+    # /opt/mssql-tools18/bin (the healthcheck above uses it), so this pulls no
+    # extra layers and the tool version cannot drift from the server's.
+    # mcr.microsoft.com/mssql-tools18:latest does not exist - only the
+    # unversioned mssql-tools image does, and that one is still tools17.
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      SA_PASSWORD: "${SAD_SA_PASSWORD}"
+      APP_LOGIN: "${SAD_DB_USERNAME:-sad_app}"
+      APP_PASSWORD: "${SAD_DB_PASSWORD:?set SAD_DB_PASSWORD in docker/.env}"
+    volumes:
+      - ../database:/database:ro
+      - ./db-init.sh:/db-init.sh:ro
+    entrypoint: ["/bin/bash", "/db-init.sh"]
+    restart: "no"
+
   qdrant:
     profiles: ["core"]
     image: qdrant/qdrant:latest
@@ -75,10 +131,12 @@ services:
     ports:
       - "127.0.0.1:8088:8088"
     environment:
-      SAD_DB__SERVER: "host.docker.internal"
+      # Defaults to the sqlserver container. Set SAD_DB_HOST=host.docker.internal
+      # in docker/.env to use an external instance instead.
+      SAD_DB__SERVER: "${SAD_DB_HOST:-sqlserver}"
       SAD_DB__DATABASE: "PraveenDB"
       SAD_DB__INTEGRATED_SECURITY: "false" # container has no Windows identity - see docs/setup.md
-      SAD_DB__USERNAME: "${SAD_DB_USERNAME:-}"
+      SAD_DB__USERNAME: "${SAD_DB_USERNAME:-sad_app}"
       SAD_DB__PASSWORD: "${SAD_DB_PASSWORD:-}"
       SAD_LLM__PROVIDER: "mock"
       SAD_RETRIEVAL__BACKEND: "qdrant"
@@ -106,6 +164,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Waits for db-init to *exit successfully*, not merely to start - so the
+      # service never comes up against a half-seeded database.
+      db-init:
+        condition: service_completed_successfully
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -118,7 +180,7 @@ services:
     ports:
       - "127.0.0.1:5090:5090"
     environment:
-      ConnectionStrings__PraveenDB: "Data Source=host.docker.internal;Initial Catalog=PraveenDB;Integrated Security=False;User ID=${SAD_DB_USERNAME:-};Password=${SAD_DB_PASSWORD:-};TrustServerCertificate=True;"
+      ConnectionStrings__PraveenDB: "Data Source=${SAD_DB_HOST:-sqlserver};Initial Catalog=PraveenDB;Integrated Security=False;User ID=${SAD_DB_USERNAME:-sad_app};Password=${SAD_DB_PASSWORD:-};TrustServerCertificate=True;"
       AiService__BaseUrl: "http://ai-service:8088"
       # Must match ai-service's SAD_AUTH__* above exactly - both validate the same tokens.
       Auth__Mode: "${SAD_AUTH_MODE:-local}"
@@ -126,7 +188,10 @@ services:
       Auth__OidcAuthority: "${SAD_AUTH_OIDC_AUTHORITY:-}"
       Auth__OidcAudience: "${SAD_AUTH_OIDC_AUDIENCE:-}"
     depends_on:
-      - ai-service
+      ai-service:
+        condition: service_started
+      db-init:
+        condition: service_completed_successfully
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -176,6 +241,7 @@ services:
       - prometheus
 
 volumes:
+  mssql_data:
   qdrant_storage:
   redis_data:
   prometheus_data:

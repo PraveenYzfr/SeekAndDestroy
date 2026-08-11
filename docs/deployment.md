@@ -52,15 +52,42 @@ docker compose -f docker/docker-compose.yml up -d qdrant
 #   SAD_RETRIEVAL__BACKEND=qdrant
 ```
 
-**Full container stack locally:**
+**Full container stack locally** — including its own SQL Server, so nothing on
+the host is touched and there is no Mixed Mode to enable (the image is
+SQL-auth only):
 
 ```powershell
-copy docker\.env.example docker\.env   # fill in SAD_DB_PASSWORD
+copy docker\.env.example docker\.env   # fill in SAD_SA_PASSWORD and SAD_DB_PASSWORD
 docker compose -f docker/docker-compose.yml --profile core up --build
 ```
 
-The UI is then on <http://localhost:8080>. Everything else — gateway, ai-service,
-Qdrant, Redis — is bound to loopback and reached through the UI's nginx proxy.
+First run takes a few minutes: it pulls SQL Server, builds three images, then
+`db-init` creates the database, applies schema + migrations + the 96k-row seed
+and creates the least-privilege `sad_app` login. Subsequent runs skip all of
+that — `db-init` is guarded on the presence of `sad.Employee`, so `up` is safe
+to repeat. To rebuild from scratch, drop the volume:
+`docker compose --profile core down -v`.
+
+The UI is then on <http://localhost:8080>. Everything else — gateway,
+ai-service, Qdrant, Redis, SQL Server — is bound to loopback and reached
+through the UI's nginx proxy.
+
+**Connecting SSMS / Azure Data Studio to the containerised database:**
+
+```
+Server:  127.0.0.1,14330        <- NOT localhost,14330
+Auth:    SQL Server Authentication
+```
+
+Use the IPv4 literal. Docker publishes the port on IPv4 only, while
+`localhost` resolves to IPv6 `::1` first on Windows, so `localhost,14330`
+hangs and then reports "server is not found or not accessible" — which reads
+like the container is broken when it is fine.
+
+Verify the grants are real while you are there: `sad_app` can `SELECT` from
+`sad.InfrastructureCluster` but an `UPDATE` returns *"The UPDATE permission
+was denied"*. That is the CMDB-is-read-only design enforced by the database
+rather than by convention.
 
 ## 2. Azure VM
 
