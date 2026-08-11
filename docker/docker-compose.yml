@@ -27,8 +27,17 @@ services:
   qdrant:
     profiles: ["core"]
     image: qdrant/qdrant:latest
+    # Bound to loopback, NOT 0.0.0.0. Qdrant ships with no authentication, so
+    # "6333:6333" on a cloud VM is an unauthenticated vector database exposed
+    # to the internet the moment the NSG allows it. ai-service reaches it as
+    # http://qdrant:6333 over the compose network and needs no host mapping at
+    # all; this one exists only for local debugging.
     ports:
-      - "6333:6333"
+      - "127.0.0.1:6333:6333"
+    environment:
+      # Defence in depth for the case where the port does get exposed. Empty
+      # leaves auth off, which is fine for a laptop and not for a VM.
+      QDRANT__SERVICE__API_KEY: "${SAD_QDRANT_API_KEY:-}"
     volumes:
       - qdrant_storage:/qdrant/storage
     healthcheck:
@@ -43,8 +52,10 @@ services:
   redis:
     profiles: ["core"]
     image: redis:7-alpine
+    # Loopback only - Redis has no auth here either, and an open 6379 is one
+    # of the most reliably exploited ports on the internet.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -58,8 +69,11 @@ services:
     build:
       context: ../ai-service
       dockerfile: Dockerfile
+    # Loopback only: the browser never talks to ai-service directly. The UI's
+    # nginx proxies /api/ to api-gateway, which calls ai-service over the
+    # compose network. Only the ui service needs a public port.
     ports:
-      - "8088:8088"
+      - "127.0.0.1:8088:8088"
     environment:
       SAD_DB__SERVER: "host.docker.internal"
       SAD_DB__DATABASE: "PraveenDB"
@@ -69,6 +83,15 @@ services:
       SAD_LLM__PROVIDER: "mock"
       SAD_RETRIEVAL__BACKEND: "qdrant"
       SAD_RETRIEVAL__QDRANT_URL: "http://qdrant:6333"
+      SAD_RETRIEVAL__QDRANT_API_KEY: "${SAD_QDRANT_API_KEY:-}"
+      # Embeddings are unset here on purpose: ai-service/.env is excluded from
+      # the image (see .dockerignore), so a real provider's key must be
+      # injected at deploy time rather than baked into a layer. Left unset,
+      # the service falls back to the offline hash embedder.
+      SAD_RETRIEVAL__EMBEDDING_PROVIDER: "${SAD_EMBEDDING_PROVIDER:-hash}"
+      SAD_RETRIEVAL__EMBEDDING_MODEL: "${SAD_EMBEDDING_MODEL:-}"
+      SAD_RETRIEVAL__EMBEDDING_API_KEY: "${SAD_EMBEDDING_API_KEY:-}"
+      SAD_RETRIEVAL__EMBEDDING_DIMENSIONS: "${SAD_EMBEDDING_DIMENSIONS:-384}"
       SAD_CACHE__BACKEND: "redis"
       SAD_CACHE__REDIS_URL: "redis://redis:6379/0"
       # local mode default - CHANGE SAD_AUTH__LOCAL_SIGNING_KEY (both here and on
@@ -91,8 +114,9 @@ services:
     build:
       context: ../api-gateway
       dockerfile: Dockerfile
+    # Loopback only - reached through the UI's nginx proxy, not directly.
     ports:
-      - "5090:5090"
+      - "127.0.0.1:5090:5090"
     environment:
       ConnectionStrings__PraveenDB: "Data Source=host.docker.internal;Initial Catalog=PraveenDB;Integrated Security=False;User ID=${SAD_DB_USERNAME:-};Password=${SAD_DB_PASSWORD:-};TrustServerCertificate=True;"
       AiService__BaseUrl: "http://ai-service:8088"
@@ -119,8 +143,10 @@ services:
   prometheus:
     profiles: ["observability"]
     image: prom/prometheus:latest
+    # Loopback only - Prometheus has no auth and its /api/v1/query endpoint
+    # will answer anyone who asks.
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -133,10 +159,15 @@ services:
     profiles: ["observability"]
     image: grafana/grafana:latest
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      # Anonymous viewing is convenient on a laptop and wrong anywhere else -
+      # Grafana would expose your infrastructure metrics to whoever finds the
+      # port. Set SAD_GRAFANA_ANONYMOUS=false and a real admin password on any
+      # deployed environment.
+      GF_AUTH_ANONYMOUS_ENABLED: "${SAD_GRAFANA_ANONYMOUS:-true}"
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_SECURITY_ADMIN_PASSWORD: "${SAD_GRAFANA_ADMIN_PASSWORD:-admin}"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/etc/grafana/dashboards:ro

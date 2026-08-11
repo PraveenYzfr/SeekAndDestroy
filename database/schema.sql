@@ -42,6 +42,14 @@ CREATE TABLE sad.Employee
     DisplayName     NVARCHAR(200)      NOT NULL,
     Email           NVARCHAR(255)      NOT NULL,
     IsActive        BIT                NOT NULL CONSTRAINT DF_Employee_IsActive DEFAULT (1),
+    -- Self-describing scrypt string, never a password and never reversible:
+    --   scrypt$n=16384,r=8,p=1$<b64 salt>$<b64 derived key>
+    -- Parameters are embedded per row so they can be raised later without
+    -- invalidating existing hashes (see app/security/passwords.py). NULL means
+    -- "no password set" - such an employee cannot sign in with a password, and
+    -- there is no implicit default credential anywhere in this platform.
+    PasswordHash      NVARCHAR(512)    NULL,
+    PasswordUpdatedAt DATETIME2(3)     NULL,
     CONSTRAINT PK_Employee PRIMARY KEY CLUSTERED (EmployeeId),
     CONSTRAINT UQ_Employee_EmployeeNumber UNIQUE (EmployeeNumber),
     CONSTRAINT UQ_Employee_Email UNIQUE (Email)

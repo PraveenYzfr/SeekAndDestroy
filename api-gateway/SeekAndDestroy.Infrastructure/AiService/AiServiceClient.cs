@@ -101,16 +101,24 @@ public sealed class AiServiceClient(HttpClient httpClient, IHttpContextAccessor 
     public Task<JsonNode?> SubmitRecommendationDecisionAsync(int recommendationId, RecommendationDecisionRequestDto request, CancellationToken ct) =>
         PostAsync($"/api/recommendations/{recommendationId}/decision", request, ct);
 
-    public async Task<JsonNode?> IssueDevTokenAsync(DevTokenRequestDto request, CancellationToken ct)
+    public Task<JsonNode?> IssueDevTokenAsync(DevTokenRequestDto request, CancellationToken ct) =>
+        PostUnauthenticatedAsync("/api/auth/dev-token", request, ct);
+
+    public Task<JsonNode?> LoginAsync(LoginRequestDto request, CancellationToken ct) =>
+        PostUnauthenticatedAsync("/api/auth/login", request, ct);
+
+    /// <summary>The two token-issuing calls. Deliberately does not go through
+    /// PostAsync/CallerAuthorizationHeader - these are how a token is obtained
+    /// in the first place, so there is never a caller Authorization header
+    /// worth forwarding. The failure log records the status only, never the
+    /// response body or the request: a login body carries a password.</summary>
+    private async Task<JsonNode?> PostUnauthenticatedAsync(string path, object request, CancellationToken ct)
     {
-        // Deliberately does not go through PostAsync/CallerAuthorizationHeader -
-        // this is how a token is obtained in the first place, so there is
-        // never a caller Authorization header worth forwarding here.
-        using var response = await httpClient.PostAsJsonAsync("/api/auth/dev-token", request, RequestOptions, ct);
+        using var response = await httpClient.PostAsJsonAsync(path, request, RequestOptions, ct);
         var text = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
         {
-            logger.LogWarning("AI service /api/auth/dev-token returned {Status}: {Body}", (int)response.StatusCode, text);
+            logger.LogWarning("AI service {Path} returned {Status}", path, (int)response.StatusCode);
             throw new AiServiceException((int)response.StatusCode, text);
         }
         return string.IsNullOrWhiteSpace(text) ? null : JsonNode.Parse(text);

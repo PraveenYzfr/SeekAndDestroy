@@ -9,3 +9,7 @@ public sealed record GatewayRightSizingRequestDto(string? ClusterCode, string? A
 public sealed record ApproveRejectRequestDto(int ReviewerEmployeeId, string? Reason);
 
 public sealed record DevTokenRequestDto(string EmployeeNumber);
+
+/// <summary>Username/password sign-in. Username is the employee number or the
+/// email address. Never logged, never echoed - see AiServiceClient.</summary>
+public sealed record LoginRequestDto(string Username, string Password);

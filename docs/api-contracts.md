@@ -20,11 +20,17 @@ RFC 7807 `application/problem+json`:
 
 ## Authentication
 
-Every endpoint on both services requires a `Authorization: Bearer <token>` header **except** `/api/health`, `/api/ready` (standard unauthenticated infra probes) and `/api/auth/dev-token` itself (how a token is obtained in the first place). Missing/invalid/expired tokens get a `401`.
+Every endpoint on both services requires a `Authorization: Bearer <token>` header **except** `/api/health`, `/api/ready` (standard unauthenticated infra probes) and the two token-issuing endpoints, `/api/auth/login` and `/api/auth/dev-token` (how a token is obtained in the first place). Missing/invalid/expired tokens get a `401`.
 
 `SAD_AUTH__MODE` (ai-service) / `Auth:Mode` (gateway) - both must be set the same way:
-- **`local`** (default): `POST /api/auth/dev-token` `{"employee_number": "E1001"}` (gateway: `{"employeeNumber": "E1001"}`) issues a signed token against a real, active `Employee` row - no external identity provider needed. `SAD_AUTH__LOCAL_SIGNING_KEY` / `Auth:LocalSigningKey` must be the identical string on both services (symmetric key).
-- **`oidc`**: tokens come from a real external IdP (Azure AD/Entra, Okta, ...); `/api/auth/dev-token` returns `404`. `SAD_AUTH__OIDC_AUTHORITY`/`_AUDIENCE` (ai-service) and `Auth:OidcAuthority`/`OidcAudience` (gateway) must point at the same tenant/app registration.
+- **`local`** (default): two ways to obtain a token, both issuing the *same* JWT every layer already validates - so how a token is obtained never changes how it is verified.
+  - `POST /api/auth/login` `{"username": "E1001", "password": "..."}` - username is the employee number **or** the email address (both `UNIQUE` on `sad.Employee`). This is what the UI uses. The credential is an scrypt hash in `Employee.PasswordHash`, set with `scripts/set_password.py`; **there is no default password**, so an employee who has none cannot sign in this way. Every failure returns an identical `401` body - distinguishing "no such user" from "wrong password" would turn the endpoint into an account enumerator.
+  - `POST /api/auth/dev-token` `{"employee_number": "E1001"}` (gateway: `{"employeeNumber": "E1001"}`) issues a token against a real, active `Employee` row with **no credential check** - a development convenience, not a login.
+
+  `SAD_AUTH__LOCAL_SIGNING_KEY` / `Auth:LocalSigningKey` must be the identical string on both services (symmetric key).
+- **`oidc`**: tokens come from a real external IdP (Azure AD/Entra, Okta, ...); **both** `/api/auth/login` and `/api/auth/dev-token` return `404` - when a real provider issues tokens, a second local way in would be a bypass of it. `SAD_AUTH__OIDC_AUTHORITY`/`_AUDIENCE` (ai-service) and `Auth:OidcAuthority`/`OidcAudience` (gateway) must point at the same tenant/app registration.
+
+  Note for an Entra/Okta migration: `validate_token` currently requires an `employee_id` claim, which an IdP token will not carry - it has `oid`/`sub`/`preferred_username`. Mapping the provider's identity onto a `sad.Employee` row (email is the natural key) is a prerequisite, not a config change, because that id is what records *who approved a recommendation*.
 
 Every write endpoint's `*_employee_id`/`reviewerEmployeeId`-style body field is **advisory only** - the authenticated token's `employee_id` claim is what actually gets used. If a body value is also supplied and disagrees with the token, the request is rejected (`403`) rather than silently overridden. The gateway forwards the caller's own token through to the AI service unchanged (not a separately re-minted one), so both layers independently validate the same credential - a request that skips the gateway and hits the AI service directly is rejected exactly the same way.
 
@@ -93,6 +99,7 @@ Field naming: request/response bodies use the exact `snake_case` field names of 
 | POST | `/api/recommendations/right-sizing` | `{clusterCode?, applicationCode?}` - routes to the cluster or application AI-service endpoint. |
 | POST | `/api/recommendations/consolidation` | Proxies to `/api/consolidation/analyze`. |
 | POST | `/api/recommendations/forecast` | Proxies to `/api/forecast`; `horizonDays` validated to {30,60,90,180}. |
+| POST | `/api/auth/login` | `{username, password}` - unauthenticated by design; proxies to the AI service. Never logs the body. |
 | POST | `/api/recommendations/{id}/approve` | `{reviewerEmployeeId, reason?}`, `reviewerEmployeeId` must be `> 0`. |
 | POST | `/api/recommendations/{id}/reject` | Same shape as approve. |
 | POST | `/api/investigations` | `{query, createdByEmployeeId}`. |

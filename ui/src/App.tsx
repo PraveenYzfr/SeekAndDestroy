@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
+import { clearSession, getIdentity, onSessionChange, type Identity } from "@/auth/session";
+import Login from "@/pages/Login";
 import Chat from "@/pages/Chat";
 import Dashboard from "@/pages/Dashboard";
 import HostingRecommendation from "@/pages/HostingRecommendation";
@@ -22,6 +25,17 @@ const NAV = [
 ];
 
 export default function App() {
+  const [identity, setIdentity] = useState<Identity | null>(getIdentity);
+
+  // Any 401 anywhere in the app clears the session, which lands here and
+  // swaps the whole shell for the login screen - so an expired token never
+  // leaves the user clicking a dead UI.
+  useEffect(() => onSessionChange(setIdentity), []);
+
+  if (!identity) {
+    return <Login onSignedIn={() => setIdentity(getIdentity())} />;
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -33,6 +47,14 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
+        <div className="signed-in-as">
+          <div className="stat-label">Signed in as</div>
+          <div>{identity.display_name}</div>
+          <div className="stat-label">{identity.employee_number}</div>
+          <button className="secondary" style={{ marginTop: 8 }} onClick={clearSession}>
+            Sign out
+          </button>
+        </div>
       </aside>
       <main className="content">
         <Routes>

@@ -28,4 +28,10 @@ public interface IAiServiceClient
     /// that must NOT forward the caller's Authorization header, since there
     /// isn't one yet - it's how a token is obtained in the first place.</summary>
     Task<JsonNode?> IssueDevTokenAsync(DevTokenRequestDto request, CancellationToken ct);
+
+    /// <summary>Proxies username/password sign-in to the AI service
+    /// (SAD_AUTH__MODE=local only - 404s otherwise). Like dev-token, this must
+    /// NOT forward a caller Authorization header: it is how a token is
+    /// obtained in the first place.</summary>
+    Task<JsonNode?> LoginAsync(LoginRequestDto request, CancellationToken ct);
 }

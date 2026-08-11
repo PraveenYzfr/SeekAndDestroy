@@ -24,6 +24,11 @@ class Employee(_Entity):
     DisplayName: str
     Email: str
     IsActive: bool
+    # Deliberately excluded: PasswordHash. It exists on sad.Employee but is
+    # never loaded into this model, so it cannot leak through any endpoint
+    # that returns an Employee. The one code path that needs it reads the
+    # column directly - employee_repository.get_password_hash().
+    PasswordUpdatedAt: Optional[datetime] = None
 
 
 class SupportGroup(_Entity):

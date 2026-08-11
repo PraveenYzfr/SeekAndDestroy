@@ -10,6 +10,8 @@ import type {
   RunInvestigationResult,
 } from "@/types";
 
+import { clearSession, getToken, setSession, type LoginResponse } from "@/auth/session";
+
 const BASE = "/api";
 
 class ApiError extends Error {
@@ -23,11 +25,24 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getToken();
   const response = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: {
+      "Content-Type": "application/json",
+      // Every gateway controller except /api/auth/* is [Authorize]. Without
+      // this header the whole app 401s, which is exactly what it used to do.
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers ?? {}),
+    },
   });
   if (!response.ok) {
+    // An expired or revoked token must return the user to the login screen
+    // rather than leaving them clicking a dead UI. Tokens are short-lived
+    // (60 min by default), so this fires in normal use, not just on attack.
+    if (response.status === 401 && !path.startsWith("/auth/")) {
+      clearSession();
+    }
     const body = await response.json().catch(() => ({}));
     throw new ApiError(response.status, body.title ?? response.statusText, body.detail ?? "Request failed.");
   }
@@ -36,6 +51,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  /** Username is the employee number (E1001) or the email address. The
+   *  password is passed straight through and never stored anywhere. */
+  login: async (username: string, password: string): Promise<LoginResponse> => {
+    const result = await request<LoginResponse>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+    setSession(result);
+    return result;
+  },
+
   getApplications: (environment?: string) =>
     request<CmdbApplication[]>(`/cmdb/applications${environment ? `?environment=${environment}` : ""}`),
 

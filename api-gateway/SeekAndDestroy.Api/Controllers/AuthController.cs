@@ -16,4 +16,11 @@ public sealed class AuthController(IAiServiceClient aiServiceClient) : Controlle
     [HttpPost("dev-token")]
     public async Task<IActionResult> DevToken([FromBody] DevTokenRequestDto request, CancellationToken ct) =>
         Ok(await aiServiceClient.IssueDevTokenAsync(request, ct));
+
+    /// <summary>Username/password sign-in - the flow the UI uses. Validation
+    /// of the credential happens in the AI service against sad.Employee; this
+    /// controller only forwards, and never logs the body.</summary>
+    [HttpPost("login")]
+    public async Task<IActionResult> Login([FromBody] LoginRequestDto request, CancellationToken ct) =>
+        Ok(await aiServiceClient.LoginAsync(request, ct));
 }

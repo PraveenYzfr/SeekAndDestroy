@@ -35,7 +35,27 @@ To regenerate `database/seed.sql` (byte-for-byte reproducible - see `scripts/gen
 .venv\Scripts\python.exe scripts\generate_seed.py
 ```
 
-### 1a. A SQL login for containers and remote hosts
+### 1a. A sign-in password
+
+There is no default credential anywhere in this platform - an employee whose
+`PasswordHash` is NULL cannot sign in with a password at all. Set one (it
+prompts twice, echoes nothing, and stores only an scrypt hash):
+
+```bash
+.venv\Scripts\python.exe scripts\set_password.py E1001
+```
+
+Sign in at the UI with that employee number or the employee's email address.
+`--clear` revokes password sign-in for an account.
+
+Requires migration 001, which `provision-database.ps1` applies automatically;
+against an existing database run it directly:
+
+```bash
+sqlcmd -S YOUR-SERVER-NAME -d PraveenDB -E -C -i database\migration_001_employee_credentials.sql
+```
+
+### 1b. A SQL login for containers and remote hosts
 
 Windows Integrated Security works when the services run natively on the same machine as SQL Server. It does **not** work from a container (no Windows identity) or from a remote host with no shared AD domain - both need SQL Server Authentication, which means enabling Mixed Mode (Server Properties -> Security -> "SQL Server and Windows Authentication mode") and **restarting the SQL Server service**. The login silently fails to authenticate until that restart happens.
 

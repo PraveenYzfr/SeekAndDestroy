@@ -210,15 +210,26 @@ class QdrantVectorStore:
             ]
             if conditions:
                 qdrant_filter = Filter(must=conditions)
-        hits = self._client.search(
-            collection_name=self._collection, query_vector=query_vec, limit=top_k, query_filter=qdrant_filter
-        )
+        # query_points, not the older search(): qdrant-client removed
+        # QdrantClient.search/search_batch, so on the pinned 1.18 client the
+        # old call raised AttributeError. That failed *silently* in practice -
+        # graph.retrieve_related_context catches retrieval errors and degrades
+        # to no context - so the symptom was worse answers, never an error.
+        hits = self._client.query_points(
+            collection_name=self._collection, query=query_vec, limit=top_k, query_filter=qdrant_filter,
+            with_payload=True,
+        ).points
         results = []
         for hit in hits:
             payload = dict(hit.payload or {})
             text = payload.pop("text", "")
-            payload.pop("doc_id", None)
-            doc = RetrievalDocument(id=str(hit.id), text=text, **{k: v for k, v in payload.items() if k in RetrievalDocument.model_fields})
+            # The real document id ("cluster:42") is carried in the payload;
+            # hit.id is the blake2b-derived numeric point id Qdrant requires.
+            # Returning the numeric one would make this backend's results
+            # inconsistent with InMemoryVectorStore's and break any caller
+            # that maps a result back to its source entity.
+            doc_id = payload.pop("doc_id", None) or str(hit.id)
+            doc = RetrievalDocument(id=str(doc_id), text=text, **{k: v for k, v in payload.items() if k in RetrievalDocument.model_fields})
             results.append(SearchResult(document=doc, score=float(hit.score)))
         return results
 

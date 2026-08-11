@@ -31,6 +31,15 @@ class DevTokenRequest(BaseModel):
     employee_number: str = Field(min_length=1, description="Must match an active Employee row")
 
 
+class LoginRequest(BaseModel):
+    """Username/password sign-in. ``username`` accepts either the employee
+    number (E1001) or the email address - both are UNIQUE on sad.Employee.
+    """
+
+    username: str = Field(min_length=1, description="Employee number or email address")
+    password: str = Field(min_length=1, repr=False)
+
+
 class _NodeDrillDownMixin(BaseModel):
     """Shared knobs for the "top N clusters, top M hosts inside each" shape
     that every placement endpoint now returns. Both default to the configured

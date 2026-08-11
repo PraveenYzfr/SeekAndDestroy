@@ -41,6 +41,15 @@ body {
 }
 .sidebar nav a.active, .sidebar nav a:hover { background: #1e2740; color: var(--text); }
 
+/* Sidebar footer: who you are signed in as, and the way out. Pushed to the
+   bottom so it never competes with navigation. */
+.signed-in-as {
+  margin-top: 24px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
 .content { flex: 1; padding: 24px 32px; max-width: 1200px; }
 
 h2 { font-size: 20px; margin: 0 0 4px; }

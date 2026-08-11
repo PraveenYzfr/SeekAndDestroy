@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/api/client";
 import type { InfrastructureRecommendation, RunInvestigationResult } from "@/types";
 import { describeCandidate, isNodeRow } from "@/utils/recommendations";
+import { getIdentity } from "@/auth/session";
 
 type MessageStatus = "loading" | "awaiting_review" | "completed" | "error";
 
@@ -11,13 +12,20 @@ interface ChatMessage {
   text?: string;
   investigationId?: number;
   status?: MessageStatus;
-  reviewPayload?: { top_candidates: string[]; message: string };
+  // Mirrors RunInvestigationResult["review_payload"] - one shape, declared
+  // once, so the two cannot drift.
+  reviewPayload?: RunInvestigationResult["review_payload"];
   finalReport?: RunInvestigationResult["final_report"];
   recommendations?: InfrastructureRecommendation[];
   error?: string;
 }
 
-const EMPLOYEE_ID = 1;
+/** The signed-in employee, not a hardcoded 1. The backend treats the token as
+ *  authoritative and rejects a mismatching body value (require_matching_
+ *  employee_id), so sending anything else would 403. */
+function currentEmployeeId(): number {
+  return getIdentity()?.employee_id ?? 0;
+}
 
 const EXAMPLES = [
   "Find the best clusters for hosting APP-PAYMENTS.",
@@ -81,7 +89,7 @@ export default function Chat() {
     const assistantId = newId();
     setMessages((prev) => [...prev, userMsg, { id: assistantId, role: "assistant", status: "loading" }]);
     try {
-      const result = await api.createInvestigation(text, EMPLOYEE_ID);
+      const result = await api.createInvestigation(text, currentEmployeeId());
       await applyResult(assistantId, result);
     } catch (e) {
       updateMessage(assistantId, {
@@ -98,7 +106,7 @@ export default function Chat() {
     const followUpId = newId();
     setMessages((prev) => [...prev, { id: followUpId, role: "assistant", status: "loading" }]);
     try {
-      const result = await api.resumeInvestigation(investigationId, decision, EMPLOYEE_ID);
+      const result = await api.resumeInvestigation(investigationId, decision, currentEmployeeId());
       await applyResult(followUpId, result);
     } catch (e) {
       updateMessage(followUpId, {
@@ -139,7 +147,7 @@ export default function Chat() {
         )}
 
         {messages.map((m) => (
-          <ChatBubble key={m.id} message={m} onDecide={decide} />
+          <ChatBubble key={m.id} message={m} onDecide={decide} busy={busy} />
         ))}
         <div ref={bottomRef} />
       </div>
@@ -164,9 +172,11 @@ export default function Chat() {
 function ChatBubble({
   message,
   onDecide,
+  busy,
 }: {
   message: ChatMessage;
   onDecide: (investigationId: number, decision: "Approve" | "Reject") => void;
+  busy: boolean;
 }) {
   if (message.role === "user") {
     return (
@@ -187,10 +197,37 @@ function ChatBubble({
           <div>
             <p>{message.reviewPayload.message}</p>
             <div className="stat-label">Top candidates</div>
-            <p>{message.reviewPayload.top_candidates.join(", ")}</p>
+            {/* The reviewer is approving clusters *and* the hosts proposed
+                inside them, so both belong in the prompt - showing only the
+                cluster codes hid half of what the decision covers. */}
+            {message.reviewPayload.top_hosts_by_cluster ? (
+              <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                {message.reviewPayload.top_candidates.map((cluster) => (
+                  <li key={cluster}>
+                    <strong>{cluster}</strong>
+                    {" — "}
+                    {message.reviewPayload!.top_hosts_by_cluster![cluster]?.length
+                      ? message.reviewPayload!.top_hosts_by_cluster![cluster].join(", ")
+                      : "no eligible hosts"}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>{message.reviewPayload.top_candidates.join(", ")}</p>
+            )}
             <div className="chat-review-actions">
-              <button onClick={() => onDecide(message.investigationId!, "Approve")}>Approve</button>
-              <button className="danger" onClick={() => onDecide(message.investigationId!, "Reject")}>
+              {/* Disabled while any request is in flight: these buttons stay
+                  rendered after a decision (the thread keeps its history), so
+                  without this a second click re-resumes an already-decided
+                  investigation and appends a duplicate answer. */}
+              <button disabled={busy} onClick={() => onDecide(message.investigationId!, "Approve")}>
+                Approve
+              </button>
+              <button
+                className="danger"
+                disabled={busy}
+                onClick={() => onDecide(message.investigationId!, "Reject")}
+              >
                 Reject
               </button>
             </div>

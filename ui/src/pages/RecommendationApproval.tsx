@@ -2,11 +2,17 @@ import { useState } from "react";
 import { api, ApiError } from "@/api/client";
 import type { InfrastructureRecommendation } from "@/types";
 import { describeCandidate, isNodeRow } from "@/utils/recommendations";
+import { getIdentity } from "@/auth/session";
 
 export default function RecommendationApproval() {
   const [investigationId, setInvestigationId] = useState("");
   const [recommendations, setRecommendations] = useState<InfrastructureRecommendation[]>([]);
-  const [reviewerId, setReviewerId] = useState(1);
+  // Who approved a recommendation is an audit fact, so it comes from the
+  // signed-in identity rather than a typed-in number. The backend rejects a
+  // mismatch anyway (require_matching_employee_id), which used to make this
+  // field a way to get a 403 rather than a way to approve as someone else.
+  const identity = getIdentity();
+  const reviewerId = identity?.employee_id ?? 0;
   const [comments, setComments] = useState<Record<number, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -53,8 +59,8 @@ export default function RecommendationApproval() {
             <input value={investigationId} onChange={(e) => setInvestigationId(e.target.value)} />
           </div>
           <div className="form-row">
-            <label>Reviewer employee ID</label>
-            <input type="number" value={reviewerId} onChange={(e) => setReviewerId(+e.target.value)} />
+            <label>Reviewer</label>
+            <input value={`${identity?.display_name ?? "—"} (${identity?.employee_number ?? "?"})`} readOnly />
           </div>
         </div>
         <button disabled={!investigationId || loading} onClick={load}>{loading ? "Loading..." : "Load recommendations"}</button>
