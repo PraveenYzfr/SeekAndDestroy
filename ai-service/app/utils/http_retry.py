@@ -49,4 +49,37 @@ def _retry_delay_seconds(response: httpx.Response, status: int) -> float:
             return float(retry_after)
         except ValueError:
             pass
+
+    body_delay = _google_retry_delay(response)
+    if body_delay is not None:
+        return body_delay
+
     return 5.0 if status == 429 else 1.0
+
+
+def _google_retry_delay(response: httpx.Response) -> float | None:
+    """Google's APIs put their retry hint in the response *body*, not in a
+    ``Retry-After`` header::
+
+        {"error": {"details": [
+            {"@type": ".../google.rpc.RetryInfo", "retryDelay": "27s"}]}}
+
+    Without reading it, a 429 backs off for a flat 5s and burns its remaining
+    attempts well before the quota window has actually reset - which is how a
+    burst of narration calls loses the final report while the per-candidate
+    explanations succeed.
+    """
+    try:
+        details = response.json().get("error", {}).get("details", [])
+    except Exception:  # noqa: BLE001 - a non-JSON error body is not worth failing over
+        return None
+
+    for detail in details:
+        if "RetryInfo" not in detail.get("@type", ""):
+            continue
+        raw = str(detail.get("retryDelay", "")).strip()
+        try:
+            return float(raw[:-1]) if raw.endswith("s") else float(raw)
+        except ValueError:
+            return None
+    return None

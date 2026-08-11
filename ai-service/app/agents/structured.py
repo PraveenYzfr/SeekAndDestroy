@@ -26,6 +26,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel
 
+from app.agents.gemini_chat_model import GeminiChatModel
 from app.agents.mock_llm import MockChatModel
 from app.cache.store import get_cache_store
 from app.config import get_settings
@@ -55,7 +56,13 @@ def run_structured(llm: BaseChatModel, system_prompt: str, human_prompt: str, ou
 
 
 def _invoke(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_model: type[T]) -> T:
-    if isinstance(llm, MockChatModel):
+    # Providers that can enforce the schema server-side do so. Format
+    # instructions in a prompt are a request the model may quietly ignore -
+    # gemini-flash returned valid JSON for FinalRecommendationReport while
+    # dropping a required field, which parses as a failure and costs the whole
+    # narration. Native enforcement removes that failure mode instead of
+    # retrying it.
+    if isinstance(llm, (MockChatModel, GeminiChatModel)):
         bound = llm.bind_response_schema(output_model)
         result = bound.invoke([SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
         return output_model.model_validate_json(result.content)

@@ -15,6 +15,11 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatResult
 
+from app.agents.gemini_chat_model import (
+    DEFAULT_BASE_URL as GEMINI_DEFAULT_BASE_URL,
+    DEFAULT_MODEL as GEMINI_DEFAULT_MODEL,
+    GeminiChatModel,
+)
 from app.agents.http_chat_model import HttpChatModel
 from app.agents.mock_llm import MockChatModel
 from app.config import get_settings
@@ -44,6 +49,20 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds,
             extra_headers={"api-key": settings.api_key} if settings.api_key else {}, provider_name=provider,
+        )
+    if provider == "gemini":
+        if not settings.api_key:
+            raise ValueError("SAD_LLM__API_KEY is required for the gemini provider")
+        return GeminiChatModel(
+            api_key=settings.api_key,
+            # Falls back to a Gemini chat model rather than settings.model's
+            # default, which names the mock. Pointing the Gemini endpoint at
+            # "seek-and-destroy-mock" would 404 in a way that reads like an
+            # auth problem.
+            model=settings.model if settings.model != "seek-and-destroy-mock" else GEMINI_DEFAULT_MODEL,
+            base_url=settings.base_url or GEMINI_DEFAULT_BASE_URL,
+            temperature=settings.temperature, max_tokens=settings.max_output_tokens,
+            timeout_seconds=settings.timeout_seconds, provider_name=provider,
         )
     if provider == "ollama":
         return HttpChatModel(
