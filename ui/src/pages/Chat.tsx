@@ -19,6 +19,10 @@ interface ChatMessage {
   finalReport?: RunInvestigationResult["final_report"];
   recommendations?: InfrastructureRecommendation[];
   error?: string;
+  /** Set once this review has been acted on. The bubble stays in the thread as
+   *  history, so without this its Approve/Reject controls remain live and a
+   *  second click re-decides an investigation that is already closed. */
+  decided?: { decision: "Approve" | "Reject"; cluster?: string; host?: string };
 }
 
 /** The signed-in employee, not a hardcoded 1. The backend treats the token as
@@ -28,12 +32,24 @@ function currentEmployeeId(): number {
   return getIdentity()?.employee_id ?? 0;
 }
 
-const EXAMPLES = [
-  "Find the best clusters for hosting APP-PAYMENTS.",
-  "I need 8 CPU, 32 GB RAM and 500 GB storage for a production Kubernetes workload.",
-  "Why was nyc-03 rejected for APP-CRM?",
-  "Which clusters are underutilized and could be right-sized?",
-];
+/** Prompts built from whatever is actually in the CMDB, not a fixed menu.
+ *
+ *  Hardcoding "Find the best clusters for hosting APP-PAYMENTS" made the thing
+ *  look like a scripted demo - it implied the system knows about one blessed
+ *  application. These read a real application and a real cluster from the
+ *  estate, so the suggestions change with the data and every one of them is a
+ *  question about something that genuinely exists.
+ */
+function buildExamples(appCode?: string, clusterCode?: string): string[] {
+  return [
+    appCode ? `Find the best clusters for hosting ${appCode}.` : "Find the best clusters for hosting my application.",
+    "I need 64 cores, 512 GB RAM and 4 TB storage for a production Kubernetes workload.",
+    appCode && clusterCode
+      ? `Why was ${clusterCode} rejected for ${appCode}?`
+      : "Why was a cluster rejected for my application?",
+    "Which clusters are underutilized and could be right-sized?",
+  ];
+}
 
 let nextId = 0;
 function newId(): string {
@@ -45,7 +61,24 @@ export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [examples, setExamples] = useState<string[]>(() => buildExamples());
   const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  // Draw the suggestions from the live estate. Failure is silent and harmless:
+  // buildExamples() already returns generic wording, so a CMDB hiccup costs a
+  // couple of example prompts, not the chat.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([api.getApplications(), api.getClusters()])
+      .then(([apps, clusters]) => {
+        if (cancelled) return;
+        setExamples(buildExamples(apps[0]?.applicationCode, clusters[0]?.clusterCode));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -110,6 +143,16 @@ export default function Chat() {
   ) {
     setBusy(true);
     const followUpId = newId();
+    // Close the review bubble first: it stays in the thread as history, and
+    // leaving its controls live invites a second decision on a closed
+    // investigation.
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.investigationId === investigationId && m.status === "awaiting_review"
+          ? { ...m, decided: { decision, cluster: selectedClusterCode, host: selectedHostName } }
+          : m,
+      ),
+    );
     setMessages((prev) => [...prev, { id: followUpId, role: "assistant", status: "loading" }]);
     try {
       const result = await api.resumeInvestigation(
@@ -146,7 +189,7 @@ export default function Chat() {
         {messages.length === 0 && (
           <div className="chat-empty">
             <div className="chat-empty-title">Try asking:</div>
-            {EXAMPLES.map((ex) => (
+            {examples.map((ex) => (
               <button key={ex} className="secondary chat-example" onClick={() => send(ex)}>
                 {ex}
               </button>
@@ -174,6 +217,81 @@ export default function Chat() {
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * What was decided, then everything else folded away.
+ *
+ * Listing all twelve rows flat made the outcome invisible: the one placement
+ * that was actually approved sat among eleven that were not, in the same
+ * weight, and the reader had to hunt for it. The rest are kept - "what else
+ * was considered" is real evidence - just not competing with the answer.
+ */
+function Outcome({ recommendations }: { recommendations: InfrastructureRecommendation[] }) {
+  const [showOthers, setShowOthers] = useState(false);
+  const chosen = recommendations.filter((r) => r.Status === "Approved");
+  const others = recommendations.filter((r) => r.Status !== "Approved");
+
+  if (chosen.length === 0) {
+    // Rejected, or approved without picking an option - nothing was selected,
+    // so there is no outcome to lead with.
+    return <RecommendationRows rows={recommendations} />;
+  }
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="stat-label">Approved</div>
+      <RecommendationRows rows={chosen} />
+      {others.length > 0 && (
+        <>
+          <button className="secondary" style={{ marginTop: 8 }} onClick={() => setShowOthers(!showOthers)}>
+            {showOthers ? "Hide" : `Show ${others.length} other options considered`}
+          </button>
+          {showOthers && <RecommendationRows rows={others} muted />}
+        </>
+      )}
+    </div>
+  );
+}
+
+function RecommendationRows({
+  rows,
+  muted = false,
+}: {
+  rows: InfrastructureRecommendation[];
+  muted?: boolean;
+}) {
+  return (
+    <table style={{ marginTop: 6, opacity: muted ? 0.7 : 1 }}>
+      <thead>
+        <tr>
+          <th>Rank</th>
+          <th>Candidate</th>
+          <th>Outcome</th>
+          <th>Score</th>
+          <th>Headroom</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.RecommendationId}>
+            <td style={isNodeRow(r) ? { paddingLeft: 20, opacity: 0.75 } : undefined}>{r.Rank}</td>
+            <td style={isNodeRow(r) ? { paddingLeft: 20, opacity: 0.85 } : undefined}>
+              {isNodeRow(r) ? "↳ " : ""}
+              {describeCandidate(r)}
+            </td>
+            <td>
+              {/* Status, not EligibilityStatus: after a decision the question
+                  is what happened to this option, not whether it qualified. */}
+              <span className={`badge ${r.Status === "Approved" ? "eligible" : "rejected"}`}>{r.Status}</span>
+            </td>
+            <td>{r.OverallScore ?? "—"}</td>
+            <td>{r.ProjectedHeadroomPercent != null ? `${r.ProjectedHeadroomPercent}%` : "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -207,12 +325,28 @@ function ChatBubble({
         {message.status === "error" && <div className="error-box">{message.error}</div>}
 
         {message.status === "awaiting_review" && message.reviewPayload && message.investigationId != null && (
-          <ReviewChoice
-            payload={message.reviewPayload}
-            investigationId={message.investigationId}
-            busy={busy}
-            onDecide={onDecide}
-          />
+          message.decided ? (
+            <div className="review-decided">
+              {message.decided.decision === "Approve" ? (
+                <>
+                  <span className="badge eligible">Approved</span>{" "}
+                  <strong>{message.decided.cluster}</strong>
+                  {message.decided.host && <> / <strong>{message.decided.host}</strong></>}
+                </>
+              ) : (
+                <>
+                  <span className="badge rejected">Rejected</span> the whole shortlist
+                </>
+              )}
+            </div>
+          ) : (
+            <ReviewChoice
+              payload={message.reviewPayload}
+              investigationId={message.investigationId}
+              busy={busy}
+              onDecide={onDecide}
+            />
+          )
         )}
 
         {message.status === "completed" && (
@@ -250,35 +384,7 @@ function ChatBubble({
             )}
 
             {message.recommendations && message.recommendations.length > 0 && (
-              <table style={{ marginTop: 10 }}>
-                <thead>
-                  <tr>
-                    <th>Rank</th>
-                    <th>Candidate</th>
-                    <th>Status</th>
-                    <th>Score</th>
-                    <th>Headroom</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {message.recommendations.map((r) => (
-                    <tr key={r.RecommendationId}>
-                      <td style={isNodeRow(r) ? { paddingLeft: 20, opacity: 0.75 } : undefined}>{r.Rank}</td>
-                      <td style={isNodeRow(r) ? { paddingLeft: 20, opacity: 0.85 } : undefined}>
-                        {isNodeRow(r) ? "↳ " : ""}
-                        {describeCandidate(r)}
-                      </td>
-                      <td>
-                        <span className={`badge ${r.EligibilityStatus === "Eligible" ? "eligible" : "rejected"}`}>
-                          {r.EligibilityStatus}
-                        </span>
-                      </td>
-                      <td>{r.OverallScore ?? "—"}</td>
-                      <td>{r.ProjectedHeadroomPercent != null ? `${r.ProjectedHeadroomPercent}%` : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <Outcome recommendations={message.recommendations} />
             )}
 
             {message.investigationId != null && (

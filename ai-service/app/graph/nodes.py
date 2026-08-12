@@ -87,6 +87,67 @@ _RESOURCE_QUANTITY_RE = re.compile(
 _PROVISIONING_WORDS = ("need", "want", "find", "host", "place", "provision", "require", "looking for", "get me")
 
 
+#: Greetings and pleasantries. These are not infrastructure questions and must
+#: not become Investigation rows - "hi" producing "Investigation Report for hi:
+#: I don't have enough grounded information" is a correct answer to a question
+#: nobody asked, and it buries the real investigations in noise.
+_SMALLTALK_RE = re.compile(
+    r"^\s*(hi|hey|hello|yo|hiya|howdy|thanks|thank you|ta|cheers|ok|okay|cool|nice|"
+    r"good (morning|afternoon|evening)|how\s*a?r\s*e?\s*y?o?u|how r u|what'?s up|sup)"
+    r"[\s!.?]*$",
+    re.IGNORECASE,
+)
+
+#: Words that make a request infrastructure-shaped without saying enough to act
+#: on. "hosting java app" is a real ask with the specifics missing - answering
+#: "I don't have enough grounded information" is technically true and useless
+#: when the honest reply is "which application, or how much CPU and memory?".
+_INFRA_INTENT_WORDS = ("host", "cluster", "capacity", "node", "server", "deploy", "place", "workload", "app")
+
+
+def quick_reply(query: str) -> str | None:
+    """A direct answer for input that should never reach the graph.
+
+    Returns the reply text, or None when the query is a real investigation.
+    Two cases: conversational openers, and infrastructure asks too vague to
+    act on. Both previously created an Investigation row, ran the full
+    pipeline, and reported that the retrieved context was empty.
+    """
+    text = query.strip()
+    if not text:
+        return "Ask me where to host an application, how much spare capacity a cluster has, or which clusters could be right-sized."
+
+    if _SMALLTALK_RE.match(text):
+        return (
+            "Hello. I find infrastructure for workloads - tell me an application code "
+            "(for example APP-CRM), or the resources you need such as \"32 cores and 128 GB RAM\", "
+            "and I will rank the clusters and hosts that can take it."
+        )
+
+    lower = text.lower()
+    # Only ever intercept queries that would otherwise fall through to the
+    # generic Question path. "Which clusters are underutilized?" mentions a
+    # cluster and is short, but it classifies as RightSizing and is perfectly
+    # answerable - asking the engineer to be more specific would be worse than
+    # useless. Deferring to the classifier keeps this heuristic from swallowing
+    # every real query that happens to be brief.
+    if classify_investigation_type(text) != InvestigationType.QUESTION:
+        return None
+
+    looks_infra = any(w in lower for w in _INFRA_INTENT_WORDS)
+    has_app_code = bool(_APP_CODE_RE.search(text.upper()))
+    has_quantity = bool(_RESOURCE_QUANTITY_RE.search(lower))
+    # Infrastructure-shaped, but with nothing to compute against. Short and
+    # specific beats a full investigation that can only report emptiness.
+    if looks_infra and not has_app_code and not has_quantity and len(text.split()) <= 6:
+        return (
+            "I need a bit more to work with. Either name the application "
+            "(for example \"find hosting for APP-CRM\") or give me the resources it needs "
+            "(for example \"32 cores, 128 GB RAM and 2 TB storage in production\")."
+        )
+    return None
+
+
 def classify_investigation_type(query: str) -> str:
     lower = query.lower()
     if any(k in lower for k in _REFUSAL_KEYWORDS):

@@ -33,8 +33,10 @@ REQUIREMENT_EXTRACTION_SYSTEM = SYSTEM_BASE + (
 
 CANDIDATE_EXPLANATION_SYSTEM = SYSTEM_BASE + (
     "\n\nExplain why this infrastructure candidate is suitable or unsuitable for the workload, "
-    "using only the evidence provided. Echo overall_score and estimated_monthly_cost exactly as "
-    "given."
+    "using only the evidence provided. Echo overall_score exactly as given. Do not mention cost - "
+    "it is not in the evidence, and the figure the CMDB holds is an internal chargeback rate "
+    "rather than spend, so quoting it would imply a basis for the recommendation that does not "
+    "exist. Talk about capacity, headroom, compatibility and risk instead."
 )
 
 RIGHTSIZING_EXPLANATION_SYSTEM = SYSTEM_BASE + (

@@ -14,7 +14,9 @@ set -euo pipefail
 
 SQLCMD="/opt/mssql-tools18/bin/sqlcmd"
 SERVER="sqlserver"
-DB="PraveenDB"
+# Overridable so this stack can share one SQL Express instance with the
+# other co-hosted systems - see the multi-system hub SHARED_PLAN.md.
+DB="${DB_NAME:-PraveenDB}"
 # -C: trust the container's self-signed certificate. -b: exit non-zero on a
 # SQL error, so `set -e` can actually stop the script.
 COMMON=(-S "$SERVER" -U sa -P "$SA_PASSWORD" -C -b)

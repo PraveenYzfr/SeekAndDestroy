@@ -80,6 +80,17 @@ body {
 }
 .capacity-bar > span { display: block; height: 100%; }
 
+/* A closed review. Replaces the choice controls once a decision is made -
+   the bubble stays in the thread as history, and live buttons there invite a
+   second decision on an investigation that is already closed. */
+.review-decided {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
 .content { flex: 1; padding: 24px 32px; max-width: 1200px; }
 
 h2 { font-size: 20px; margin: 0 0 4px; }

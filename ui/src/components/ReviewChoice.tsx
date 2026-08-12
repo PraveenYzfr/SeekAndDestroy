@@ -89,12 +89,13 @@ export default function ReviewChoice({
   // making the reviewer re-pick it adds a click without adding a decision.
   const [cluster, setCluster] = useState<string | undefined>(eligible[0]?.cluster_code);
   const [host, setHost] = useState<string | undefined>(eligible[0]?.hosts[0]?.host_name);
-  const [expanded, setExpanded] = useState<string | null>(eligible[0]?.cluster_code ?? null);
+  // Collapsed-set rather than a single expanded id: the figures are the
+  // point of this panel, so every option shows them unless folded away.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   function choose(option: ReviewOption, hostName?: string) {
     setCluster(option.cluster_code);
     setHost(hostName ?? option.hosts[0]?.host_name);
-    setExpanded(option.cluster_code);
   }
 
   // Older payloads (before options existed) have no capacity to show - fall
@@ -123,7 +124,7 @@ export default function ReviewChoice({
       {options.map((option) => {
         const isChosen = option.cluster_code === cluster;
         const isRejected = option.eligibility_status !== "Eligible";
-        const isOpen = expanded === option.cluster_code;
+        const isOpen = !collapsed.has(option.cluster_code);
         return (
           <div key={option.cluster_code} className={`review-option${isChosen ? " chosen" : ""}`}>
             <label className="review-option-head">
@@ -146,7 +147,14 @@ export default function ReviewChoice({
                 type="button"
                 className="secondary"
                 style={{ marginLeft: "auto" }}
-                onClick={() => setExpanded(isOpen ? null : option.cluster_code)}
+                onClick={() =>
+                  setCollapsed((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(option.cluster_code)) next.delete(option.cluster_code);
+                    else next.add(option.cluster_code);
+                    return next;
+                  })
+                }
               >
                 {isOpen ? "Hide" : "Capacity"}
               </button>

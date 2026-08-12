@@ -122,7 +122,34 @@ def _summarize(final_state: dict) -> dict:
 
 
 def run_investigation(*, query: str, created_by: int) -> dict:
+    from app.graph.nodes import quick_reply
     from app.observability.metrics import investigations_total
+
+    # Answer directly, before an Investigation row exists, when the input is
+    # not an investigation: a greeting, or an infrastructure ask with the
+    # specifics missing. Running the full graph on "hi" produced an
+    # Investigation row, a Question classification, an empty retrieval and the
+    # report "I don't have enough grounded information" - a correct answer to
+    # a question nobody asked, and one that buries the real investigations.
+    reply = quick_reply(query)
+    if reply is not None:
+        return {
+            "investigation_id": None,
+            "investigation_type": "Conversation",
+            "status": "Completed",
+            "final_report": {
+                "investigation_id": None,
+                "title": "",
+                "executive_summary": reply,
+                "top_recommendation": None,
+                "alternatives_considered": [],
+                "risks": [],
+                "next_steps": [],
+                "human_action_required": "",
+            },
+            "candidate_scores": [],
+            "errors": [],
+        }
 
     investigation_id = investigation_repository.create(query, "Question", created_by)
     state = new_state(query, created_by)

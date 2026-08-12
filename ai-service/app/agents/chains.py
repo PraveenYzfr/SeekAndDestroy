@@ -62,9 +62,11 @@ def explain_candidate(
         "cluster_code": candidate.cluster_code,
         "eligibility_status": candidate.eligibility_status,
         "overall_score": float(candidate.overall_score) if candidate.overall_score is not None else None,
-        "estimated_monthly_cost": (
-            float(candidate.estimated_monthly_cost) if candidate.estimated_monthly_cost is not None else None
-        ),
+        # Cost is deliberately withheld from the narration evidence. It is an
+        # internal chargeback rate, not spend, and quoting it ("an estimated
+        # monthly cost of 7000.0") reads as a real figure driving the
+        # recommendation when it is neither. A model can only mention a number
+        # it was given, so removing it here removes it from the prose.
         "subscores": candidate.subscores.model_dump() if candidate.subscores else None,
         "rule_results": candidate.rule_results,
         "projected_utilization": candidate.projected.model_dump() if candidate.projected else None,

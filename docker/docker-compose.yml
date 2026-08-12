@@ -39,7 +39,18 @@ services:
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "${SAD_SA_PASSWORD:?set SAD_SA_PASSWORD in docker/.env - 8+ chars, mixed case, digit and symbol, or SQL Server exits on startup}"
-      MSSQL_PID: "Developer"
+      # Express, not Developer: Developer edition is free but licensed for
+      # development and testing ONLY. The shared instance on the co-hosted VM
+      # also serves a system that ingests real Microsoft 365 mail, which makes
+      # it production regardless of the machine it runs on - and one instance
+      # carries one edition, so the strictest workload sets it for everyone.
+      # Express is free AND production-licensed; the cost is a 10 GB cap per
+      # database (per database, not per instance) and a ~1.4 GB buffer pool.
+      MSSQL_PID: "Express"
+      # Express caps its own buffer pool, but the container will still grow
+      # beyond it. Without this, SQL Server is the process that starves the
+      # other services on a shared box.
+      MSSQL_MEMORY_LIMIT_MB: "${SAD_SQL_MEMORY_MB:-2048}"
     # 14330, not 1433: a laptop running SQL Server natively already owns 1433,
     # and silently colliding with it is a confusing way to lose an evening.
     # Loopback-bound - reach it on a VM through an SSH tunnel, never an NSG rule.
@@ -72,6 +83,7 @@ services:
         condition: service_healthy
     environment:
       SA_PASSWORD: "${SAD_SA_PASSWORD}"
+      DB_NAME: "${SAD_DB_NAME:-PraveenDB}"
       APP_LOGIN: "${SAD_DB_USERNAME:-sad_app}"
       APP_PASSWORD: "${SAD_DB_PASSWORD:?set SAD_DB_PASSWORD in docker/.env}"
     volumes:
@@ -134,7 +146,9 @@ services:
       # Defaults to the sqlserver container. Set SAD_DB_HOST=host.docker.internal
       # in docker/.env to use an external instance instead.
       SAD_DB__SERVER: "${SAD_DB_HOST:-sqlserver}"
-      SAD_DB__DATABASE: "PraveenDB"
+      # Configurable so the co-hosted VM can use "SeekandDestroy" alongside
+      # RLogistics and AutoCoder in one shared SQL Express instance.
+      SAD_DB__DATABASE: "${SAD_DB_NAME:-PraveenDB}"
       SAD_DB__INTEGRATED_SECURITY: "false" # container has no Windows identity - see docs/setup.md
       SAD_DB__USERNAME: "${SAD_DB_USERNAME:-sad_app}"
       SAD_DB__PASSWORD: "${SAD_DB_PASSWORD:-}"
@@ -180,7 +194,7 @@ services:
     ports:
       - "127.0.0.1:5090:5090"
     environment:
-      ConnectionStrings__PraveenDB: "Data Source=${SAD_DB_HOST:-sqlserver};Initial Catalog=PraveenDB;Integrated Security=False;User ID=${SAD_DB_USERNAME:-sad_app};Password=${SAD_DB_PASSWORD:-};TrustServerCertificate=True;"
+      ConnectionStrings__PraveenDB: "Data Source=${SAD_DB_HOST:-sqlserver};Initial Catalog=${SAD_DB_NAME:-PraveenDB};Integrated Security=False;User ID=${SAD_DB_USERNAME:-sad_app};Password=${SAD_DB_PASSWORD:-};TrustServerCertificate=True;"
       AiService__BaseUrl: "http://ai-service:8088"
       # Must match ai-service's SAD_AUTH__* above exactly - both validate the same tokens.
       Auth__Mode: "${SAD_AUTH_MODE:-local}"

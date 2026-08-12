@@ -59,15 +59,19 @@ class InvestigationPlan(BaseModel):
 
 
 class CandidateExplanation(BaseModel):
-    """Narration over one already-scored candidate. ``overall_score`` and
-    ``estimated_monthly_cost`` are echoed from evidence, never invented -
-    app.agents.guards.assert_no_number_drift enforces this at call time.
+    """Narration over one already-scored candidate. ``overall_score`` is echoed
+    from evidence, never invented - app.agents.guards.assert_no_number_drift
+    enforces this at call time.
+
+    Cost is deliberately absent. It is an internal chargeback rate rather than
+    spend, so a sentence like "an estimated monthly cost of 7000.0" reads as a
+    real figure driving the recommendation when it is neither. A model can only
+    quote a number it was handed, so the field is gone from the evidence too.
     """
 
     cluster_code: str
     eligibility_status: str
     overall_score: Optional[float] = None
-    estimated_monthly_cost: Optional[float] = None
     summary: str
     key_strengths: list[str] = []
     key_risks: list[str] = []

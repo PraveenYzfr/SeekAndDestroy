@@ -111,17 +111,20 @@ def test_best_candidate_is_ranked_correctly():
 
 # 7. LLM cannot change numeric scores.
 def test_llm_cannot_change_numeric_scores():
-    evidence = {"overall_score": 91.34, "estimated_monthly_cost": 9500.0, "cluster_code": "nyc-03", "eligibility_status": "Eligible"}
+    # Cost is no longer part of the explanation contract - it is an internal
+    # chargeback rate, not spend, so it is withheld from narration entirely.
+    # The drift guard is unchanged; overall_score is what it now protects here.
+    evidence = {"overall_score": 91.34, "cluster_code": "nyc-03", "eligibility_status": "Eligible"}
     bad_explanation = CandidateExplanation(
         cluster_code="nyc-03", eligibility_status="Eligible", overall_score=15.0,  # tampered
-        estimated_monthly_cost=9500.0, summary="tampered",
+        summary="tampered",
     )
     with pytest.raises(NumberDriftError):
         assert_no_number_drift(bad_explanation, evidence)
 
     good_explanation = CandidateExplanation(
         cluster_code="nyc-03", eligibility_status="Eligible", overall_score=91.34,
-        estimated_monthly_cost=9500.0, summary="consistent",
+        summary="consistent",
     )
     assert_no_number_drift(good_explanation, evidence)  # must not raise
 
