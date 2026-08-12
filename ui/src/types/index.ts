@@ -67,6 +67,22 @@ export interface SubScores {
   risk: number;
 }
 
+/** Subset of ClusterCapacitySnapshot / NodeCapacitySnapshot the UI reads. */
+export interface CapacitySnapshot {
+  effective_cpu_cores: number;
+  effective_memory_gb: number;
+  effective_storage_gb: number;
+  consumed_cpu_cores: number;
+  consumed_memory_gb: number;
+  consumed_storage_gb: number;
+  available_cpu_cores: number;
+  available_memory_gb: number;
+  available_storage_gb: number;
+  current_cpu_utilization_percent: number;
+  current_memory_utilization_percent: number;
+  current_storage_utilization_percent: number;
+}
+
 export interface ProjectedUtilization {
   projected_cpu_utilization_percent: number;
   projected_memory_utilization_percent: number;
@@ -96,6 +112,7 @@ export interface NodeCandidateScore {
   subscores: NodeSubScores | null;
   overall_score: number | null;
   estimated_monthly_cost: number | null;
+  snapshot: CapacitySnapshot | null;
   projected: ProjectedUtilization | null;
   rank: number | null;
   evidence: Record<string, unknown>;
@@ -109,6 +126,7 @@ export interface CandidateScore {
   subscores: SubScores | null;
   overall_score: number | null;
   estimated_monthly_cost: number | null;
+  snapshot: CapacitySnapshot | null;
   projected: ProjectedUtilization | null;
   rank: number | null;
   /** Best hosts inside this cluster, populated only for the leading clusters
@@ -218,14 +236,56 @@ export interface RecommendationEvidence {
   reliability_score?: number;
 }
 
+/** total / used / free for one resource, as computed by the capacity engine.
+ *  `free` is the engine's own `available_*` figure, not `total - used`
+ *  recomputed for display - re-deriving it here would diverge the moment
+ *  reservation handling changed. */
+export interface ResourceCapacity {
+  total: number | null;
+  used: number | null;
+  free: number | null;
+  used_percent: number | null;
+}
+
+export interface CapacityView {
+  cpu_cores: ResourceCapacity;
+  memory_gb: ResourceCapacity;
+  storage_gb: ResourceCapacity;
+}
+
+export interface ReviewHost {
+  host_name: string;
+  node_id: number;
+  overall_score: number | null;
+  projected_headroom_percent: number | null;
+  capacity: CapacityView | null;
+}
+
+export interface ReviewOption {
+  cluster_code: string;
+  cluster_id: number;
+  eligibility_status: string;
+  overall_score: number | null;
+  projected_headroom_percent: number | null;
+  capacity: CapacityView | null;
+  hosts: ReviewHost[];
+}
+
 export interface RunInvestigationResult {
   investigation_id: number;
   status: "AwaitingReview" | "Completed";
   investigation_type?: string;
   confidence?: string;
   review_payload?: {
+    /** The richer form: one entry per shortlisted cluster, each with its
+     *  capacity figures and the hosts ranked inside it. */
+    options?: ReviewOption[];
     top_candidates: string[];
     top_hosts_by_cluster?: Record<string, string[]>;
+    /** Per-cluster eligibility, so an empty host list can be explained as
+     *  "the cluster was rejected" rather than "the cluster has no usable
+     *  hosts" - hosts are only ranked inside eligible clusters. */
+    cluster_eligibility?: Record<string, string>;
     message: string;
   };
   final_report?: {

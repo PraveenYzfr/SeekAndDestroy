@@ -126,10 +126,26 @@ export const api = {
 
   getInvestigation: (investigationId: number) => request<Investigation>(`/investigations/${investigationId}`),
 
-  resumeInvestigation: (investigationId: number, decision: string, reviewerEmployeeId: number, comments?: string) =>
+  /** selectedClusterCode/selectedHostName name the option chosen. Approving
+   *  without them leaves everything PendingReview rather than approving the
+   *  whole shortlist. */
+  resumeInvestigation: (
+    investigationId: number,
+    decision: string,
+    reviewerEmployeeId: number,
+    comments?: string,
+    selectedClusterCode?: string,
+    selectedHostName?: string,
+  ) =>
     request<RunInvestigationResult>(`/investigations/${investigationId}/resume`, {
       method: "POST",
-      body: JSON.stringify({ decision, reviewerEmployeeId, comments }),
+      body: JSON.stringify({
+        decision,
+        reviewerEmployeeId,
+        comments,
+        selectedClusterCode,
+        selectedHostName,
+      }),
     }),
 
   getInvestigationRecommendations: (investigationId: number) =>

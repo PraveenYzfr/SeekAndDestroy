@@ -15,6 +15,7 @@ Writes ``database/seed.sql``. Apply with:
 
 from __future__ import annotations
 
+import os
 import random
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -75,8 +76,20 @@ def r2(value: float) -> float:
 # 1. Employees (20) and support groups (8)
 # =============================================================================
 
+# E1001 is the platform owner - the account a human actually signs in as, so
+# it carries a real name rather than a generated one. Every other row stays
+# fictional.
+#
+# The email deliberately stays on the @seekanddestroy.example domain even
+# though the name is real: this file generates database/seed.sql, which is
+# committed, so a real address here would be published in the repository.
+# Override it locally instead:
+#   SAD_OWNER_EMAIL=you@example.com .venv/Scripts/python.exe scripts/generate_seed.py
+# or just UPDATE the row in your own database.
+OWNER_EMAIL = os.environ.get("SAD_OWNER_EMAIL", "praveen.yadav@seekanddestroy.example")
+
 EMPLOYEE_NAMES = [
-    "Aditi Sharma", "Rohan Mehta", "Priya Nair", "Karan Verma", "Sneha Iyer",
+    "Praveen Yadav", "Rohan Mehta", "Priya Nair", "Karan Verma", "Sneha Iyer",
     "Arjun Rao", "Divya Menon", "Vikram Singh", "Neha Kapoor", "Sanjay Gupta",
     "Ananya Pillai", "Rahul Desai", "Kavya Reddy", "Amit Joshi", "Pooja Chawla",
     "Nikhil Bhatt", "Ritu Malhotra", "Suresh Kumar", "Lakshmi Krishnan", "Varun Chopra",
@@ -85,7 +98,7 @@ EMPLOYEE_NAMES = [
 EMPLOYEES = []
 for i, name in enumerate(EMPLOYEE_NAMES, start=1):
     first, last = name.split(" ", 1)
-    email = f"{first.lower()}.{last.lower().replace(' ', '')}@seekanddestroy.example"
+    email = OWNER_EMAIL if i == 1 else f"{first.lower()}.{last.lower().replace(' ', '')}@seekanddestroy.example"
     is_active = 0 if i in (19, 20) else 1
     EMPLOYEES.append(
         {

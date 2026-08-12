@@ -32,7 +32,13 @@ from app.agents.mock_llm import MockChatModel
 from app.forecasting.engine import forecast_cluster
 from app.graph.state import InfrastructureRecommendationState
 from app.config import get_settings
-from app.models.enums import InvestigationType
+from app.models.enums import (
+    AvailabilityTier,
+    DataClassification,
+    Environment,
+    InvestigationType,
+    TechnologyPlatform,
+)
 from app.models.requirements import HostingRequirement
 from app.models.scoring import CandidateScore
 from app.repositories import (
@@ -60,6 +66,26 @@ _RIGHTSIZING_KEYWORDS = ["right-siz", "right siz", "underutilized", "under-utili
 _CONSOLIDATION_KEYWORDS = ["consolidat"]
 _QUESTION_KEYWORDS = ["why was", "why is", "compare", "show clusters", "at least", "generate a", "report"]
 
+#: A number attached to a resource unit - "32 core", "8 vCPU", "64GB RAM",
+#: "500 GB storage". This is what a capacity request actually looks like when
+#: someone types it, and requiring the literal words "cpu" AND "ram" missed
+#: most of them: "find a 32 core box for a java app" classified as a general
+#: question, went to grounded Q&A, and answered "I don't have enough grounded
+#: information" - technically true and completely useless.
+_RESOURCE_QUANTITY_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:x\s*)?"
+    r"(?:core|cores|cpu|cpus|vcpu|vcpus|"
+    r"gb|gib|tb|mb|gig|gigs|"
+    r"ram|memory|storage|disk)\b",
+    re.IGNORECASE,
+)
+
+#: Words that make a resource quantity a *request for placement* rather than a
+#: statement about existing infrastructure. Without this, "which clusters have
+#: 32 cores free" would be dragged into a capacity request instead of being
+#: answered as the question it is.
+_PROVISIONING_WORDS = ("need", "want", "find", "host", "place", "provision", "require", "looking for", "get me")
+
 
 def classify_investigation_type(query: str) -> str:
     lower = query.lower()
@@ -75,6 +101,14 @@ def classify_investigation_type(query: str) -> str:
         return InvestigationType.QUESTION
     if _APP_CODE_RE.search(query.upper()) and ("host" in lower or "find" in lower or "place" in lower):
         return InvestigationType.HOSTING
+    # A quantity of a resource, asked for in provisioning terms - "find a 32
+    # core box", "I need 8 vCPU and 64GB". The old test required the literal
+    # words "cpu" AND ("ram" OR "memory" OR "storage") together, which missed
+    # every phrasing that used "core" or gave a single dimension.
+    if _RESOURCE_QUANTITY_RE.search(lower) and any(w in lower for w in _PROVISIONING_WORDS):
+        return InvestigationType.CAPACITY
+    # Kept as a fallback for the multi-dimension phrasing even when no
+    # provisioning verb is present ("8 CPU, 32 GB RAM, 500 GB storage").
     if "cpu" in lower and ("ram" in lower or "memory" in lower or "storage" in lower):
         return InvestigationType.CAPACITY
     return InvestigationType.QUESTION
@@ -129,23 +163,68 @@ def load_application_requirements(state: InfrastructureRecommendationState) -> d
     if itype == InvestigationType.CAPACITY:
         extracted = _extract_capacity_requirement_via_llm(query)
         if extracted is not None:
+            environment, env_ok = _coerce_enum(extracted.environment, Environment, Environment.PRODUCTION)
+            platform, platform_ok = _coerce_enum(extracted.platform, TechnologyPlatform, TechnologyPlatform.KUBERNETES)
+            tier, tier_ok = _coerce_enum(extracted.availability_tier, AvailabilityTier, AvailabilityTier.TIER_2)
+            classification, class_ok = _coerce_enum(
+                extracted.data_classification, DataClassification, DataClassification.INTERNAL
+            )
+            coerced = [
+                name for name, ok in (
+                    ("environment", env_ok), ("platform", platform_ok),
+                    ("availability_tier", tier_ok), ("data_classification", class_ok),
+                ) if not ok
+            ]
+            if coerced:
+                logger.warning(
+                    "graph.capacity_extraction_coerced", fields=coerced,
+                    environment=extracted.environment, platform=extracted.platform,
+                    availability_tier=extracted.availability_tier,
+                    data_classification=extracted.data_classification,
+                )
             req = HostingRequirement(
-                environment=extracted.environment, platform=extracted.platform, os_requirement="Any",
+                environment=environment, platform=platform, os_requirement="Any",
                 cpu_cores=extracted.cpu_cores, memory_gb=extracted.memory_gb, storage_gb=extracted.storage_gb,
-                growth_percent=extracted.expected_growth_percent, availability_tier=extracted.availability_tier,
-                data_classification=extracted.data_classification, preferred_location=extracted.preferred_location,
+                growth_percent=extracted.expected_growth_percent, availability_tier=tier,
+                data_classification=classification, preferred_location=extracted.preferred_location,
                 criticality="Medium",
             )
             return {
                 "capacity_requirements": {
                     "cpu_cores": extracted.cpu_cores, "memory_gb": extracted.memory_gb,
                     "storage_gb": extracted.storage_gb, "extraction_method": "llm",
+                    "coerced_fields": coerced,
                 },
                 "requirement": to_jsonable(req),
             }
         return _capacity_requirement_from_regex(query)
 
     return {}
+
+
+def _coerce_enum(value: str | None, enum_cls, fallback: str) -> tuple[str, bool]:
+    """Force a free-text value onto a real enum member, reporting whether it
+    already was one.
+
+    The extraction contract types environment/platform/tier/classification as
+    plain ``str``, so a model can return anything and it lands directly in a
+    hard eligibility rule. Real Gemini output for "find a 32 core for hosting
+    java app" was ``environment='production'`` (lowercase),
+    ``platform='Java'`` (a language, not a platform) and
+    ``availability_tier='Standard'`` (not a tier at all). The result was all
+    133 clusters rejected with reasons that read like nonsense - *"Production/
+    production workloads may not be placed on 'Production' infrastructure"*.
+
+    This is the trust boundary applied to categories rather than numbers: a
+    model may transcribe what an engineer stated, but it does not get to
+    invent a value that a deterministic rule will then treat as authoritative.
+    """
+    if value:
+        text = str(value).strip().casefold()
+        for member in enum_cls:
+            if text == str(member).casefold():
+                return str(member), True
+    return str(fallback), False
 
 
 def _extract_capacity_requirement_via_llm(query: str):
@@ -168,22 +247,51 @@ def _extract_capacity_requirement_via_llm(query: str):
         return None
 
 
+#: Defaults for dimensions the user did not state. Recorded as "assumed" in
+#: capacity_requirements rather than silently blended with stated values - a
+#: number the platform invented must never be indistinguishable from one the
+#: engineer gave it.
+_CAPACITY_DEFAULTS = {"cpu_cores": 8.0, "memory_gb": 32.0, "storage_gb": 500.0}
+
+
 def _capacity_requirement_from_regex(query: str) -> dict:
-    cpu = _first_number(query, r"(\d+(?:\.\d+)?)\s*cpu")
-    mem = _first_number(query, r"(\d+(?:\.\d+)?)\s*gb\s*(?:ram|memory)")
-    storage_tb = _first_number(query, r"(\d+(?:\.\d+)?)\s*tb")
-    storage_gb = _first_number(query, r"(\d+(?:\.\d+)?)\s*gb\s*storage")
-    storage = (storage_tb * 1000) if storage_tb else (storage_gb or 500.0)
+    """Deterministic extraction, used when no real LLM is available or the
+    extraction call fails.
+
+    "core"/"vcpu" matter as much as "cpu": the old pattern was `N cpu` only,
+    so "find a 32 core box" matched nothing and silently fell back to the
+    8-core default - the engineer asks for 32 and gets sized for 8, with no
+    indication anywhere that the number had been replaced.
+    """
+    cpu = _first_number(query, r"(\d+(?:\.\d+)?)\s*(?:x\s*)?(?:core|cores|cpu|cpus|vcpu|vcpus)\b")
+    mem = _first_number(query, r"(\d+(?:\.\d+)?)\s*(?:gb|gib|gig|gigs)\s*(?:of\s*)?(?:ram|memory)\b")
+    if mem is None:
+        # "64GB RAM" is the common phrasing, but "16 vCPU 64GB box" is too -
+        # a bare GB figure that is not storage is memory.
+        mem = _first_number(query, r"(\d+(?:\.\d+)?)\s*(?:gb|gib)\b(?!\s*(?:storage|disk|ssd))")
+    storage_tb = _first_number(query, r"(\d+(?:\.\d+)?)\s*tb\b")
+    storage_gb = _first_number(query, r"(\d+(?:\.\d+)?)\s*(?:gb|gib)\s*(?:of\s*)?(?:storage|disk|ssd)\b")
+    storage = (storage_tb * 1000) if storage_tb else storage_gb
+
+    stated = {"cpu_cores": cpu, "memory_gb": mem, "storage_gb": storage}
+    assumed = [name for name, value in stated.items() if value is None]
+    resolved = {name: (value if value is not None else _CAPACITY_DEFAULTS[name]) for name, value in stated.items()}
+
     req = HostingRequirement(
         environment="Production", platform="Kubernetes", os_requirement="Any",
-        cpu_cores=cpu or 8.0, memory_gb=mem or 32.0, storage_gb=storage,
+        cpu_cores=resolved["cpu_cores"], memory_gb=resolved["memory_gb"],
+        storage_gb=resolved["storage_gb"],
         growth_percent=0.0, availability_tier="Tier-2", data_classification="Internal",
         criticality="Medium",
     )
     return {
         "capacity_requirements": {
-            "cpu_cores": cpu or 8.0, "memory_gb": mem or 32.0, "storage_gb": storage,
+            **resolved,
             "extraction_method": "regex",
+            # Which figures came from the engineer and which the platform
+            # supplied. A reviewer approving 8 cores should be able to see
+            # that nobody actually asked for 8.
+            "assumed_defaults": assumed,
         },
         "requirement": to_jsonable(req),
     }
@@ -475,15 +583,23 @@ def human_review_interrupt(state: InfrastructureRecommendationState) -> dict:
     summary = {
         "investigation_id": state.get("investigation_id"),
         "investigation_type": state.get("investigation_type"),
+        # A reviewer is choosing *one* placement, not rubber-stamping a list.
+        # Each option carries the capacity figures the decision actually turns
+        # on - how big the cluster/host is, how much is already committed, and
+        # what is left - because "score 99.83" is a summary of those numbers,
+        # not a substitute for seeing them.
+        "options": [_review_option(c) for c in top],
+        # Retained for older callers; options above is the richer form.
         "top_candidates": [c.get("cluster_code") for c in top],
-        # The hosts inside each shortlisted cluster - the reviewer approves a
-        # cluster *and* the hosts proposed within it, so both belong here.
         "top_hosts_by_cluster": {
             c.get("cluster_code"): [n.get("host_name") for n in (c.get("top_nodes") or [])]
             for c in top
         },
+        "cluster_eligibility": {
+            c.get("cluster_code"): c.get("eligibility_status") for c in top
+        },
         "confidence": state.get("confidence"),
-        "message": "Human review required before this recommendation is finalized.",
+        "message": "Choose one cluster and host, then approve - or reject the shortlist.",
     }
     investigation_repository.update_status(state["investigation_id"], "AwaitingReview")
     resumed = interrupt(summary)
@@ -491,6 +607,63 @@ def human_review_interrupt(state: InfrastructureRecommendationState) -> dict:
         "decision": resumed.get("decision"),
         "reviewer_employee_id": resumed.get("reviewer_employee_id"),
         "review_comments": resumed.get("comments"),
+        # Which option the reviewer actually picked. persist_recommendations
+        # marks that row Approved and the rest NotSelected, so the stored
+        # outcome records a choice rather than a blanket yes.
+        "selected_cluster_code": resumed.get("selected_cluster_code"),
+        "selected_host_name": resumed.get("selected_host_name"),
+    }
+
+
+def _capacity_view(snapshot: dict | None) -> dict | None:
+    """total / used / free for each resource, straight off an already-computed
+    snapshot. No arithmetic happens here - ``available`` is what the capacity
+    engine calculated, not ``total - used`` re-derived in a display helper,
+    which would quietly diverge the moment reservation handling changed.
+    """
+    if not snapshot:
+        return None
+    return {
+        "cpu_cores": {
+            "total": snapshot.get("effective_cpu_cores"),
+            "used": snapshot.get("consumed_cpu_cores"),
+            "free": snapshot.get("available_cpu_cores"),
+            "used_percent": snapshot.get("current_cpu_utilization_percent"),
+        },
+        "memory_gb": {
+            "total": snapshot.get("effective_memory_gb"),
+            "used": snapshot.get("consumed_memory_gb"),
+            "free": snapshot.get("available_memory_gb"),
+            "used_percent": snapshot.get("current_memory_utilization_percent"),
+        },
+        "storage_gb": {
+            "total": snapshot.get("effective_storage_gb"),
+            "used": snapshot.get("consumed_storage_gb"),
+            "free": snapshot.get("available_storage_gb"),
+            "used_percent": snapshot.get("current_storage_utilization_percent"),
+        },
+    }
+
+
+def _review_option(candidate: dict) -> dict:
+    projected = candidate.get("projected") or {}
+    return {
+        "cluster_code": candidate.get("cluster_code"),
+        "cluster_id": candidate.get("cluster_id"),
+        "eligibility_status": candidate.get("eligibility_status"),
+        "overall_score": candidate.get("overall_score"),
+        "projected_headroom_percent": projected.get("projected_headroom_percent"),
+        "capacity": _capacity_view(candidate.get("snapshot")),
+        "hosts": [
+            {
+                "host_name": n.get("host_name"),
+                "node_id": n.get("node_id"),
+                "overall_score": n.get("overall_score"),
+                "projected_headroom_percent": (n.get("projected") or {}).get("projected_headroom_percent"),
+                "capacity": _capacity_view(n.get("snapshot")),
+            }
+            for n in (candidate.get("top_nodes") or [])
+        ],
     }
 
 
@@ -589,6 +762,31 @@ def persist_recommendations(state: InfrastructureRecommendationState) -> dict:
     explanations_by_cluster = {e.get("cluster_code"): e for e in state.get("recommendation_explanations", [])}
     rec_type = "HostingPlacement" if itype == InvestigationType.HOSTING else "NewCapacity"
 
+    # What the reviewer actually chose. A shortlist of three that all come back
+    # "PendingReview" records no decision at all - the point of the review step
+    # is that one of them was picked.
+    selected_cluster = state.get("selected_cluster_code")
+    selected_host = state.get("selected_host_name")
+    approved = state.get("decision") == "Approve"
+
+    def status_for(cluster_code: str, host_name: str | None) -> str:
+        """'Superseded' rather than a new 'NotSelected' status: the schema's
+        CHECK constraint already carries that vocabulary, and it says exactly
+        the right thing - these options were displaced by the one chosen, not
+        rejected on their merits.
+        """
+        if not approved:
+            return "Rejected" if state.get("decision") == "Reject" else "PendingReview"
+        if not selected_cluster:
+            # Approved without naming an option - the pre-selection behaviour.
+            # Everything stays pending rather than silently approving all three.
+            return "PendingReview"
+        if cluster_code != selected_cluster:
+            return "Superseded"
+        if host_name is None:
+            return "Approved"
+        return "Approved" if (selected_host is None or host_name == selected_host) else "Superseded"
+
     saved_ids = []
     for c in state.get("candidate_scores", [])[: settings.policy.top_clusters]:
         explanation = explanations_by_cluster.get(c["cluster_code"])
@@ -608,7 +806,7 @@ def persist_recommendations(state: InfrastructureRecommendationState) -> dict:
             "EstimatedMonthlyCost": c.get("estimated_monthly_cost"),
             "Explanation": explanation.get("summary") if explanation else None,
             "EvidenceJson": json.dumps(c, default=str),
-            "Status": "PendingReview",
+            "Status": status_for(c["cluster_code"], None),
         }
         saved_ids.append(recommendation_repository.save(rec))
 
@@ -641,7 +839,7 @@ def persist_recommendations(state: InfrastructureRecommendationState) -> dict:
                             },
                             default=str,
                         ),
-                        "Status": "PendingReview",
+                        "Status": status_for(c["cluster_code"], n["host_name"]),
                     }
                 )
             )

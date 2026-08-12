@@ -141,12 +141,23 @@ def run_investigation(*, query: str, created_by: int) -> dict:
     return _summarize(result)
 
 
-def resume_investigation(*, investigation_id: int, decision: str, reviewer_employee_id: int, comments: str | None) -> dict:
+def resume_investigation(
+    *, investigation_id: int, decision: str, reviewer_employee_id: int, comments: str | None,
+    selected_cluster_code: str | None = None, selected_host_name: str | None = None,
+) -> dict:
+    """``selected_*`` name the option the reviewer chose. Approving without
+    naming one leaves every recommendation PendingReview rather than approving
+    the whole shortlist - three approved placements for one workload is not a
+    decision, it is the absence of one.
+    """
     from langgraph.types import Command
 
     compiled = get_compiled_graph()
     config = _thread_config(investigation_id)
-    resume_payload = {"decision": decision, "reviewer_employee_id": reviewer_employee_id, "comments": comments}
+    resume_payload = {
+        "decision": decision, "reviewer_employee_id": reviewer_employee_id, "comments": comments,
+        "selected_cluster_code": selected_cluster_code, "selected_host_name": selected_host_name,
+    }
     result = compiled.invoke(Command(resume=resume_payload), config=config)
     return _summarize(result)
 

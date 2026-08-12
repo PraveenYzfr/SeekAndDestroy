@@ -41,6 +41,12 @@ class InfrastructureRecommendationState(TypedDict, total=False):
     decision: Optional[str]
     reviewer_employee_id: Optional[int]
     review_comments: Optional[str]
+    # Which option the reviewer picked. Must be declared here or LangGraph
+    # drops them: a TypedDict state silently discards keys a node returns that
+    # the schema does not name, so the selection would reach the graph and
+    # vanish before persist_recommendations could act on it.
+    selected_cluster_code: Optional[str]
+    selected_host_name: Optional[str]
 
 
 def new_state(user_query: str, created_by: int) -> InfrastructureRecommendationState:
@@ -51,4 +57,5 @@ def new_state(user_query: str, created_by: int) -> InfrastructureRecommendationS
         final_report=None, investigation_id=None, parsed_intent=None, application_requirements=None,
         capacity_requirements=None, investigation_plan=None, investigation_type="Question", requirement=None,
         confidence="Medium", decision=None, reviewer_employee_id=None, review_comments=None,
+        selected_cluster_code=None, selected_host_name=None,
     )

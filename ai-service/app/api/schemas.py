@@ -25,6 +25,12 @@ class ResumeInvestigationRequest(BaseModel):
     decision: str = Field(description="approve | reject | more_analysis")
     reviewer_employee_id: Optional[int] = Field(None, description="No longer trusted - see app.api.auth")
     comments: Optional[str] = None
+    selected_cluster_code: Optional[str] = Field(
+        None, description="The cluster the reviewer chose. Approving without one leaves everything PendingReview."
+    )
+    selected_host_name: Optional[str] = Field(
+        None, description="The host chosen inside that cluster. Omit to approve the cluster without pinning a host."
+    )
 
 
 class DevTokenRequest(BaseModel):

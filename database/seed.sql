@@ -11,7 +11,7 @@ GO
 
 -- 20 employees
 INSERT INTO sad.Employee (EmployeeNumber, DisplayName, Email, IsActive) VALUES
-  ('E1001', 'Aditi Sharma', 'aditi.sharma@seekanddestroy.example', 1),
+  ('E1001', 'Praveen Yadav', 'praveen.yadav@seekanddestroy.example', 1),
   ('E1002', 'Rohan Mehta', 'rohan.mehta@seekanddestroy.example', 1),
   ('E1003', 'Priya Nair', 'priya.nair@seekanddestroy.example', 1),
   ('E1004', 'Karan Verma', 'karan.verma@seekanddestroy.example', 1),

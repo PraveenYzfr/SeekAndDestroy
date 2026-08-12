@@ -3,6 +3,7 @@ import { api, ApiError } from "@/api/client";
 import type { InfrastructureRecommendation, RunInvestigationResult } from "@/types";
 import { describeCandidate, isNodeRow } from "@/utils/recommendations";
 import { getIdentity } from "@/auth/session";
+import ReviewChoice from "@/components/ReviewChoice";
 
 type MessageStatus = "loading" | "awaiting_review" | "completed" | "error";
 
@@ -101,12 +102,19 @@ export default function Chat() {
     }
   }
 
-  async function decide(investigationId: number, decision: "Approve" | "Reject") {
+  async function decide(
+    investigationId: number,
+    decision: "Approve" | "Reject",
+    selectedClusterCode?: string,
+    selectedHostName?: string,
+  ) {
     setBusy(true);
     const followUpId = newId();
     setMessages((prev) => [...prev, { id: followUpId, role: "assistant", status: "loading" }]);
     try {
-      const result = await api.resumeInvestigation(investigationId, decision, currentEmployeeId());
+      const result = await api.resumeInvestigation(
+        investigationId, decision, currentEmployeeId(), undefined, selectedClusterCode, selectedHostName,
+      );
       await applyResult(followUpId, result);
     } catch (e) {
       updateMessage(followUpId, {
@@ -175,7 +183,12 @@ function ChatBubble({
   busy,
 }: {
   message: ChatMessage;
-  onDecide: (investigationId: number, decision: "Approve" | "Reject") => void;
+  onDecide: (
+    investigationId: number,
+    decision: "Approve" | "Reject",
+    selectedClusterCode?: string,
+    selectedHostName?: string,
+  ) => void;
   busy: boolean;
 }) {
   if (message.role === "user") {
@@ -194,44 +207,12 @@ function ChatBubble({
         {message.status === "error" && <div className="error-box">{message.error}</div>}
 
         {message.status === "awaiting_review" && message.reviewPayload && message.investigationId != null && (
-          <div>
-            <p>{message.reviewPayload.message}</p>
-            <div className="stat-label">Top candidates</div>
-            {/* The reviewer is approving clusters *and* the hosts proposed
-                inside them, so both belong in the prompt - showing only the
-                cluster codes hid half of what the decision covers. */}
-            {message.reviewPayload.top_hosts_by_cluster ? (
-              <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-                {message.reviewPayload.top_candidates.map((cluster) => (
-                  <li key={cluster}>
-                    <strong>{cluster}</strong>
-                    {" — "}
-                    {message.reviewPayload!.top_hosts_by_cluster![cluster]?.length
-                      ? message.reviewPayload!.top_hosts_by_cluster![cluster].join(", ")
-                      : "no eligible hosts"}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>{message.reviewPayload.top_candidates.join(", ")}</p>
-            )}
-            <div className="chat-review-actions">
-              {/* Disabled while any request is in flight: these buttons stay
-                  rendered after a decision (the thread keeps its history), so
-                  without this a second click re-resumes an already-decided
-                  investigation and appends a duplicate answer. */}
-              <button disabled={busy} onClick={() => onDecide(message.investigationId!, "Approve")}>
-                Approve
-              </button>
-              <button
-                className="danger"
-                disabled={busy}
-                onClick={() => onDecide(message.investigationId!, "Reject")}
-              >
-                Reject
-              </button>
-            </div>
-          </div>
+          <ReviewChoice
+            payload={message.reviewPayload}
+            investigationId={message.investigationId}
+            busy={busy}
+            onDecide={onDecide}
+          />
         )}
 
         {message.status === "completed" && (
@@ -276,7 +257,7 @@ function ChatBubble({
                     <th>Candidate</th>
                     <th>Status</th>
                     <th>Score</th>
-                    <th>Cost</th>
+                    <th>Headroom</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -293,7 +274,7 @@ function ChatBubble({
                         </span>
                       </td>
                       <td>{r.OverallScore ?? "—"}</td>
-                      <td>{r.EstimatedMonthlyCost != null ? `$${r.EstimatedMonthlyCost}` : "—"}</td>
+                      <td>{r.ProjectedHeadroomPercent != null ? `${r.ProjectedHeadroomPercent}%` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>

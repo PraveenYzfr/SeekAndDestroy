@@ -48,6 +48,8 @@ def resume_investigation(
     result = graph_resume(
         investigation_id=investigation_id, decision=payload.decision,
         reviewer_employee_id=reviewer_employee_id, comments=payload.comments,
+        selected_cluster_code=payload.selected_cluster_code,
+        selected_host_name=payload.selected_host_name,
     )
     return to_jsonable(result)
 

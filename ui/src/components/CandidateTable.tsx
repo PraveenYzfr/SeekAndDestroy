@@ -12,7 +12,11 @@ export default function CandidateTable({ candidates }: { candidates: CandidateSc
           <th>Cluster</th>
           <th>Status</th>
           <th>Score</th>
-          <th>Est. Monthly Cost</th>
+          {/* Free capacity, not cost: an engineer choosing where to place a
+              workload is deciding on available room, and the internal
+              chargeback rate was noise in that decision. */}
+          <th>Free CPU</th>
+          <th>Free RAM</th>
           <th>Headroom %</th>
           <th></th>
         </tr>
@@ -31,7 +35,8 @@ export default function CandidateTable({ candidates }: { candidates: CandidateSc
                 </span>
               </td>
               <td>{c.overall_score ?? "—"}</td>
-              <td>{c.estimated_monthly_cost != null ? `$${c.estimated_monthly_cost.toLocaleString()}` : "—"}</td>
+              <td>{c.snapshot ? `${c.snapshot.available_cpu_cores} cores` : "—"}</td>
+              <td>{c.snapshot ? `${c.snapshot.available_memory_gb} GB` : "—"}</td>
               <td>{c.projected ? `${c.projected.projected_headroom_percent}%` : "—"}</td>
               <td>
                 <button className="secondary" onClick={() => setExpanded(expanded === c.cluster_id ? null : c.cluster_id)}>
@@ -53,7 +58,8 @@ export default function CandidateTable({ candidates }: { candidates: CandidateSc
                   </span>
                 </td>
                 <td>{n.overall_score ?? "—"}</td>
-                <td>{n.estimated_monthly_cost != null ? `$${n.estimated_monthly_cost.toLocaleString()}` : "—"}</td>
+                <td>{n.snapshot ? `${n.snapshot.available_cpu_cores} cores` : "—"}</td>
+                <td>{n.snapshot ? `${n.snapshot.available_memory_gb} GB` : "—"}</td>
                 <td>{n.projected ? `${n.projected.projected_headroom_percent}%` : "—"}</td>
                 <td />
               </tr>

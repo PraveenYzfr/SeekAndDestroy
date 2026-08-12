@@ -29,4 +29,9 @@ public sealed record AiServiceResponse(JsonNode? Payload);
 
 public sealed record CreateInvestigationRequestDto(string Query, int CreatedByEmployeeId);
 
-public sealed record ResumeInvestigationRequestDto(string Decision, int ReviewerEmployeeId, string? Comments);
+/// <summary>SelectedClusterCode/SelectedHostName name the option the reviewer
+/// chose. Approving without one leaves every recommendation PendingReview:
+/// three approved placements for one workload records no decision at all.</summary>
+public sealed record ResumeInvestigationRequestDto(
+    string Decision, int ReviewerEmployeeId, string? Comments,
+    string? SelectedClusterCode = null, string? SelectedHostName = null);

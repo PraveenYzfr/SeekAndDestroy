@@ -51,7 +51,7 @@ def auth_headers(auth_employee_id) -> dict:
     from app.security.jwt_service import create_local_token
 
     token = create_local_token(
-        employee_id=auth_employee_id, employee_number="E1001", display_name="Aditi Sharma",
-        email="aditi.sharma@seekanddestroy.example",
+        employee_id=auth_employee_id, employee_number="E1001", display_name="Praveen Yadav",
+        email="praveen.yadav@seekanddestroy.example",
     )
     return {"Authorization": f"Bearer {token}"}
