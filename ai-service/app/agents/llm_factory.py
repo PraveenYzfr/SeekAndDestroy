@@ -64,6 +64,26 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds, provider_name=provider,
         )
+    if provider == "deepseek":
+        # No new client needed - DeepSeek serves the OpenAI chat-completions
+        # wire format, so HttpChatModel works unchanged. Same reason `ollama`
+        # is a base_url variant rather than its own class, and the opposite of
+        # Gemini, which needed one because generateContent is a different shape.
+        #
+        # Roughly an order of magnitude cheaper than frontier models. The
+        # trade-off worth knowing: no server-side schema enforcement, so
+        # structured output falls back to prompt instructions plus a repair
+        # retry (app/agents/structured.py) rather than the guarantee Gemini's
+        # responseSchema gives.
+        if not settings.api_key:
+            raise ValueError("SAD_LLM__API_KEY is required for the deepseek provider")
+        return HttpChatModel(
+            base_url=settings.base_url or "https://api.deepseek.com/v1",
+            model=settings.model if settings.model != "seek-and-destroy-mock" else "deepseek-chat",
+            api_key=settings.api_key,
+            temperature=settings.temperature, max_tokens=settings.max_output_tokens,
+            timeout_seconds=settings.timeout_seconds, provider_name=provider,
+        )
     if provider == "ollama":
         return HttpChatModel(
             base_url=settings.ollama_base_url.rstrip("/") + "/v1", model=settings.model,

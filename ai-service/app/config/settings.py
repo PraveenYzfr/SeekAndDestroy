@@ -122,7 +122,7 @@ class LlmSettings(_Base):
     # "gemini" speaks Google's native generateContent API - a different wire
     # format from the OpenAI-compatible providers, so it has its own client
     # (app/agents/gemini_chat_model.py), exactly like the embedder does.
-    provider: Literal["mock", "openai", "azure-openai", "ollama", "gemini"] = "mock"
+    provider: Literal["mock", "openai", "azure-openai", "ollama", "gemini", "deepseek"] = "mock"
     model: str = "seek-and-destroy-mock"
     temperature: float = 0.0
     max_output_tokens: int = 2048
