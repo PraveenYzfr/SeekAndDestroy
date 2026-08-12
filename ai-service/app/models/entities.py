@@ -236,6 +236,25 @@ class Investigation(_Entity):
     CreatedBy: int
     StartedAt: datetime
     CompletedAt: Optional[datetime]
+    # NULL for every investigation that did not come from the chat - the
+    # structured screens and the MCP client create investigations too.
+    ConversationId: Optional[str] = None
+
+
+class Conversation(_Entity):
+    ConversationId: str
+    CreatedBy: int
+    StartedAt: datetime
+    LastActivityAt: datetime
+
+
+class ConversationTurn(_Entity):
+    TurnId: int
+    ConversationId: str
+    Role: str
+    Message: str
+    InvestigationId: Optional[int]
+    CreatedAt: datetime
 
 
 class AgentAuditLog(_Entity):

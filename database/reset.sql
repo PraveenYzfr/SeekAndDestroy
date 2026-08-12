@@ -16,7 +16,12 @@ BEGIN
     IF OBJECT_ID('sad.AgentAuditLog', 'U') IS NOT NULL DROP TABLE sad.AgentAuditLog;
     IF OBJECT_ID('sad.RecommendationDecision', 'U') IS NOT NULL DROP TABLE sad.RecommendationDecision;
     IF OBJECT_ID('sad.InfrastructureRecommendation', 'U') IS NOT NULL DROP TABLE sad.InfrastructureRecommendation;
+    -- ConversationTurn references both Investigation and Conversation, and
+    -- Investigation references Conversation - so turns go first and
+    -- Conversation goes after Investigation, not next to it.
+    IF OBJECT_ID('sad.ConversationTurn', 'U') IS NOT NULL DROP TABLE sad.ConversationTurn;
     IF OBJECT_ID('sad.Investigation', 'U') IS NOT NULL DROP TABLE sad.Investigation;
+    IF OBJECT_ID('sad.Conversation', 'U') IS NOT NULL DROP TABLE sad.Conversation;
     IF OBJECT_ID('sad.CapacityRequest', 'U') IS NOT NULL DROP TABLE sad.CapacityRequest;
     IF OBJECT_ID('sad.Incident', 'U') IS NOT NULL DROP TABLE sad.Incident;
     IF OBJECT_ID('sad.ApplicationDependency', 'U') IS NOT NULL DROP TABLE sad.ApplicationDependency;

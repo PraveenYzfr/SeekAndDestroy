@@ -4,7 +4,13 @@ from app.models.entities import Investigation
 from app.repositories.base import T, execute, execute_insert, fetch_all, fetch_one
 
 
-def create(query: str, investigation_type: str, created_by: int) -> int:
+def create(
+    query: str, investigation_type: str, created_by: int, conversation_id: str | None = None
+) -> int:
+    """``conversation_id`` links this investigation to the chat that produced
+    it, so a later "give me the options again" can find it. NULL is the normal
+    case for investigations started outside the chat.
+    """
     return execute_insert(
         T("Investigation"),
         "InvestigationId",
@@ -13,6 +19,7 @@ def create(query: str, investigation_type: str, created_by: int) -> int:
             "InvestigationType": investigation_type,
             "Status": "Created",
             "CreatedBy": created_by,
+            "ConversationId": conversation_id,
         },
     )
 

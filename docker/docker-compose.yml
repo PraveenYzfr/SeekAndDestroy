@@ -39,13 +39,12 @@ services:
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "${SAD_SA_PASSWORD:?set SAD_SA_PASSWORD in docker/.env - 8+ chars, mixed case, digit and symbol, or SQL Server exits on startup}"
-      # Express, not Developer: Developer edition is free but licensed for
-      # development and testing ONLY. The shared instance on the co-hosted VM
-      # also serves a system that ingests real Microsoft 365 mail, which makes
-      # it production regardless of the machine it runs on - and one instance
-      # carries one edition, so the strictest workload sets it for everyone.
-      # Express is free AND production-licensed; the cost is a 10 GB cap per
-      # database (per database, not per instance) and a ~1.4 GB buffer pool.
+      # Express, not Developer - a shared decision across the three co-hosted
+      # systems (see _multi-system-hub/SHARED_PLAN.md 2). One instance carries
+      # one edition, so the choice has to hold for whatever the strictest
+      # workload turns out to be, and Express is the only free edition that is
+      # also production-licensed. Cost: a 10 GB cap per database (per database,
+      # not per instance) and a ~1.4 GB buffer pool - neither binds here.
       MSSQL_PID: "Express"
       # Express caps its own buffer pool, but the container will still grow
       # beyond it. Without this, SQL Server is the process that starves the

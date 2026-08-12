@@ -453,6 +453,12 @@ CREATE TABLE sad.Investigation
     CreatedBy           INT                NOT NULL,
     StartedAt           DATETIME2(3)       NOT NULL CONSTRAINT DF_Investigation_StartedAt DEFAULT (SYSUTCDATETIME()),
     CompletedAt         DATETIME2(3)       NULL,
+    -- Which chat this investigation belongs to, so a follow-up question has
+    -- something to refer back to. NULL is legitimate and common: every
+    -- investigation started from a structured screen or the MCP client rather
+    -- than the chat has no conversation. The FK is declared in section 18,
+    -- where sad.Conversation itself is created.
+    ConversationId      NVARCHAR(64)       NULL,
     CONSTRAINT PK_Investigation PRIMARY KEY CLUSTERED (InvestigationId),
     CONSTRAINT FK_Investigation_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES sad.Employee (EmployeeId),
     CONSTRAINT CK_Investigation_Type CHECK (InvestigationType IN ('Hosting','Capacity','RightSizing','Consolidation','Forecast','Question','Refused')),
@@ -569,4 +575,66 @@ GO
 CREATE INDEX IX_AgentAuditLog_Investigation ON sad.AgentAuditLog (InvestigationId);
 CREATE INDEX IX_AgentAuditLog_ToolName ON sad.AgentAuditLog (ToolName);
 CREATE INDEX IX_AgentAuditLog_StartedAt ON sad.AgentAuditLog (StartedAt DESC);
+GO
+
+/* =============================================================================
+   18. Conversation and ConversationTurn
+
+   A chat is a sequence of turns; an Investigation is what one turn sometimes
+   produces. Keeping them as separate tables is what lets a follow-up have a
+   referent: "give me the options again" resolves by looking back through the
+   turns of this conversation for the most recent one that carried an
+   InvestigationId, and reading that investigation's stored recommendations.
+
+   Both tables are created last because ConversationTurn references
+   sad.Investigation and sad.Investigation.ConversationId references
+   sad.Conversation - the cycle is broken by declaring the column in section 14
+   and the foreign key here.
+============================================================================= */
+CREATE TABLE sad.Conversation
+(
+    -- Opaque server-generated id (uuid4 hex). Never client-supplied on
+    -- creation: a caller that could choose the id could choose someone
+    -- else's, and conversation ownership is what the read path checks.
+    ConversationId  NVARCHAR(64)   NOT NULL,
+    CreatedBy       INT            NOT NULL,
+    StartedAt       DATETIME2(3)   NOT NULL CONSTRAINT DF_Conversation_StartedAt DEFAULT (SYSUTCDATETIME()),
+    LastActivityAt  DATETIME2(3)   NOT NULL CONSTRAINT DF_Conversation_LastActivityAt DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_Conversation PRIMARY KEY CLUSTERED (ConversationId),
+    CONSTRAINT FK_Conversation_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES sad.Employee (EmployeeId),
+    CONSTRAINT CK_Conversation_LastActivityAfterStarted CHECK (LastActivityAt >= StartedAt)
+);
+GO
+CREATE INDEX IX_Conversation_CreatedBy ON sad.Conversation (CreatedBy, LastActivityAt DESC);
+GO
+
+CREATE TABLE sad.ConversationTurn
+(
+    -- Turn order is TurnId order. There is deliberately no TurnIndex column:
+    -- a caller-computed "next index" is a lost update waiting to happen, and
+    -- IDENTITY already gives a total order that two concurrent inserts cannot
+    -- collide on.
+    TurnId          BIGINT IDENTITY(1,1) NOT NULL,
+    ConversationId  NVARCHAR(64)   NOT NULL,
+    Role            NVARCHAR(10)   NOT NULL,
+    Message         NVARCHAR(MAX)  NOT NULL,
+    -- The investigation this turn produced, when it produced one. NULL for
+    -- user turns, for greetings answered directly, and for follow-ups answered
+    -- out of an earlier investigation's results.
+    InvestigationId INT            NULL,
+    CreatedAt       DATETIME2(3)   NOT NULL CONSTRAINT DF_ConversationTurn_CreatedAt DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_ConversationTurn PRIMARY KEY CLUSTERED (TurnId),
+    CONSTRAINT FK_ConversationTurn_Conversation FOREIGN KEY (ConversationId) REFERENCES sad.Conversation (ConversationId),
+    CONSTRAINT FK_ConversationTurn_Investigation FOREIGN KEY (InvestigationId) REFERENCES sad.Investigation (InvestigationId),
+    CONSTRAINT CK_ConversationTurn_Role CHECK (Role IN ('User','Assistant'))
+);
+GO
+CREATE INDEX IX_ConversationTurn_Conversation ON sad.ConversationTurn (ConversationId, TurnId DESC);
+GO
+
+ALTER TABLE sad.Investigation
+    ADD CONSTRAINT FK_Investigation_Conversation
+        FOREIGN KEY (ConversationId) REFERENCES sad.Conversation (ConversationId);
+GO
+CREATE INDEX IX_Investigation_Conversation ON sad.Investigation (ConversationId, InvestigationId DESC);
 GO

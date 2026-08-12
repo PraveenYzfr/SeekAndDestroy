@@ -41,21 +41,26 @@ ALREADY=$("$SQLCMD" "${COMMON[@]}" -d "$DB" -h -1 -W \
     -Q "SET NOCOUNT ON; SELECT CASE WHEN OBJECT_ID('sad.Employee','U') IS NULL THEN 'no' ELSE 'yes' END;" | tr -d '[:space:]')
 
 if [ "$ALREADY" = "yes" ]; then
-    echo "==> schema already present - skipping schema, migrations and seed"
+    echo "==> schema already present - skipping schema and seed"
     echo "    (drop the mssql_data volume to rebuild from scratch)"
 else
     echo "==> schema"
     "$SQLCMD" "${COMMON[@]}" -d "$DB" -i /database/schema.sql
 
-    echo "==> migrations"
-    for f in $(ls /database/migration_*.sql 2>/dev/null | sort); do
-        echo "    $(basename "$f")"
-        "$SQLCMD" "${COMMON[@]}" -d "$DB" -i "$f"
-    done
-
     echo "==> seed (96k rows, takes a minute)"
     "$SQLCMD" "${COMMON[@]}" -d "$DB" -i /database/seed.sql
 fi
+
+# Migrations run on every start, including over an existing volume - each one
+# is written to be idempotent, and this is the only thing that brings a
+# database created by an older image up to the current schema. Skipping them
+# when the schema exists (as this script used to) meant exactly the databases
+# that needed a migration were the ones that never got it.
+echo "==> migrations"
+for f in $(ls /database/migration_*.sql 2>/dev/null | sort); do
+    echo "    $(basename "$f")"
+    "$SQLCMD" "${COMMON[@]}" -d "$DB" -i "$f"
+done
 
 # The application login is created every run: it is cheap, idempotent, and it
 # means rotating SAD_DB_PASSWORD in docker/.env takes effect on restart.
@@ -76,6 +81,8 @@ IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = '$APP_LOGIN')
     CREATE USER [$APP_LOGIN] FOR LOGIN [$APP_LOGIN];
 GRANT SELECT ON SCHEMA::sad TO [$APP_LOGIN];
 GRANT INSERT, UPDATE ON sad.Investigation                TO [$APP_LOGIN];
+GRANT INSERT, UPDATE ON sad.Conversation                 TO [$APP_LOGIN];
+GRANT INSERT         ON sad.ConversationTurn             TO [$APP_LOGIN];
 GRANT INSERT, UPDATE ON sad.InfrastructureRecommendation TO [$APP_LOGIN];
 GRANT INSERT         ON sad.RecommendationDecision       TO [$APP_LOGIN];
 GRANT INSERT         ON sad.CapacityRequest              TO [$APP_LOGIN];
