@@ -133,6 +133,13 @@ class LlmSettings(_Base):
     azure_deployment: str = ""
     azure_api_version: str = "2024-10-21"
     ollama_base_url: str = "http://localhost:11434"
+    #: Overrides the `provider=` label on metrics. Any OpenAI-compatible
+    #: endpoint - Groq, Together, Fireworks, whatever ships next - runs through
+    #: provider="openai" with a custom base_url, which would file every one of
+    #: them under "openai" and quietly corrupt exactly the per-provider cost and
+    #: latency comparison this platform exists to make. Set this and the enum
+    #: never needs another entry.
+    provider_label: str = ""
     max_input_chars: int = 24_000
     # Ordered, comma-separated list of additional providers to try if `provider`
     # (the primary) raises - e.g. "azure-openai,ollama". Each listed provider

@@ -29,6 +29,9 @@ logger = structlog.get_logger(__name__)
 
 def build_chat_model_for_provider(provider: str) -> BaseChatModel:
     settings = get_settings().llm
+    # What metrics call this. Defaults to the provider name; SAD_LLM__PROVIDER_LABEL
+    # distinguishes the OpenAI-compatible endpoints that all share provider="openai".
+    label = settings.provider_label or provider
     if provider == "mock":
         return MockChatModel()
     if provider == "openai":
@@ -36,7 +39,7 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             base_url=settings.base_url or "https://api.openai.com/v1",
             model=settings.model, api_key=settings.api_key,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds, provider_name=provider,
+            timeout_seconds=settings.timeout_seconds, provider_name=label,
         )
     if provider == "azure-openai":
         if not settings.azure_endpoint or not settings.azure_deployment:
@@ -48,7 +51,7 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             base_url=base_url, model=settings.model, api_key=settings.api_key,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds,
-            extra_headers={"api-key": settings.api_key} if settings.api_key else {}, provider_name=provider,
+            extra_headers={"api-key": settings.api_key} if settings.api_key else {}, provider_name=label,
         )
     if provider == "gemini":
         if not settings.api_key:
@@ -62,7 +65,7 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             model=settings.model if settings.model != "seek-and-destroy-mock" else GEMINI_DEFAULT_MODEL,
             base_url=settings.base_url or GEMINI_DEFAULT_BASE_URL,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds, provider_name=provider,
+            timeout_seconds=settings.timeout_seconds, provider_name=label,
         )
     if provider == "deepseek":
         # No new client needed - DeepSeek serves the OpenAI chat-completions
@@ -84,13 +87,13 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             model=settings.model if settings.model != "seek-and-destroy-mock" else "deepseek-v4-flash",
             api_key=settings.api_key,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds, provider_name=provider,
+            timeout_seconds=settings.timeout_seconds, provider_name=label,
         )
     if provider == "ollama":
         return HttpChatModel(
             base_url=settings.ollama_base_url.rstrip("/") + "/v1", model=settings.model,
             api_key="ollama", temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds, provider_name=provider,
+            timeout_seconds=settings.timeout_seconds, provider_name=label,
         )
     raise ValueError(f"unknown SAD_LLM__PROVIDER: {provider}")
 
