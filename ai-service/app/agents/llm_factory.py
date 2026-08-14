@@ -79,7 +79,9 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             raise ValueError("SAD_LLM__API_KEY is required for the deepseek provider")
         return HttpChatModel(
             base_url=settings.base_url or "https://api.deepseek.com/v1",
-            model=settings.model if settings.model != "seek-and-destroy-mock" else "deepseek-chat",
+            # Verified against GET /models, not assumed - "deepseek-chat" was a
+            # plausible-looking guess that this account does not serve at all.
+            model=settings.model if settings.model != "seek-and-destroy-mock" else "deepseek-v4-flash",
             api_key=settings.api_key,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds, provider_name=provider,

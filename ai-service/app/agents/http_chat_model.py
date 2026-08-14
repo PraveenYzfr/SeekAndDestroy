@@ -19,6 +19,12 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from app.utils.http_retry import request_with_retry
 
+class EmptyCompletionError(RuntimeError):
+    """The provider answered 200 with no usable text. Distinct from a transport
+    failure so the fallback chain can tell "provider is down" from "provider
+    produced nothing"."""
+
+
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system", "tool": "tool"}
 
 
@@ -80,6 +86,22 @@ class HttpChatModel(BaseChatModel):
         except Exception:
             llm_calls_total.labels(provider=self.provider_name, outcome="error").inc()
             raise
+        choice = data["choices"][0]
+        content = (choice["message"].get("content") or "").strip()
+        if not content:
+            # Reasoning models (DeepSeek v4, and OpenAI's o-series) put their
+            # thinking in a separate `reasoning_content` field, and those tokens
+            # count against max_tokens. If the budget runs out mid-thought the
+            # API still returns 200, with an empty `content` and
+            # finish_reason="length". Passing "" up the stack turns that into a
+            # confusing parse failure three frames away, so name it here.
+            llm_calls_total.labels(provider=self.provider_name, outcome="error").inc()
+            reasoning = (choice["message"].get("reasoning_content") or "").strip()
+            raise EmptyCompletionError(
+                f"{self.provider_name} returned no content "
+                f"(finish_reason={choice.get('finish_reason', 'unknown')}"
+                + (f", {len(reasoning)} chars of reasoning - raise SAD_LLM__MAX_OUTPUT_TOKENS" if reasoning else "")
+                + ")"
+            )
         llm_calls_total.labels(provider=self.provider_name, outcome="success").inc()
-        content = data["choices"][0]["message"]["content"]
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])
