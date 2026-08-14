@@ -8,8 +8,9 @@ Two code paths:
   format instructions appended to the prompt, with one repair retry on a
   parse failure.
 
-Results are cached (see app.cache.store) keyed by the exact prompt text and
-target schema - this only ever caches LLM *narration*, never a deterministic
+Results are cached (see app.cache.store) keyed by the exact prompt text,
+target schema *and the model that produced it* - this only ever caches LLM
+*narration*, never a deterministic
 number computed elsewhere, so a cache hit is safe: the same evidence would
 always have produced the same narration anyway (SAD_LLM__TEMPERATURE
 defaults to 0.0). This mainly saves real-provider API calls/latency when the
@@ -34,8 +35,35 @@ from app.config import get_settings
 T = TypeVar("T", bound=BaseModel)
 
 
-def _cache_key(system_prompt: str, human_prompt: str, output_model: type[BaseModel]) -> str:
-    digest = hashlib.sha256(f"{output_model.__name__}\n{system_prompt}\n{human_prompt}".encode("utf-8")).hexdigest()
+def _model_identity(llm: BaseChatModel) -> str:
+    """Which model produced a cached answer, for the cache key.
+
+    Read off the instance rather than settings: with SAD_LLM__FALLBACK_PROVIDERS
+    the model that actually answered may not be the configured primary, and
+    caching a fallback's output under the primary's name would be the same lie
+    in a different place.
+    """
+    provider = getattr(llm, "provider_name", None) or type(llm).__name__
+    return f"{provider}:{getattr(llm, 'model', '') or ''}"
+
+
+def _cache_key(system_prompt: str, human_prompt: str, output_model: type[BaseModel], model_identity: str) -> str:
+    """Keyed on the model as well as the prompt.
+
+    Without the model in the key, switching provider and re-running the same
+    investigation is a cache *hit*: you get the previous model's text back and
+    conclude the two agree, having paid for one call while believing you
+    measured two. It fails inside the TTL and works outside it, so it fails
+    intermittently - worse than failing always, and fatal for a platform whose
+    purpose is comparing models.
+
+    Repeat runs on the *same* model still hit cache, which is the behaviour
+    worth keeping: prompts are deterministic and temperature is 0, so paying
+    twice buys nothing.
+    """
+    digest = hashlib.sha256(
+        f"{model_identity}\n{output_model.__name__}\n{system_prompt}\n{human_prompt}".encode("utf-8")
+    ).hexdigest()
     return f"llm-structured:{output_model.__name__}:{digest}"
 
 
@@ -43,7 +71,7 @@ def run_structured(llm: BaseChatModel, system_prompt: str, human_prompt: str, ou
     from app.observability.metrics import narration_cache_total
 
     store = get_cache_store()
-    cache_key = _cache_key(system_prompt, human_prompt, output_model)
+    cache_key = _cache_key(system_prompt, human_prompt, output_model, _model_identity(llm))
     cached = store.get(cache_key)
     if cached is not None:
         narration_cache_total.labels(result="hit").inc()
