@@ -77,11 +77,40 @@ def _cache_key(system_prompt: str, human_prompt: str, output_model: type[BaseMod
     return f"llm-structured:{output_model.__name__}:{digest}"
 
 
-def _json_snippet(payload: dict, limit: int = 8000) -> str:
-    """Audit text, capped. A full evidence dict can run to tens of kilobytes
-    and the value of the row is what was asked and what came back, not a
-    byte-exact replay."""
-    return json.dumps(payload, default=str)[:limit]
+#: Audit rows are the substrate for evaluation (app.evaluation), so the cap has
+#: to be generous enough to keep a full report prompt intact - a final report
+#: carries five scored candidates and runs well past 8 KB.
+AUDIT_LIMIT = 64_000
+
+
+def _audit_payload(model_identity: str, system_prompt: str, human_prompt: str,
+                   cache_hit: bool, limit: int = AUDIT_LIMIT) -> str:
+    """The prompt record, always as valid JSON.
+
+    Slicing the serialised string was the obvious way to cap this and it was
+    wrong twice over: it cut mid-token, so the row no longer parsed and the
+    model attribution was lost; and it silently removed evidence, so numbers
+    the model had quoted correctly were graded as ungrounded. The evaluation
+    harness reported a real provider at 62% entity fidelity on the strength of
+    it.
+
+    Truncating the prompts themselves keeps the envelope parseable, and the
+    flag tells a grader that this row cannot be judged for fidelity rather
+    than letting it judge wrongly.
+    """
+    payload = {
+        "model": model_identity, "cache_hit": cache_hit, "truncated": False,
+        "system": system_prompt, "human": human_prompt,
+    }
+    text = json.dumps(payload, default=str)
+    if len(text) <= limit:
+        return text
+
+    budget = max(1000, (limit - 500) // 2)
+    payload["truncated"] = True
+    payload["system"] = system_prompt[:budget]
+    payload["human"] = human_prompt[:budget]
+    return json.dumps(payload, default=str)
 
 
 def _audit_start(model_identity: str, system_prompt: str, human_prompt: str,
@@ -103,12 +132,7 @@ def _audit_start(model_identity: str, system_prompt: str, human_prompt: str,
             tool_name=f"llm:{output_model.__name__}"[:100],
             investigation_id=scope.investigation_id,
             graph_node=scope.graph_node,
-            input_json=_json_snippet({
-                "model": model_identity,
-                "cache_hit": cache_hit,
-                "system": system_prompt,
-                "human": human_prompt,
-            }),
+            input_json=_audit_payload(model_identity, system_prompt, human_prompt, cache_hit),
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("audit.llm_call_start_failed", error=str(exc), schema=output_model.__name__)
@@ -141,7 +165,7 @@ def run_structured(llm: BaseChatModel, system_prompt: str, human_prompt: str, ou
         # say?" gets asked - the text was served, so it belongs in the record,
         # flagged as served rather than generated.
         audit_id = _audit_start(model_identity, system_prompt, human_prompt, output_model, cache_hit=True)
-        _audit_complete(audit_id, output_json=cached[:8000], success=True)
+        _audit_complete(audit_id, output_json=cached[:AUDIT_LIMIT], success=True)
         return output_model.model_validate_json(cached)
     narration_cache_total.labels(result="miss").inc()
 
@@ -151,7 +175,7 @@ def run_structured(llm: BaseChatModel, system_prompt: str, human_prompt: str, ou
     except Exception as exc:
         _audit_complete(audit_id, output_json=None, success=False, error_message=str(exc)[:2000])
         raise
-    _audit_complete(audit_id, output_json=parsed.model_dump_json()[:8000], success=True)
+    _audit_complete(audit_id, output_json=parsed.model_dump_json()[:AUDIT_LIMIT], success=True)
 
     store.set(cache_key, parsed.model_dump_json(), ttl_seconds=get_settings().cache.default_ttl_seconds)
     return parsed

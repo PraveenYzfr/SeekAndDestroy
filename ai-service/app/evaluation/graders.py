@@ -1,0 +1,219 @@
+"""Deterministic grading of model output.
+
+This platform can do something most cannot: check an answer against a known
+correct one. Placement, scoring, forecasting and eligibility are computed in
+Python, so the evidence handed to a model is the answer key for the prose it
+writes back.
+
+Every grader here is a pure function over (prose, evidence) and uses no model
+of its own. An LLM-as-judge would introduce the exact problem being measured -
+a grader that hallucinates cannot detect hallucination.
+
+What these do NOT claim:
+
+``number_fidelity`` measures how much of what the model wrote can be traced to
+its evidence. It is a *rate*, not a verdict, because a model can legitimately
+write a number that is not in the evidence - "three candidates" counts a list,
+"the second one" is an ordinal, "roughly 30%" is a rounding. Small integers and
+figures that round to an evidence value are therefore treated as grounded. What
+survives that filter is worth reading: a 91.8 that should have been 89.61 does
+not round, and does not appear.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from typing import Any, Iterable
+
+#: Numbers a model may reasonably produce without being given them: counts of
+#: things in a list it can see, ordinals, single-digit rankings. Above this,
+#: an unsourced figure is worth flagging.
+FREE_INTEGER_CEILING = 10
+
+_NUMBER_RE = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
+
+#: Cluster codes in this estate look like nyc-p006, atl-03, dal-p056; the CMDB
+#: also uses APP-CRM style application codes.
+_ENTITY_RE = re.compile(r"\b(?:APP-[A-Z0-9]+|[a-z]{3}-[a-z]?\d{2,4})\b")
+
+
+@dataclass
+class GradeResult:
+    """One property, measured. ``total`` of zero means the property did not
+    apply to this sample - reported as such rather than as a perfect score,
+    which would silently inflate an average."""
+
+    name: str
+    grounded: int = 0
+    total: int = 0
+    ungrounded: list[str] = field(default_factory=list)
+
+    @property
+    def rate(self) -> float | None:
+        return None if self.total == 0 else self.grounded / self.total
+
+    @property
+    def applies(self) -> bool:
+        return self.total > 0
+
+
+def _numbers_in(text: str) -> list[str]:
+    return _NUMBER_RE.findall(text or "")
+
+
+def _as_float(token: str) -> float | None:
+    try:
+        return float(token.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _evidence_numbers(evidence: Any) -> set[float]:
+    """Every number anywhere in the evidence, flattened.
+
+    Structure is deliberately ignored: the question is whether a figure the
+    model wrote came from somewhere in what it was given, not whether it sat
+    under the right key.
+    """
+    text = evidence if isinstance(evidence, str) else json.dumps(evidence, default=str)
+    values = {v for v in (_as_float(t) for t in _numbers_in(text)) if v is not None}
+    return values
+
+
+def number_fidelity(prose: str, evidence: Any) -> GradeResult:
+    """How many figures in the prose are traceable to the evidence."""
+    result = GradeResult("number_fidelity")
+    known = _evidence_numbers(evidence)
+
+    for token in _numbers_in(prose):
+        value = _as_float(token)
+        if value is None:
+            continue
+        result.total += 1
+        if _is_grounded(value, known):
+            result.grounded += 1
+        else:
+            result.ungrounded.append(token)
+    return result
+
+
+def _is_grounded(value: float, known: set[float]) -> bool:
+    # A count or an ordinal the model can see for itself.
+    if value.is_integer() and abs(value) <= FREE_INTEGER_CEILING:
+        return True
+    if value in known:
+        return True
+    # Rounding a real figure is honest reporting, not drift: 27.3 for 27.28,
+    # or "about 90" for 89.61. Anything further apart than that is not a
+    # rounding of anything it was given.
+    return any(abs(value - k) <= max(0.05, abs(k) * 0.01) for k in known)
+
+
+def entity_fidelity(prose: str, evidence: Any) -> GradeResult:
+    """How many cluster/application codes in the prose appear in the evidence.
+
+    An invented cluster code is the most damaging error this platform can
+    produce: it reads as a real recommendation, and it names infrastructure
+    that was never a candidate - or never existed.
+    """
+    result = GradeResult("entity_fidelity")
+    text = evidence if isinstance(evidence, str) else json.dumps(evidence, default=str)
+    known = {m.lower() for m in _ENTITY_RE.findall(text)}
+
+    for code in _ENTITY_RE.findall(prose or ""):
+        result.total += 1
+        if code.lower() in known:
+            result.grounded += 1
+        else:
+            result.ungrounded.append(code)
+    return result
+
+
+def completeness(payload: Any, required: Iterable[str]) -> GradeResult:
+    """Whether the fields that carry the answer actually carry one.
+
+    A schema-valid report with an empty executive summary parses cleanly and
+    tells the reader nothing; that is a quality failure the type system cannot
+    see.
+    """
+    result = GradeResult("completeness")
+    if not isinstance(payload, dict):
+        return result
+    for name in required:
+        result.total += 1
+        value = payload.get(name)
+        if isinstance(value, str) and value.strip():
+            result.grounded += 1
+        elif isinstance(value, (list, dict)) and len(value) > 0:
+            result.grounded += 1
+        elif isinstance(value, (int, float)):
+            result.grounded += 1
+        else:
+            result.ungrounded.append(name)
+    return result
+
+
+#: Which fields must say something, per output schema. Only schemas whose
+#: emptiness would be invisible to the caller are listed.
+REQUIRED_FIELDS = {
+    "FinalRecommendationReport": ("executive_summary",),
+    "CandidateExplanation": ("summary",),
+    "GroundedAnswer": ("answer",),
+    "RightSizingExplanation": ("summary",),
+    "ForecastExplanation": ("summary",),
+    "TradeOffSummary": ("summary",),
+}
+
+
+def grade_call(input_json: str | None, output_json: str | None, schema_name: str) -> list[GradeResult]:
+    """Grade one recorded model call.
+
+    Takes the audit row's own columns, so a whole evaluation run costs nothing
+    but a table scan - the calls were already made and paid for.
+    """
+    if not output_json:
+        return []
+    try:
+        output = json.loads(output_json)
+    except (ValueError, TypeError):
+        return []
+
+    evidence = input_json or ""
+    prose = " ".join(_strings_in(output))
+
+    grades = []
+    # Fidelity is only measurable against complete evidence. A truncated
+    # prompt makes every figure past the cut look invented, which is how this
+    # harness first reported a well-behaved provider at 62%.
+    if not was_truncated(input_json):
+        grades.extend([number_fidelity(prose, evidence), entity_fidelity(prose, evidence)])
+    required = REQUIRED_FIELDS.get(schema_name)
+    if required:
+        grades.append(completeness(output, required))
+    return [g for g in grades if g.applies]
+
+
+def was_truncated(input_json: str | None) -> bool:
+    """Whether the recorded prompt is a partial one. Unparseable rows count as
+    truncated: the only thing that has ever produced one is a cut-off record."""
+    if not input_json:
+        return False
+    try:
+        return bool(json.loads(input_json).get("truncated"))
+    except (ValueError, TypeError):
+        return True
+
+
+def _strings_in(value: Any) -> list[str]:
+    """Every string the model wrote, at any depth. Risks and next steps are
+    prose too, and a fabricated number is no less fabricated for being in a
+    list."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings_in(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings_in(v)]
+    return []
