@@ -116,10 +116,9 @@ export default function RecommendationComparison() {
           {tradeoffs ? (
             <div style={{ marginTop: 14 }}>
               <strong>Trade-offs</strong>
-              {tradeoffs.summary && <p style={{ marginTop: 6 }}>{tradeoffs.summary}</p>}
-              {tradeoffs.key_differences && tradeoffs.key_differences.length > 0 && (
-                <ul>
-                  {tradeoffs.key_differences.map((d, i) => <li key={i}>{d}</li>)}
+              {tradeoffs.comparison_points.length > 0 && (
+                <ul style={{ marginTop: 6 }}>
+                  {tradeoffs.comparison_points.map((point, i) => <li key={i}>{point}</li>)}
                 </ul>
               )}
               {tradeoffs.recommendation && <div className="explain-box">{tradeoffs.recommendation}</div>}

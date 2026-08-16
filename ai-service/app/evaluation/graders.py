@@ -25,7 +25,12 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Iterable
+
+from pydantic import BaseModel
+
+from app.models import agent_contracts
 
 #: Numbers a model may reasonably produce without being given them: counts of
 #: things in a list it can see, ordinals, single-digit rankings. Above this,
@@ -60,7 +65,15 @@ class GradeResult:
 
 
 def _numbers_in(text: str) -> list[str]:
-    return _NUMBER_RE.findall(text or "")
+    """Figures the model quoted, not digits that happen to sit inside a name.
+
+    ``nyc-p006`` contributed "006" before this, so every cluster code the prose
+    mentioned inflated the number-fidelity denominator with a digit string
+    nobody was claiming as a measurement - and made the rate look better than
+    it was, since those "numbers" always matched the evidence they came from.
+    Entity codes are graded by entity_fidelity; their digits are not metrics.
+    """
+    return _NUMBER_RE.findall(_ENTITY_RE.sub(" ", text or ""))
 
 
 def _as_float(token: str) -> float | None:
@@ -155,16 +168,33 @@ def completeness(payload: Any, required: Iterable[str]) -> GradeResult:
     return result
 
 
-#: Which fields must say something, per output schema. Only schemas whose
-#: emptiness would be invisible to the caller are listed.
-REQUIRED_FIELDS = {
-    "FinalRecommendationReport": ("executive_summary",),
-    "CandidateExplanation": ("summary",),
-    "GroundedAnswer": ("answer",),
-    "RightSizingExplanation": ("summary",),
-    "ForecastExplanation": ("summary",),
-    "TradeOffSummary": ("summary",),
-}
+@lru_cache(maxsize=None)
+def required_fields_for(schema_name: str) -> tuple[str, ...]:
+    """The narrative fields this contract must actually fill in.
+
+    Derived from the Pydantic contract rather than hand-listed. The hand-listed
+    version was wrong on its first outing: it demanded a ``summary`` from
+    TradeOffSummary, which has no such field, so it flagged two perfectly good
+    calls as empty and reported a model defect that was really a grader defect.
+    A list of field names maintained beside the schemas it describes will drift
+    from them; one computed from the schemas cannot.
+
+    "Must say something" means required (no default) and text-shaped - a str,
+    or a list of them. An optional field is optional; a float is checked by
+    number_fidelity, not here.
+    """
+    model = getattr(agent_contracts, schema_name, None)
+    if model is None or not isinstance(model, type) or not issubclass(model, BaseModel):
+        return ()
+
+    required = []
+    for name, info in model.model_fields.items():
+        if not info.is_required():
+            continue
+        annotation = info.annotation
+        if annotation is str or annotation == list[str]:
+            required.append(name)
+    return tuple(required)
 
 
 def grade_call(input_json: str | None, output_json: str | None, schema_name: str) -> list[GradeResult]:
@@ -189,7 +219,7 @@ def grade_call(input_json: str | None, output_json: str | None, schema_name: str
     # harness first reported a well-behaved provider at 62%.
     if not was_truncated(input_json):
         grades.extend([number_fidelity(prose, evidence), entity_fidelity(prose, evidence)])
-    required = REQUIRED_FIELDS.get(schema_name)
+    required = required_fields_for(schema_name)
     if required:
         grades.append(completeness(output, required))
     return [g for g in grades if g.applies]

@@ -15,12 +15,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.agents.structured import AUDIT_LIMIT, _audit_payload
 from app.evaluation.graders import (
     completeness,
     entity_fidelity,
     grade_call,
     number_fidelity,
+    required_fields_for,
     was_truncated,
 )
 
@@ -105,7 +108,11 @@ def test_prose_with_no_entity_reference_is_not_scored():
 
 def test_an_empty_required_field_is_a_quality_failure_the_schema_cannot_see():
     """A report that parses cleanly with an empty executive summary is valid
-    and useless. Two real TradeOffSummary calls did exactly this.
+    and useless - the type system cannot see the difference.
+
+    (The two TradeOffSummary calls this originally cited were a false positive:
+    the grader demanded a field that contract does not have. See
+    test_required_fields_come_from_the_contract_itself.)
     """
     assert completeness({"summary": "   "}, ("summary",)).ungrounded == ["summary"]
     assert completeness({"summary": "Two clusters fit."}, ("summary",)).rate == 1.0
@@ -165,9 +172,163 @@ def test_the_scorecard_reads_the_audit_log():
     from app.evaluation.harness import evaluate
 
     result = evaluate(limit=200)
-    assert result["calls_graded"] >= 0
+    assert result["calls_seen"] >= 0
     for card in result["models"]:
         assert card["calls"] > 0
-        assert card["ungradeable"] <= card["calls"]
-        for rate in (card["number_fidelity"], card["entity_fidelity"], card["completeness"]):
-            assert rate is None or 0.0 <= rate <= 1.0
+        assert card["calls"] == card["generated"] + card["cached"]
+        assert card["ungradeable"] <= card["generated"]
+        for measured in card["properties"].values():
+            assert 0.0 <= measured["rate"] <= 1.0
+            assert measured["observations"] > 0
+
+
+# =============================================================================
+# The required fields have to be the contract's, not a guess at them
+# =============================================================================
+
+
+def test_required_fields_come_from_the_contract_itself():
+    """The hand-written list was wrong on its first outing: it demanded a
+    ``summary`` from TradeOffSummary, which has no such field. Two perfectly
+    good calls were reported as empty, and the same wrong field names had been
+    copied into the UI, which rendered an empty panel.
+
+    Deriving them from the Pydantic model means a schema change cannot leave a
+    stale list behind.
+    """
+    from app.models.agent_contracts import TradeOffSummary
+
+    assert required_fields_for("TradeOffSummary") == ("title", "comparison_points", "recommendation")
+    assert set(required_fields_for("TradeOffSummary")) <= set(TradeOffSummary.model_fields)
+
+
+@pytest.mark.parametrize(
+    "schema",
+    ["CandidateExplanation", "FinalRecommendationReport", "GroundedAnswer",
+     "ForecastExplanation", "RightSizingExplanation", "TradeOffSummary", "InvestigationPlan"],
+)
+def test_every_graded_schema_names_only_fields_it_actually_has(schema):
+    from app.models import agent_contracts
+
+    model = getattr(agent_contracts, schema)
+    assert set(required_fields_for(schema)) <= set(model.model_fields)
+    assert required_fields_for(schema), f"{schema} has no required narrative field to check"
+
+
+def test_an_optional_field_is_not_required():
+    """``top_recommendation`` is Optional on the report contract - a run with
+    no eligible candidate legitimately has none, and demanding one would flag
+    correct behaviour."""
+    assert "top_recommendation" not in required_fields_for("FinalRecommendationReport")
+
+
+def test_an_unknown_schema_is_not_graded_for_completeness():
+    assert required_fields_for("SomethingElse") == ()
+
+
+# =============================================================================
+# Scorecard method
+# =============================================================================
+
+
+def _row(audit_id, *, model="m", cached=False, output=None, success=True, duration=10, truncated=False):
+    return {
+        "AuditId": audit_id,
+        "ToolName": "llm:CandidateExplanation",
+        "InputJson": json.dumps({
+            "model": model, "cache_hit": cached, "truncated": truncated,
+            "human": "cluster nyc-p006 scored 91.8",
+        }),
+        "OutputJson": output if output is not None else json.dumps(
+            {"cluster_code": "nyc-p006", "eligibility_status": "Eligible", "summary": "nyc-p006 scored 91.8"}
+        ),
+        "Success": success,
+        "DurationMs": duration,
+    }
+
+
+def test_a_cached_answer_is_counted_but_not_graded_again():
+    """The same text served twenty times is one success, not twenty. Grading
+    each hit weights the score towards whatever happens to be popular and
+    inflates every denominator with it.
+    """
+    from app.evaluation.harness import ModelScorecard
+
+    card = ModelScorecard(model="m")
+    card.record(_row(1), cached=False, schema="CandidateExplanation")
+    for i in range(20):
+        card.record(_row(2 + i, cached=True), cached=True, schema="CandidateExplanation")
+
+    assert card.calls == 21
+    assert card.generated == 1
+    assert card.cached == 20
+    # One generated call's worth of observations, not twenty-one.
+    assert card.totals["number_fidelity"].total == 1
+
+
+def test_the_denominator_is_reported_with_the_rate():
+    from app.evaluation.harness import ModelScorecard
+
+    card = ModelScorecard(model="m")
+    card.record(_row(1), cached=False, schema="CandidateExplanation")
+    numbers = card.as_dict()["properties"]["number_fidelity"]
+    assert numbers["rate"] == 1.0
+    assert numbers["observations"] == 1
+
+
+def test_latency_percentiles_come_from_the_audit_row():
+    from app.evaluation.harness import ModelScorecard
+
+    card = ModelScorecard(model="m")
+    for i, ms in enumerate([100, 200, 300, 400, 5000]):
+        card.record(_row(i + 1, duration=ms), cached=False, schema="CandidateExplanation")
+    result = card.as_dict()
+    assert result["latency_p50_ms"] == 300
+    assert result["latency_p95_ms"] == 5000
+
+
+def test_a_truncated_row_is_ungradeable_not_a_failure():
+    from app.evaluation.harness import ModelScorecard
+
+    card = ModelScorecard(model="m")
+    card.record(_row(1, truncated=True), cached=False, schema="CandidateExplanation")
+    result = card.as_dict()
+    assert result["ungradeable"] == 1
+    assert result["properties"] == {}, "nothing measurable must not read as a perfect score"
+
+
+# =============================================================================
+# The gate
+# =============================================================================
+
+
+def _result(rate: float, observations: int) -> dict:
+    return {"models": [{
+        "model": "m",
+        "properties": {"entity_fidelity": {"rate": rate, "observations": observations}},
+    }]}
+
+
+def test_a_model_below_the_bar_fails_the_run():
+    from app.evaluation.harness import check_thresholds
+
+    problems = check_thresholds(_result(0.94, 500), {"entity_fidelity": 1.0})
+    assert any(p.startswith("FAILED") for p in problems)
+
+
+def test_a_model_at_the_bar_passes():
+    from app.evaluation.harness import check_thresholds
+
+    assert check_thresholds(_result(1.0, 500), {"entity_fidelity": 1.0}) == []
+
+
+def test_a_thin_sample_is_skipped_rather_than_failed():
+    """Three observations at 66% is not evidence of a regression. A gate that
+    cries wolf gets switched off - but it says "skipped" out loud, because
+    silence would read as a clean result.
+    """
+    from app.evaluation.harness import check_thresholds
+
+    problems = check_thresholds(_result(0.66, 3), {"entity_fidelity": 1.0}, min_observations=20)
+    assert len(problems) == 1
+    assert problems[0].startswith("SKIPPED")

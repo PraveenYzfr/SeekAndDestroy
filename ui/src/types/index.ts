@@ -138,11 +138,14 @@ export interface CandidateScore {
 /** Narration is requested explicitly and may legitimately be absent: it is
  *  best-effort, so a quota refusal or a number-drift rejection yields null
  *  while every number on the page stays exactly as computed. */
+/** Mirrors app/models/agent_contracts.py::TradeOffSummary exactly. Every field
+ *  is required there, so none is optional here - inventing optional fields the
+ *  contract does not have is how this rendered an empty panel on its first
+ *  outing. */
 export interface TradeOffSummary {
-  title?: string;
-  summary?: string;
-  key_differences?: string[];
-  recommendation?: string;
+  title: string;
+  comparison_points: string[];
+  recommendation: string;
 }
 
 export interface HostingRecommendationResponse {
