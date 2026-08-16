@@ -4,7 +4,7 @@ State: **262 tests passing** (ai-service) + **14** (MCP server) + **27** (gatewa
 database consistent, all three tiers verified live.
 
 Work since 2026-08-15 is on branch `feat/conversation-history-and-llm-observability`
-(5 commits), not on `main`.
+(6 commits), not on `main`.
 
 ## What works today
 
