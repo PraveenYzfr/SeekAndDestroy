@@ -8,6 +8,11 @@ Two code paths:
   format instructions appended to the prompt, with one repair retry on a
   parse failure.
 
+Every chain in app.agents funnels through :func:`run_structured`, which makes
+it the one place that can record what was sent to a model and what came back.
+Each call writes a sad.AgentAuditLog row - the same table the MCP tools use -
+tagged with the investigation and graph node from app.observability.audit_context.
+
 Results are cached (see app.cache.store) keyed by the exact prompt text,
 target schema *and the model that produced it* - this only ever caches LLM
 *narration*, never a deterministic
@@ -20,8 +25,10 @@ same candidate/cluster is explained more than once within the cache TTL.
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import TypeVar
 
+import structlog
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
@@ -31,6 +38,9 @@ from app.agents.gemini_chat_model import GeminiChatModel
 from app.agents.mock_llm import MockChatModel
 from app.cache.store import get_cache_store
 from app.config import get_settings
+from app.repositories import audit_repository
+
+logger = structlog.get_logger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -67,18 +77,82 @@ def _cache_key(system_prompt: str, human_prompt: str, output_model: type[BaseMod
     return f"llm-structured:{output_model.__name__}:{digest}"
 
 
+def _json_snippet(payload: dict, limit: int = 8000) -> str:
+    """Audit text, capped. A full evidence dict can run to tens of kilobytes
+    and the value of the row is what was asked and what came back, not a
+    byte-exact replay."""
+    return json.dumps(payload, default=str)[:limit]
+
+
+def _audit_start(model_identity: str, system_prompt: str, human_prompt: str,
+                 output_model: type[BaseModel], cache_hit: bool) -> int | None:
+    """Open an audit row for this model call, or return None if the audit
+    write itself failed.
+
+    Deliberately fail-open. This platform produces recommendations and never
+    executes an infrastructure change, so losing an investigation to protect
+    its log would be the worse trade - but the failure is logged loudly rather
+    than swallowed, because "every invocation is audited" stops being true the
+    moment one of these is silently skipped.
+    """
+    from app.observability import audit_context
+
+    scope = audit_context.current()
+    try:
+        return audit_repository.log_start(
+            tool_name=f"llm:{output_model.__name__}"[:100],
+            investigation_id=scope.investigation_id,
+            graph_node=scope.graph_node,
+            input_json=_json_snippet({
+                "model": model_identity,
+                "cache_hit": cache_hit,
+                "system": system_prompt,
+                "human": human_prompt,
+            }),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("audit.llm_call_start_failed", error=str(exc), schema=output_model.__name__)
+        return None
+
+
+def _audit_complete(audit_id: int | None, *, output_json: str | None, success: bool,
+                    error_message: str | None = None) -> None:
+    if audit_id is None:
+        return
+    try:
+        audit_repository.log_complete(
+            audit_id, output_json=output_json, success=success, error_message=error_message
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("audit.llm_call_complete_failed", error=str(exc), audit_id=audit_id)
+
+
 def run_structured(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_model: type[T]) -> T:
     from app.observability.metrics import narration_cache_total
 
     store = get_cache_store()
-    cache_key = _cache_key(system_prompt, human_prompt, output_model, _model_identity(llm))
+    model_identity = _model_identity(llm)
+    cache_key = _cache_key(system_prompt, human_prompt, output_model, model_identity)
     cached = store.get(cache_key)
     if cached is not None:
         narration_cache_total.labels(result="hit").inc()
+        # Cache hits are audited too. Without them the log has a hole exactly
+        # where a question like "what did investigation 74's report actually
+        # say?" gets asked - the text was served, so it belongs in the record,
+        # flagged as served rather than generated.
+        audit_id = _audit_start(model_identity, system_prompt, human_prompt, output_model, cache_hit=True)
+        _audit_complete(audit_id, output_json=cached[:8000], success=True)
         return output_model.model_validate_json(cached)
     narration_cache_total.labels(result="miss").inc()
 
-    parsed = _invoke(llm, system_prompt, human_prompt, output_model)
+    audit_id = _audit_start(model_identity, system_prompt, human_prompt, output_model, cache_hit=False)
+    try:
+        parsed = _invoke(llm, system_prompt, human_prompt, output_model)
+    except Exception as exc:
+        _audit_complete(audit_id, output_json=None, success=False, error_message=str(exc)[:2000])
+        raise
+    _audit_complete(audit_id, output_json=parsed.model_dump_json()[:8000], success=True)
+
     store.set(cache_key, parsed.model_dump_json(), ttl_seconds=get_settings().cache.default_ttl_seconds)
     return parsed
 
