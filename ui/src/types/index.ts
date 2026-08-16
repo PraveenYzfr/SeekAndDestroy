@@ -135,10 +135,21 @@ export interface CandidateScore {
   top_nodes: NodeCandidateScore[];
 }
 
+/** Narration is requested explicitly and may legitimately be absent: it is
+ *  best-effort, so a quota refusal or a number-drift rejection yields null
+ *  while every number on the page stays exactly as computed. */
+export interface TradeOffSummary {
+  title?: string;
+  summary?: string;
+  key_differences?: string[];
+  recommendation?: string;
+}
+
 export interface HostingRecommendationResponse {
   application: Record<string, unknown>;
   requirement: Record<string, unknown>;
   candidates: CandidateScore[];
+  tradeoffs?: TradeOffSummary | null;
 }
 
 export interface ClusterRightSizingResult {
@@ -182,6 +193,12 @@ export interface ResourceForecast {
   recommended_action: string;
 }
 
+export interface ForecastExplanation {
+  entity_code: string;
+  summary?: string;
+  recommended_action?: string;
+}
+
 export interface ClusterForecast {
   cluster_id: number;
   cluster_code: string;
@@ -189,6 +206,11 @@ export interface ClusterForecast {
   cpu: ResourceForecast;
   memory: ResourceForecast;
   storage: ResourceForecast;
+  /** Which resource was narrated - the one that breaches soonest, or is
+   *  closest to it. Only the binding resource is explained; narrating all
+   *  three costs three model calls to say two things nobody asked about. */
+  explained_resource?: "cpu" | "memory" | "storage";
+  explanation?: ForecastExplanation | null;
 }
 
 export interface Investigation {

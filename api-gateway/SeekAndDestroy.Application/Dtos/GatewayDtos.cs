@@ -4,7 +4,7 @@ namespace SeekAndDestroy.Application.Dtos;
 /// one POST /api/recommendations/right-sizing endpoint, while the AI service
 /// exposes separate cluster/application analyses - this DTO lets the caller
 /// pick a scope and the controller routes to the matching AI service call.</summary>
-public sealed record GatewayRightSizingRequestDto(string? ClusterCode, string? ApplicationCode);
+public sealed record GatewayRightSizingRequestDto(string? ClusterCode, string? ApplicationCode, bool Explain = false);
 
 public sealed record ApproveRejectRequestDto(int ReviewerEmployeeId, string? Reason);
 

@@ -70,10 +70,12 @@ export const api = {
 
   getCluster: (clusterId: number) => request<InfrastructureCluster>(`/cmdb/clusters/${clusterId}`),
 
-  getHostingRecommendations: (applicationCode: string) =>
+  /** explain adds narration to the response. Left off by default because it
+   *  costs a model call; the screens ask for it only when the reader clicks. */
+  getHostingRecommendations: (applicationCode: string, explain = false) =>
     request<HostingRecommendationResponse>("/recommendations/hosting", {
       method: "POST",
-      body: JSON.stringify({ applicationCode }),
+      body: JSON.stringify({ applicationCode, explain }),
     }),
 
   getCapacityRecommendations: (payload: Record<string, unknown>) =>
@@ -100,10 +102,10 @@ export const api = {
       body: JSON.stringify({ environment: environment ?? null }),
     }),
 
-  getForecast: (clusterCode: string, horizonDays: number) =>
+  getForecast: (clusterCode: string, horizonDays: number, explain = false) =>
     request<ClusterForecast>("/recommendations/forecast", {
       method: "POST",
-      body: JSON.stringify({ clusterCode, horizonDays }),
+      body: JSON.stringify({ clusterCode, horizonDays, explain }),
     }),
 
   approveRecommendation: (recommendationId: number, reviewerEmployeeId: number, reason?: string) =>

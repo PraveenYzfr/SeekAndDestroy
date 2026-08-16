@@ -26,6 +26,10 @@ export default function CapacityForecast() {
   const [forecast, setForecast] = useState<ClusterForecast | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Narration is a second, opt-in request. The numbers arrive first and are
+  // never delayed by a model call - and a reader who only wants the figures
+  // never pays for prose.
+  const [explaining, setExplaining] = useState(false);
 
   useEffect(() => {
     api.getClusters().then(setClusters).catch(() => undefined);
@@ -41,6 +45,19 @@ export default function CapacityForecast() {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function explain() {
+    if (!clusterCode) return;
+    setExplaining(true);
+    setError(null);
+    try {
+      setForecast(await api.getForecast(clusterCode, horizon, true));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setExplaining(false);
     }
   }
 
@@ -75,6 +92,38 @@ export default function CapacityForecast() {
           <ForecastRow label="CPU" forecast={forecast.cpu} />
           <ForecastRow label="Memory" forecast={forecast.memory} />
           <ForecastRow label="Storage" forecast={forecast.storage} />
+
+          <div className="card">
+            {forecast.explanation ? (
+              <>
+                <strong>
+                  What this means
+                  {forecast.explained_resource && (
+                    <span className="stat-label" style={{ marginLeft: 8 }}>
+                      {forecast.explained_resource} is the binding resource
+                    </span>
+                  )}
+                </strong>
+                <p style={{ marginTop: 8 }}>{forecast.explanation.summary}</p>
+                {forecast.explanation.recommended_action && (
+                  <div className="explain-box">{forecast.explanation.recommended_action}</div>
+                )}
+              </>
+            ) : (
+              <>
+                <button className="secondary" disabled={explaining} onClick={explain}>
+                  {explaining ? "Asking..." : "Explain this forecast"}
+                </button>
+                <p className="subtitle" style={{ marginTop: 8, marginBottom: 0 }}>
+                  {/* Said plainly, because the numbers above are the product and
+                      the prose is not: it can fail, and when it does the figures
+                      are unaffected. */}
+                  Adds a written summary of the resource that runs out first. The figures above are
+                  computed and never change.
+                </p>
+              </>
+            )}
+          </div>
         </>
       )}
     </>

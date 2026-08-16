@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "@/api/client";
-import type { CmdbApplication, InfrastructureCluster, CandidateScore } from "@/types";
+import type { CmdbApplication, InfrastructureCluster, CandidateScore, TradeOffSummary } from "@/types";
 
 export default function RecommendationComparison() {
   const [applications, setApplications] = useState<CmdbApplication[]>([]);
@@ -8,6 +8,8 @@ export default function RecommendationComparison() {
   const [appCode, setAppCode] = useState("");
   const [selectedClusters, setSelectedClusters] = useState<string[]>([]);
   const [candidates, setCandidates] = useState<CandidateScore[] | null>(null);
+  const [tradeoffs, setTradeoffs] = useState<TradeOffSummary | null>(null);
+  const [explaining, setExplaining] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -21,8 +23,26 @@ export default function RecommendationComparison() {
     try {
       const result = await api.getHostingRecommendations(appCode);
       setCandidates(result.candidates);
+      // A fresh comparison invalidates the previous summary - leaving it on
+      // screen would attribute one application's trade-offs to another.
+      setTradeoffs(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
+  async function explain() {
+    if (!appCode) return;
+    setExplaining(true);
+    setError(null);
+    try {
+      const result = await api.getHostingRecommendations(appCode, true);
+      setCandidates(result.candidates);
+      setTradeoffs(result.tradeoffs ?? null);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setExplaining(false);
     }
   }
 
@@ -92,6 +112,29 @@ export default function RecommendationComparison() {
               </tr>
             </tbody>
           </table>
+
+          {tradeoffs ? (
+            <div style={{ marginTop: 14 }}>
+              <strong>Trade-offs</strong>
+              {tradeoffs.summary && <p style={{ marginTop: 6 }}>{tradeoffs.summary}</p>}
+              {tradeoffs.key_differences && tradeoffs.key_differences.length > 0 && (
+                <ul>
+                  {tradeoffs.key_differences.map((d, i) => <li key={i}>{d}</li>)}
+                </ul>
+              )}
+              {tradeoffs.recommendation && <div className="explain-box">{tradeoffs.recommendation}</div>}
+            </div>
+          ) : (
+            <div style={{ marginTop: 14 }}>
+              <button className="secondary" disabled={explaining} onClick={explain}>
+                {explaining ? "Asking..." : "Summarise the trade-offs"}
+              </button>
+              <p className="subtitle" style={{ marginTop: 8, marginBottom: 0 }}>
+                Compares the eligible candidates in prose. Every figure in the table above is
+                computed and is unaffected by it.
+              </p>
+            </div>
+          )}
         </div>
       )}
     </>

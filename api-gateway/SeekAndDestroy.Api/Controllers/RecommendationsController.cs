@@ -29,7 +29,7 @@ public sealed class RecommendationsController(IAiServiceClient aiServiceClient) 
     {
         if (!string.IsNullOrWhiteSpace(request.ApplicationCode))
         {
-            return Ok(await aiServiceClient.GetApplicationRightSizingAsync(new RightSizingApplicationRequestDto(request.ApplicationCode), ct));
+            return Ok(await aiServiceClient.GetApplicationRightSizingAsync(new RightSizingApplicationRequestDto(request.ApplicationCode, request.Explain), ct));
         }
         return Ok(await aiServiceClient.GetClusterRightSizingAsync(new RightSizingClusterRequestDto(request.ClusterCode), ct));
     }

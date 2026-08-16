@@ -8,7 +8,10 @@ namespace SeekAndDestroy.Application.Dtos;
 // into DTOs but does not re-declare the deterministic engines' internal
 // shapes, so the two services can't drift silently out of sync.
 
-public sealed record HostingRecommendationRequestDto(string ApplicationCode);
+/// <summary>Explain adds LLM narration alongside the computed result. Off by
+/// default: these endpoints can return hundreds of candidates and narration is
+/// a model call, so nobody pays for prose they did not ask for.</summary>
+public sealed record HostingRecommendationRequestDto(string ApplicationCode, bool Explain = false);
 
 public sealed record CapacityRecommendationRequestDto(
     string Environment, decimal CpuCores, decimal MemoryGb, decimal StorageGb, string Platform,
@@ -17,11 +20,11 @@ public sealed record CapacityRecommendationRequestDto(
 
 public sealed record RightSizingClusterRequestDto(string? ClusterCode);
 
-public sealed record RightSizingApplicationRequestDto(string? ApplicationCode);
+public sealed record RightSizingApplicationRequestDto(string? ApplicationCode, bool Explain = false);
 
 public sealed record ConsolidationRequestDto(string? Environment);
 
-public sealed record ForecastRequestDto(string ClusterCode, int HorizonDays = 90);
+public sealed record ForecastRequestDto(string ClusterCode, int HorizonDays = 90, bool Explain = false);
 
 public sealed record RecommendationDecisionRequestDto(string Decision, int ReviewerEmployeeId, string? Reason);
 
