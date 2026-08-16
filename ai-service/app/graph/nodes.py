@@ -148,6 +148,18 @@ def quick_reply(query: str) -> str | None:
     return None
 
 
+def effective_query(state: InfrastructureRecommendationState) -> str:
+    """The text the pipeline reasons over.
+
+    ``resolved_query`` is ``user_query`` with the previous subject carried
+    forward when this turn is a follow-up (app.graph.conversation), and equal
+    to ``user_query`` otherwise. Classification and requirement extraction read
+    this; anything shown back to the engineer reads ``user_query``, which is
+    always the literal text they typed.
+    """
+    return state.get("resolved_query") or state["user_query"]
+
+
 def classify_investigation_type(query: str) -> str:
     lower = query.lower()
     if any(k in lower for k in _REFUSAL_KEYWORDS):
@@ -183,19 +195,28 @@ def classify_investigation_type(query: str) -> str:
 def parse_user_request(state: InfrastructureRecommendationState) -> dict:
     from app.config import get_settings
 
-    query = state["user_query"][: get_settings().service.max_query_chars]
+    max_chars = get_settings().service.max_query_chars
+    query = state["user_query"][:max_chars]
+    # A follow-up classifies on the carried-forward subject, not on its own
+    # words: "what about in staging?" contains nothing to route on, and
+    # routing it as a general question is exactly the bug conversations exist
+    # to fix.
+    resolved = effective_query(state)[:max_chars]
     # str(...) - InvestigationType is a StrEnum; LangGraph's checkpoint
     # serializer only round-trips plain str/int/etc without a deprecation
     # warning, so state never carries the enum instance itself.
-    investigation_type = str(classify_investigation_type(query))
+    investigation_type = str(classify_investigation_type(resolved))
     llm = get_chat_model()
     try:
-        plan = parse_investigation_plan(llm, query)
+        plan = parse_investigation_plan(llm, resolved)
         parsed_intent = plan.model_dump()
     except Exception as exc:  # noqa: BLE001 - narration failure must not break the pipeline
         logger.warning("graph.parse_user_request.llm_failed", error=str(exc))
-        parsed_intent = {"investigation_type": investigation_type, "summary": query, "steps": []}
-    return {"investigation_type": investigation_type, "parsed_intent": parsed_intent, "user_query": query}
+        parsed_intent = {"investigation_type": investigation_type, "summary": resolved, "steps": []}
+    return {
+        "investigation_type": investigation_type, "parsed_intent": parsed_intent,
+        "user_query": query, "resolved_query": resolved,
+    }
 
 
 # =============================================================================
@@ -204,7 +225,9 @@ def parse_user_request(state: InfrastructureRecommendationState) -> dict:
 
 
 def load_application_requirements(state: InfrastructureRecommendationState) -> dict:
-    query = state["user_query"]
+    # The resolved query, so a follow-up finds the application code or the
+    # capacity figures carried over from the request it continues.
+    query = effective_query(state)
     app_match = _APP_CODE_RE.search(query.upper())
     itype = state["investigation_type"]
 
@@ -448,8 +471,9 @@ def calculate_projected_utilization(state: InfrastructureRecommendationState) ->
 def run_capacity_forecast(state: InfrastructureRecommendationState) -> dict:
     itype = state["investigation_type"]
     if itype == InvestigationType.FORECAST:
-        cluster_match = _CLUSTER_CODE_RE.search(state["user_query"].upper())
-        horizon_match = re.search(r"(\d+)\s*day", state["user_query"].lower())
+        query = effective_query(state)
+        cluster_match = _CLUSTER_CODE_RE.search(query.upper())
+        horizon_match = re.search(r"(\d+)\s*day", query.lower())
         horizon = int(horizon_match.group(1)) if horizon_match else 90
         if not cluster_match:
             return {"errors": ["No cluster code found in forecast request."]}
@@ -550,17 +574,29 @@ def select_candidate_nodes(state: InfrastructureRecommendationState) -> dict:
 
 
 def retrieve_related_context(state: InfrastructureRecommendationState) -> dict:
+    # The previous investigation's own evidence, when this turn is a follow-up.
+    # It goes first and is never displaced by a vector hit: "why was that
+    # rejected?" is a question about a specific run, and a similarity search
+    # over the whole estate has no way of knowing which one. Without this the
+    # Question path answered "I don't have enough grounded information" - true,
+    # and useless, when the answer was sitting in the previous turn.
+    prior_docs = list(state.get("prior_context_docs") or [])
+
     # Retrieval is optional grounding for narration, never a hard dependency -
     # a runtime embedding failure (e.g. a real API embedder going down after a
     # successful startup probe) degrades to no retrieved context rather than
     # failing the whole investigation.
     try:
         store = get_vector_store()
-        results = store.search(state["user_query"], top_k=6)
+        results = store.search(effective_query(state), top_k=6)
     except Exception as exc:  # noqa: BLE001
         logger.warning("graph.retrieve_related_context_failed", error=str(exc))
-        return {"retrieved_context": []}
-    return {"retrieved_context": [{"text": r.document.text, "score": r.score, "entity_type": r.document.entity_type} for r in results]}
+        return {"retrieved_context": prior_docs}
+    retrieved = [
+        {"text": r.document.text, "score": r.score, "entity_type": r.document.entity_type}
+        for r in results
+    ]
+    return {"retrieved_context": prior_docs + retrieved}
 
 
 # =============================================================================
@@ -637,11 +673,16 @@ def assess_risk_and_confidence(state: InfrastructureRecommendationState) -> dict
 # =============================================================================
 
 
-def human_review_interrupt(state: InfrastructureRecommendationState) -> dict:
-    from langgraph.types import interrupt
+def build_review_payload(state: InfrastructureRecommendationState | dict) -> dict:
+    """The shortlist as a reviewer sees it.
 
-    top = state.get("candidate_scores", [])[: get_settings().policy.top_clusters]
-    summary = {
+    Shared with app.graph.graph, which rebuilds this payload when a follow-up
+    asks for a still-open shortlist again. Two constructions of this shape
+    would drift, and the half that drifted would be the one the engineer
+    actually clicks Approve on.
+    """
+    top = (state.get("candidate_scores") or [])[: get_settings().policy.top_clusters]
+    return {
         "investigation_id": state.get("investigation_id"),
         "investigation_type": state.get("investigation_type"),
         # A reviewer is choosing *one* placement, not rubber-stamping a list.
@@ -662,6 +703,12 @@ def human_review_interrupt(state: InfrastructureRecommendationState) -> dict:
         "confidence": state.get("confidence"),
         "message": "Choose one cluster and host, then approve - or reject the shortlist.",
     }
+
+
+def human_review_interrupt(state: InfrastructureRecommendationState) -> dict:
+    from langgraph.types import interrupt
+
+    summary = build_review_payload(state)
     investigation_repository.update_status(state["investigation_id"], "AwaitingReview")
     resumed = interrupt(summary)
     return {

@@ -12,6 +12,17 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+class _ExplainableRequest(BaseModel):
+    """Opt-in narration. Off by default so the deterministic answer stays the
+    fast path and no caller pays for prose it did not ask for - these
+    endpoints can return hundreds of results, and narrating each one is a
+    model call apiece."""
+
+    explain: bool = Field(
+        False, description="Add LLM narration alongside the computed result (bounded, best-effort).",
+    )
+
+
 class CreateInvestigationRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     # Optional and no longer trusted as-is: the authenticated caller's employee_id
@@ -19,6 +30,14 @@ class CreateInvestigationRequest(BaseModel):
     # If both are present and disagree, the request is rejected (403) rather than
     # silently preferring one - that mismatch means something is actually wrong.
     created_by_employee_id: Optional[int] = None
+    conversation_id: Optional[str] = Field(
+        None, max_length=64,
+        description=(
+            "The chat this message belongs to, as returned by a previous call. "
+            "Omit to start a new conversation - the id is server-generated and the "
+            "caller must own it, so one cannot be claimed by guessing."
+        ),
+    )
 
 
 class ResumeInvestigationRequest(BaseModel):
@@ -46,7 +65,7 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, repr=False)
 
 
-class _NodeDrillDownMixin(BaseModel):
+class _NodeDrillDownMixin(_ExplainableRequest):
     """Shared knobs for the "top N clusters, top M hosts inside each" shape
     that every placement endpoint now returns. Both default to the configured
     policy (``SAD_POLICY__TOP_CLUSTERS`` / ``SAD_POLICY__TOP_NODES_PER_CLUSTER``,
@@ -118,7 +137,7 @@ class ClusterRightSizingRequest(BaseModel):
     cluster_code: Optional[str] = None
 
 
-class ApplicationRightSizingRequest(BaseModel):
+class ApplicationRightSizingRequest(_ExplainableRequest):
     application_code: Optional[str] = None
 
 
@@ -126,7 +145,7 @@ class ConsolidationAnalysisRequest(BaseModel):
     environment: Optional[str] = None
 
 
-class ForecastRequest(BaseModel):
+class ForecastRequest(_ExplainableRequest):
     cluster_code: str
     horizon_days: int = 90
 

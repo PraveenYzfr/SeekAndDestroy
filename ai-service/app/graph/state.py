@@ -48,8 +48,35 @@ class InfrastructureRecommendationState(TypedDict, total=False):
     selected_cluster_code: Optional[str]
     selected_host_name: Optional[str]
 
+    # --- conversation context ------------------------------------------------
+    # Same rule as above: every one of these must be declared or it is silently
+    # dropped and the follow-up loses exactly the context it exists to carry.
+    conversation_id: Optional[str]
+    #: The query the pipeline classifies and extracts from. Equal to user_query
+    #: for an ordinary request; for a follow-up it is user_query with the
+    #: previous subject appended (app.graph.conversation.carry_subject), so
+    #: "what about in staging?" still knows which application it is about.
+    #: user_query stays the literal text the engineer typed - it is what gets
+    #: shown back to them, and rewriting that would be putting words in their
+    #: mouth.
+    resolved_query: Optional[str]
+    follow_up_kind: Optional[str]
+    prior_investigation_id: Optional[int]
+    #: The previous investigation's own evidence, already shaped like retrieval
+    #: results, for the Question path to answer from.
+    prior_context_docs: list[dict]
 
-def new_state(user_query: str, created_by: int) -> InfrastructureRecommendationState:
+
+def new_state(
+    user_query: str,
+    created_by: int,
+    *,
+    conversation_id: str | None = None,
+    resolved_query: str | None = None,
+    follow_up_kind: str | None = None,
+    prior_investigation_id: int | None = None,
+    prior_context_docs: list[dict] | None = None,
+) -> InfrastructureRecommendationState:
     return InfrastructureRecommendationState(
         user_query=user_query, created_by=created_by, errors=[], candidate_clusters=[], candidate_nodes=[],
         eligible_candidates=[], rejected_candidates=[], capacity_calculations={}, forecast_results={},
@@ -58,4 +85,12 @@ def new_state(user_query: str, created_by: int) -> InfrastructureRecommendationS
         capacity_requirements=None, investigation_plan=None, investigation_type="Question", requirement=None,
         confidence="Medium", decision=None, reviewer_employee_id=None, review_comments=None,
         selected_cluster_code=None, selected_host_name=None,
+        conversation_id=conversation_id,
+        # Defaults to the literal query, so every node can read resolved_query
+        # unconditionally and an investigation with no conversation behaves
+        # exactly as it always did.
+        resolved_query=resolved_query or user_query,
+        follow_up_kind=follow_up_kind,
+        prior_investigation_id=prior_investigation_id,
+        prior_context_docs=prior_context_docs or [],
     )

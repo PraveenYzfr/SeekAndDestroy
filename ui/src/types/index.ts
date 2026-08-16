@@ -276,6 +276,13 @@ export interface RunInvestigationResult {
   status: "AwaitingReview" | "Completed";
   investigation_type?: string;
   confidence?: string;
+  /** The chat this answer belongs to. The server generates it on the first
+   *  message and every later message sends it back, which is what gives a
+   *  follow-up like "give me the options again" something to refer to. */
+  conversation_id?: string | null;
+  /** Set when this answer is an earlier investigation shown again rather than
+   *  a new one - there is no second Investigation row behind it. */
+  recall_of_investigation_id?: number;
   review_payload?: {
     /** The richer form: one entry per shortlisted cluster, each with its
      *  capacity figures and the hosts ranked inside it. */

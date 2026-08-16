@@ -118,10 +118,14 @@ export const api = {
       body: JSON.stringify({ reviewerEmployeeId, reason }),
     }),
 
-  createInvestigation: (query: string, createdByEmployeeId: number) =>
+  /** conversationId threads follow-ups together. Omit it to start a new
+   *  conversation - the server generates the id and returns it on every
+   *  response, and it must belong to the signed-in employee or the request is
+   *  rejected, so it cannot be claimed by guessing. */
+  createInvestigation: (query: string, createdByEmployeeId: number, conversationId?: string | null) =>
     request<RunInvestigationResult>("/investigations", {
       method: "POST",
-      body: JSON.stringify({ query, createdByEmployeeId }),
+      body: JSON.stringify({ query, createdByEmployeeId, conversationId: conversationId ?? undefined }),
     }),
 
   getInvestigation: (investigationId: number) => request<Investigation>(`/investigations/${investigationId}`),

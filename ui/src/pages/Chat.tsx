@@ -61,6 +61,12 @@ export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  /** The chat this thread belongs to. Null until the first answer comes back:
+   *  the server generates the id, never the client, and every later message
+   *  sends it so "give me the options again" has a referent. Deliberately not
+   *  persisted across reloads - a reload starts a fresh conversation, which is
+   *  honest, because the message history on screen is gone too. */
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [examples, setExamples] = useState<string[]>(() => buildExamples());
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -89,12 +95,20 @@ export default function Chat() {
   }
 
   async function applyResult(assistantId: string, result: RunInvestigationResult) {
+    if (result.conversation_id) setConversationId(result.conversation_id);
     if (result.status === "AwaitingReview") {
       updateMessage(assistantId, {
         status: "awaiting_review",
         investigationId: result.investigation_id,
         reviewPayload: result.review_payload,
       });
+      return;
+    }
+    // A greeting, a request too vague to act on, or a follow-up with nothing
+    // to refer to: answered directly, with no Investigation row behind it and
+    // so no recommendations to fetch.
+    if (result.investigation_id == null) {
+      updateMessage(assistantId, { status: "completed", finalReport: result.final_report });
       return;
     }
     try {
@@ -123,7 +137,7 @@ export default function Chat() {
     const assistantId = newId();
     setMessages((prev) => [...prev, userMsg, { id: assistantId, role: "assistant", status: "loading" }]);
     try {
-      const result = await api.createInvestigation(text, currentEmployeeId());
+      const result = await api.createInvestigation(text, currentEmployeeId(), conversationId);
       await applyResult(assistantId, result);
     } catch (e) {
       updateMessage(assistantId, {
@@ -169,6 +183,12 @@ export default function Chat() {
     }
   }
 
+  function startNewChat() {
+    setMessages([]);
+    setConversationId(null);
+    setInput("");
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -184,6 +204,17 @@ export default function Chat() {
         language. Every answer is backed by the same deterministic engine as the structured screens -
         the AI narrates, it never invents the numbers.
       </p>
+
+      {messages.length > 0 && (
+        <div className="chat-toolbar">
+          {/* Starting a new chat is a real action, not cosmetic: it drops the
+              conversation id, so the next message is resolved against nothing
+              rather than against a shortlist the engineer has moved on from. */}
+          <button className="secondary" disabled={busy} onClick={startNewChat}>
+            New chat
+          </button>
+        </div>
+      )}
 
       <div className="chat-window">
         {messages.length === 0 && (

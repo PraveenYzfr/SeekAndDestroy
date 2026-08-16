@@ -112,6 +112,7 @@ class PriorInvestigation:
     investigation_type: str
     user_query: str
     status: str = "Completed"
+    confidence: str = "Medium"
     application_code: Optional[str] = None
     requirement: Optional[dict] = None
     candidate_scores: list[dict] = field(default_factory=list)
@@ -132,6 +133,7 @@ class PriorInvestigation:
             investigation_type=str(state.get("investigation_type") or "Question"),
             user_query=str(state.get("user_query") or ""),
             status=status,
+            confidence=str(state.get("confidence") or "Medium"),
             application_code=(state.get("application_requirements") or {}).get("application_code"),
             requirement=state.get("requirement"),
             candidate_scores=list(state.get("candidate_scores") or []),
@@ -165,24 +167,42 @@ def looks_like_follow_up(query: str) -> Optional[str]:
     if not text:
         return None
 
-    has_own_subject = bool(_APP_CODE_RE.search(text.upper()))
+    upper = text.upper()
+    # A query that names the thing it is about is not a follow-up, whatever
+    # else it says. "find hosting for APP-CRM in the same data center as it"
+    # contains "it" and "the same", and resolving it against a previous
+    # investigation would answer about an application the engineer just
+    # replaced. Naming a subject is how you start a new request.
+    has_own_subject = bool(_APP_CODE_RE.search(upper))
+    names_a_cluster = bool(_CLUSTER_CODE_RE.search(upper))
+    if has_own_subject:
+        return None
+
     referential = bool(_REFERENTIAL_RE.search(text))
 
-    # "give me the options again". A query that names its own application is
-    # not asking for the previous one repeated, whatever else it says.
-    if not has_own_subject and _RECALL_RE.search(text):
+    # "give me the options again". Not a recall if it names a cluster:
+    # "forecast CL-NYC-03 again" is a request to run something, and the thing
+    # it names is what it should run against.
+    if not names_a_cluster and _RECALL_RE.search(text):
         return RECALL
 
     # "why was that rejected?" - a question, pointing back. A cluster code is
-    # allowed here: "why was CL-NYC-03 rejected?" is still about the results
-    # the engineer is looking at.
+    # allowed here: "why was CL-NYC-03 rejected then?" is still a question
+    # about the results the engineer is looking at, and grounding it in those
+    # results beats a vector search that has no idea which run is meant.
     if referential and _QUESTION_START_RE.search(text):
         return ABOUT_PREVIOUS
 
-    # "what about in staging?" - continues the last request. Requires no
-    # subject of its own, or it is simply a new request.
-    if not has_own_subject and not _CLUSTER_CODE_RE.search(text.upper()) and _CONTINUATION_RE.search(text):
-        return INHERIT_SUBJECT
+    # "what about in staging?" - continues the last request rather than
+    # starting one. A bare prepositional opener only counts when it is the
+    # whole message: "in production, which clusters are underutilized?" is a
+    # complete question, and carrying a subject into it would turn a
+    # right-sizing question into a placement request for an application nobody
+    # mentioned.
+    if not names_a_cluster:
+        fragment = bool(_FRAGMENT_RE.match(text)) and len(text.split()) <= _FRAGMENT_MAX_WORDS
+        if fragment or _CONTINUATION_RE.search(text):
+            return INHERIT_SUBJECT
 
     if referential:
         return ABOUT_PREVIOUS
@@ -288,27 +308,48 @@ def grounding_documents(prior: PriorInvestigation, limit: int = 8) -> list[dict]
     a follow-up must answer with the figures the engineer was shown, not with
     a fresh reading of a cluster that has moved since.
     """
+    from app.config import get_settings
+
+    # Which candidates the engineer actually saw. "that one" and "the second
+    # one" refer to the shortlist in front of them, not to the 85th entry of a
+    # ranked list nobody displayed - so the shown options are labelled with
+    # their position, and that is what makes a positional reference
+    # answerable.
+    shown = get_settings().policy.top_clusters
+
     docs: list[dict] = [
         {
-            "text": _headline(prior),
+            "text": _headline(prior, shown),
             "score": 1.0,
             "entity_type": "PriorInvestigation",
         }
     ]
-    for candidate in prior.candidate_scores[: limit - 1]:
-        docs.append({"text": _candidate_document(candidate), "score": 1.0, "entity_type": "PriorCandidate"})
+    for index, candidate in enumerate(prior.candidate_scores[: limit - 1]):
+        position = index + 1 if index < shown else None
+        docs.append(
+            {"text": _candidate_document(candidate, position), "score": 1.0, "entity_type": "PriorCandidate"}
+        )
     return docs
 
 
-def _headline(prior: PriorInvestigation) -> str:
+def _headline(prior: PriorInvestigation, shown: int = 3) -> str:
     report = prior.final_report or {}
     eligible = sum(1 for c in prior.candidate_scores if c.get("eligibility_status") == "Eligible")
     rejected = len(prior.candidate_scores) - eligible
+    presented = [
+        str(c.get("cluster_code")) for c in prior.candidate_scores[:shown] if c.get("cluster_code")
+    ]
     lines = [
         f"Previous request in this conversation (investigation #{prior.investigation_id}, "
         f"type {prior.investigation_type}, status {prior.status}): \"{prior.user_query}\".",
         f"It shortlisted {eligible} eligible and {rejected} rejected clusters.",
     ]
+    if presented:
+        lines.append(
+            "The options presented to the engineer, in order, were: "
+            + ", ".join(f"{i + 1}. {code}" for i, code in enumerate(presented))
+            + ". A reference to \"that one\" or \"the first/second one\" means one of these."
+        )
     if prior.application_code:
         lines.append(f"The application under consideration was {prior.application_code}.")
     if report.get("executive_summary"):
@@ -318,7 +359,7 @@ def _headline(prior: PriorInvestigation) -> str:
     return " ".join(lines)
 
 
-def _candidate_document(candidate: dict) -> str:
+def _candidate_document(candidate: dict, position: int | None = None) -> str:
     projected = candidate.get("projected") or {}
     failed = [
         f"{r.get('name')}: {r.get('reason')}"
@@ -327,8 +368,14 @@ def _candidate_document(candidate: dict) -> str:
     ]
     hosts = [n.get("host_name") for n in (candidate.get("top_nodes") or [])]
 
+    shown_as = (
+        f"It was shown to the engineer as option {position}. "
+        if position is not None
+        else "It was ranked but not shown in the shortlist. "
+    )
     parts = [
-        f"Cluster {candidate.get('cluster_code')} was {candidate.get('eligibility_status')} "
+        shown_as
+        + f"Cluster {candidate.get('cluster_code')} was {candidate.get('eligibility_status')} "
         f"in the previous investigation at rank {candidate.get('rank')} "
         f"with overall score {candidate.get('overall_score')}."
     ]

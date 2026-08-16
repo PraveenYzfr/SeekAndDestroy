@@ -148,6 +148,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .chat-page { display: flex; flex-direction: column; height: calc(100vh - 48px); max-height: 900px; }
 
+/* Sits above the thread, right-aligned, so "New chat" is reachable without
+   competing with the conversation itself. */
+.chat-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+
 .chat-window {
   flex: 1;
   overflow-y: auto;

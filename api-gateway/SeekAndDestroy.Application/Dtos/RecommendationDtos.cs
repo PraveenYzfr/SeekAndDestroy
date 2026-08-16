@@ -27,7 +27,13 @@ public sealed record RecommendationDecisionRequestDto(string Decision, int Revie
 
 public sealed record AiServiceResponse(JsonNode? Payload);
 
-public sealed record CreateInvestigationRequestDto(string Query, int CreatedByEmployeeId);
+/// <summary>ConversationId threads a chat together, so a follow-up like "give
+/// me the options again" has something to refer to. Null starts a new
+/// conversation; the AI service generates the id and returns it, and null
+/// properties are omitted from the request body (see AiServiceClient), so an
+/// opening message simply carries no id at all.</summary>
+public sealed record CreateInvestigationRequestDto(
+    string Query, int CreatedByEmployeeId, string? ConversationId = null);
 
 /// <summary>SelectedClusterCode/SelectedHostName name the option the reviewer
 /// chose. Approving without one leaves every recommendation PendingReview:
