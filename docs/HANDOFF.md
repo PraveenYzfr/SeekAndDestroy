@@ -125,16 +125,39 @@ Done since (2026-08-16):
   functions, never models: an LLM-as-judge would introduce the failure being
   measured. `python scripts/evaluate.py`.
 
-  First run, 97 calls: `deepseek-v4-flash` at **100% number and entity
-  fidelity**, 96.2% completeness, 5 failures. Two `TradeOffSummary` calls
-  returned an empty `summary` - schema-valid and useless, which is exactly the
-  class the type system cannot see.
+  Current scorecard, 141 calls: `deepseek-v4-flash` at **100% on all three
+  properties** (n=1019 numbers, 205 entity mentions), p50 5.7s, p95 17.6s.
 
-  It also caught a bug in the audit code from the day before: slicing the
-  prompt at 8 KB cut mid-token, so rows stopped parsing, model attribution was
-  lost, and figures quoted correctly graded as invented - a well-behaved
-  provider scored 62% entity fidelity. Fixed; truncated rows are now flagged
-  and excluded from fidelity rather than judged wrongly.
+  **Both "findings" from the first run were defects in the evaluation, not in
+  the model** - worth remembering before trusting any future one:
+  - The required-fields list was hand-written and demanded a `summary` from
+    `TradeOffSummary`, which has no such field. The same wrong names had been
+    copied into the UI, which would have rendered an empty panel. Required
+    fields are now derived from the Pydantic contract so they cannot drift.
+  - Audit prompts were sliced at 8 KB mid-token, so rows stopped parsing,
+    attribution was lost and correctly-quoted figures graded as invented -
+    scoring a well-behaved provider at 62%.
+
+  Two more measurement flaws found while hardening: cache hits were graded as
+  independent samples (one answer served twenty times counted as twenty
+  successes), and digits inside identifiers were counted as quoted figures
+  (`nyc-p006` contributed "006", which always matched, flattering the rate).
+
+  Not yet enterprise-grade. What is missing, in order:
+  - **No golden set.** It grades whatever production happened to run, so two
+    models cannot be compared unless both happened to run the same work. A
+    fixed case suite runnable on demand against any provider is the gap that
+    matters most for model evaluation.
+  - **No stored history.** Each run recomputes and prints; drift over time -
+    the thing `*-latest` aliases make inevitable - is eyeballed between runs.
+  - **No token or cost accounting.** Latency is recorded, spend is not.
+  - **Three properties only** - no refusal correctness, answer relevance or
+    citation validity.
+  - **The entity regex is estate-specific** (`[a-z]{3}-[a-z]?\d{2,4}`) and
+    would silently stop matching under a new naming convention. It should be
+    derived from the CMDB.
+  - **Nothing runs the gate.** `--min-entities 1.0 --min-numbers 0.98` exits
+    non-zero, but no pipeline calls it.
 
 Still unwired: `extract_hosting_requirement` (free-text intake for
 applications not yet in the CMDB) - scope 07 of the assessment.
