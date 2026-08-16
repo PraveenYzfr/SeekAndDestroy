@@ -4,6 +4,9 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends
 
+from app.agents.chains import summarize_tradeoffs
+from app.agents.llm_factory import get_chat_model
+from app.api import narration
 from app.api.auth import get_current_employee, require_matching_employee_id
 from app.api.errors import ProblemDetailsError
 from app.api.schemas import CapacityRecommendationRequest, HostingRecommendationRequest, QuickRecommendationRequest
@@ -38,6 +41,25 @@ def _shortlist(requirement, payload) -> list:
     return candidates
 
 
+def _tradeoffs(title: str, candidates: list, payload) -> dict | None:
+    """Prose comparing the shortlist, when asked for.
+
+    Eligible candidates only: a trade-off summary is about choosing between
+    workable options, and a rejected cluster is not one of them. Bounded to
+    the shortlist the caller already asked for, so this is exactly one model
+    call regardless of how many clusters were scored.
+    """
+    if not payload.explain:
+        return None
+    eligible = [c for c in candidates if c.eligibility_status == "Eligible"][: narration.MAX_NARRATED]
+    if not eligible:
+        return None
+    return narration.safely(
+        "summarize_tradeoffs",
+        lambda: summarize_tradeoffs(get_chat_model(), title, eligible),
+    )
+
+
 @router.post("/api/hosting/recommendations")
 def hosting_recommendations(payload: HostingRecommendationRequest):
     app = application_repository.get_by_code(payload.application_code)
@@ -45,9 +67,10 @@ def hosting_recommendations(payload: HostingRecommendationRequest):
         raise ProblemDetailsError(404, "Application not found", f"No application with code {payload.application_code!r}.")
     requirement = placement.requirement_for_application(app)
     candidates = _shortlist(requirement, payload)
-    return to_jsonable(
-        {"application": app, "requirement": requirement, "candidates": candidates}
-    )
+    return to_jsonable({
+        "application": app, "requirement": requirement, "candidates": candidates,
+        "tradeoffs": _tradeoffs(f"Hosting options for {app.ApplicationCode}", candidates, payload),
+    })
 
 
 @router.post("/api/capacity/recommendations")
@@ -65,9 +88,10 @@ def capacity_recommendations(payload: CapacityRecommendationRequest, current: Au
     req = capacity_request_repository.get_by_id(capacity_request_id)
     requirement = HostingRequirement.from_capacity_request(req)
     candidates = _shortlist(requirement, payload)
-    return to_jsonable(
-        {"capacity_request": req, "requirement": requirement, "candidates": candidates}
-    )
+    return to_jsonable({
+        "capacity_request": req, "requirement": requirement, "candidates": candidates,
+        "tradeoffs": _tradeoffs(f"Capacity request {capacity_request_id}", candidates, payload),
+    })
 
 
 @router.post("/api/hosting/quick-recommendations")
@@ -84,4 +108,10 @@ def quick_recommendations(payload: QuickRecommendationRequest):
         criticality="Medium",
     )
     candidates = _shortlist(requirement, payload)
-    return to_jsonable({"requirement": requirement, "candidates": candidates})
+    return to_jsonable({
+        "requirement": requirement, "candidates": candidates,
+        "tradeoffs": _tradeoffs(
+            f"{payload.cpu_cores} cores, {payload.memory_gb} GB memory, {payload.storage_gb} GB storage",
+            candidates, payload,
+        ),
+    })

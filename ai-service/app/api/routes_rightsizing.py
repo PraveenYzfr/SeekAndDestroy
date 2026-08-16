@@ -3,6 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter
 from app.utils.json_utils import to_jsonable
 
+from app.agents.chains import explain_application_right_sizing
+from app.agents.llm_factory import get_chat_model
+from app.api import narration
 from app.api.errors import ProblemDetailsError
 from app.api.schemas import ApplicationRightSizingRequest, ClusterRightSizingRequest, ConsolidationAnalysisRequest
 from app.repositories import application_repository, cluster_repository
@@ -36,7 +39,27 @@ def right_size_applications(payload: ApplicationRightSizingRequest):
         apps = application_repository.list_all(limit=200)
     results = [rightsizing.analyze_application_right_sizing(a) for a in apps]
     results = [r for r in results if r is not None]
-    return to_jsonable({"results": results})
+    if not payload.explain:
+        return to_jsonable({"results": results})
+
+    # Only the ones with a finding, and only the first few: "Rightsized" needs
+    # no explanation, and 200 applications is 200 model calls.
+    flagged = [r for r in results if r.classification != "Rightsized"][: narration.MAX_NARRATED]
+    explanations = [
+        e for e in (
+            narration.safely(
+                "explain_application_right_sizing",
+                lambda r=r: explain_application_right_sizing(get_chat_model(), r),
+            )
+            for r in flagged
+        ) if e is not None
+    ]
+    return to_jsonable({
+        "results": results,
+        "explanations": explanations,
+        "explained_count": len(explanations),
+        "unexplained_count": max(0, len(results) - len(flagged)),
+    })
 
 
 @router.post("/api/consolidation/analyze")
