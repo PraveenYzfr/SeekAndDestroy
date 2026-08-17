@@ -1,0 +1,73 @@
+# VM overlay - co-hosted estate. Use ONLY on the shared Azure VM, always with
+# the base file and the `app` profile:
+#
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.vm.yml \
+#     --profile app up -d --build
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The base compose puts sqlserver, db-init, qdrant and redis in the SAME
+# `core` profile as the app. Locally that is right - one command, whole stack.
+# On the shared VM it is a trap: `--profile core` would start a SECOND SQL
+# Server beside the shared one owned by _multi-system-hub/infra. Three systems
+# doing that is three SQL instances on a 16 GB box, each with its own buffer
+# pool, none of them aware of the others. It does not fail loudly - it
+# presents as memory pressure and slow queries.
+#
+# This overlay makes that impossible rather than merely discouraged:
+#   1. the four infra services move to a profile nothing ever activates
+#   2. depends_on is reset, since those services will not exist here
+#   3. hostnames repoint at the shared infra on the external `hub` network
+#
+# There is also a hard interlock underneath: the shared SQL binds
+# 127.0.0.1:14330, so a second instance cannot bind it and would fail at
+# startup rather than run silently. Belt and braces.
+
+services:
+
+  # --- the four services that must NOT run here ------------------------------
+  # `!override` replaces the profile list rather than appending to it - without
+  # it compose merges to ["core","vm-never"] and `--profile core` still starts
+  # them. Nothing ever activates `vm-never`, by design.
+  sqlserver:
+    profiles: !override ["vm-never"]
+  db-init:
+    profiles: !override ["vm-never"]
+  qdrant:
+    profiles: !override ["vm-never"]
+  redis:
+    profiles: !override ["vm-never"]
+
+  # --- B's application, pointed at shared infra ------------------------------
+  ai-service:
+    profiles: !override ["app"]
+    depends_on: !reset []
+    networks: [hub]
+    environment:
+      SAD_DB__SERVER: "${SAD_DB_HOST:-hub-sqlserver}"
+      SAD_RETRIEVAL__QDRANT_URL: "http://hub-qdrant:6333"
+      # db 0-1 is SeekandDestroy's allocation (§10). A owns 2-3, C owns 4-5.
+      SAD_CACHE__REDIS_URL: "redis://hub-redis:6379/0"
+      # Issues a valid token for any known employee number with NO credential
+      # check. Must stay off on anything internet-reachable.
+      SAD_AUTH__ALLOW_DEV_TOKEN: "false"
+    ports: !reset []
+
+  api-gateway:
+    profiles: !override ["app"]
+    depends_on: !reset []
+    networks: [hub]
+    ports: !reset []
+
+  ui:
+    profiles: !override ["app"]
+    depends_on: !reset []
+    networks: [hub]
+    # No published port at all. cloudflared shares the `hub` network and
+    # reaches this container as `ui:80` directly, so B exposes nothing to the
+    # host - not even loopback. The public surface is the tunnel, full stop.
+    ports: !reset []
+
+networks:
+  hub:
+    external: true
