@@ -125,6 +125,15 @@ def issue_dev_token(payload: DevTokenRequest):
     settings = get_settings().auth
     if settings.mode != "local":
         raise ProblemDetailsError(404, "Not found", "Dev-token issuance is disabled outside SAD_AUTH__MODE=local.")
+    if not settings.allow_dev_token:
+        # 404 rather than 403, matching the oidc-mode refusal above: a disabled
+        # back door should not announce that it exists. Logged at warning
+        # because an attempt to use it on a locked-down deployment is worth
+        # seeing.
+        logger.warning("auth.dev_token_denied", employee_number=payload.employee_number)
+        raise ProblemDetailsError(
+            404, "Not found", "Dev-token issuance is disabled (SAD_AUTH__ALLOW_DEV_TOKEN=false)."
+        )
     employee = employee_repository.get_by_number(payload.employee_number)
     if employee is None:
         raise ProblemDetailsError(404, "Employee not found", f"No employee with number {payload.employee_number!r}.")

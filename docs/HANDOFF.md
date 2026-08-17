@@ -1,6 +1,6 @@
 # Handoff — 2026-08-15
 
-State: **279 tests passing** (ai-service) + **14** (MCP server) + **27** (gateway),
+State: **286 tests passing** (ai-service) + **14** (MCP server) + **27** (gateway),
 database consistent, all three tiers verified live.
 
 Work since 2026-08-15 is on branch `feat/conversation-history-and-llm-observability`
@@ -205,13 +205,30 @@ they stand.
    call. The platform knows the classification and does not read it - this is
    the finding an audit review opens with, and it is the same decision already
    blocking the incident-prose work. ~1 day.
-3. **Rate limiting + token accounting.** There is no rate limiting at all, and
-   `SAD_LLM__DAILY_CALL_BUDGET` counts *calls*, not tokens - a 500-token call
-   and a 60,000-token call are identical to it. One user can burn the day's
-   budget in ninety seconds. ~1 day.
-4. **A guard on `POST /api/auth/dev-token`.** Confirmed absent:
-   `SAD_AUTH__ALLOW_DEV_TOKEN` is set in `docker/docker-compose.vm.yml:53` and
-   read by nothing - `allow_dev_token` is not in settings at all. ~half a day.
+3. ~~**A guard on `POST /api/auth/dev-token`.**~~ **Done 2026-08-18.**
+   `SAD_AUTH__ALLOW_DEV_TOKEN` now exists and is read; false returns 404, the
+   same refusal oidc mode gives, because a disabled back door should not
+   announce that it exists. Defaults true so local development is unchanged -
+   and the line that has been sitting in `docker-compose.vm.yml:53` all along
+   now does something.
+4. ~~**Rate limiting.**~~ **Done 2026-08-18.** Per-employee token bucket
+   (`app/api/rate_limit.py`) on `POST /api/investigations` and `/resume` - the
+   two that always spend. 20/minute by default, `SAD_RATELIMIT__LLM_REQUESTS=0`
+   disables it (the test suite does, since it drives the API far faster than a
+   person would). A bucket rather than a fixed window, because a window lets a
+   caller spend one allowance at the end of it and the next at the start of the
+   following one - the burst it was meant to prevent, at twice the size.
+   Verified over HTTP: third request in a capacity-2 window returns 429.
+
+   Deliberately per-process: under N replicas the effective limit is N times
+   the configured rate. That is a stated, bounded overshoot, and the real
+   enforcement point for a public deployment is the gateway in front. It needs
+   no Redis, which is why it landed today rather than being planned.
+
+   **Still open from this item: token accounting.**
+   `SAD_LLM__DAILY_CALL_BUDGET` counts *calls*, not tokens, and
+   a 500-token call and a 60,000-token call are identical to it. Providers
+   return usage on every response and nothing reads it. ~half a day.
 5. **Distributed tracing.** Four model calls across three services per
    investigation, correlated by nothing but a correlation id. ~2 days.
 6. **A golden evaluation set.** `scripts/evaluate.py` grades whatever

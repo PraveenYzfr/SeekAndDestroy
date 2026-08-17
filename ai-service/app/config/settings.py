@@ -313,6 +313,24 @@ class ForecastSettings(_Base):
     supported_horizons: tuple[int, ...] = (30, 60, 90, 180)
 
 
+class RateLimitSettings(_Base):
+    """Per-caller throttle on the endpoints that spend money.
+
+    The daily call budget caps the day's spend; this caps how fast one caller
+    can consume it. Twenty requests a minute is far above human pace and far
+    below what an unattended loop achieves. Set ``llm_requests`` to 0 to
+    disable - which the test suite does, because it drives the API far faster
+    than any person would.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE), env_prefix="SAD_RATELIMIT__", extra="ignore", case_sensitive=False
+    )
+
+    llm_requests: int = 20
+    llm_per_seconds: float = 60.0
+
+
 class AuthSettings(_Base):
     """JWT authentication. ``local`` (default) is a self-contained dev/demo
     mode: this service issues its own HMAC-signed tokens (``POST
@@ -333,6 +351,21 @@ class AuthSettings(_Base):
     )
 
     mode: Literal["local", "oidc"] = "local"
+
+    #: Whether POST /api/auth/dev-token issues tokens at all.
+    #:
+    #: That endpoint mints a valid token for any active employee number with no
+    #: credential check whatsoever - it exists so a developer can drive the API
+    #: without a password, and it is a complete authentication bypass for
+    #: anyone who can reach it. Disabling it required switching the whole
+    #: service to oidc mode, which is not an option for a deployment that uses
+    #: local username/password sign-in and simply wants the back door shut.
+    #:
+    #: Defaults True so local development is unchanged. Set
+    #: SAD_AUTH__ALLOW_DEV_TOKEN=false on anything reachable by anyone else -
+    #: docker/docker-compose.vm.yml already does.
+    allow_dev_token: bool = True
+
     local_signing_key: str = "dev-only-insecure-signing-key-change-me"
     local_token_ttl_minutes: int = 60
     algorithm_local: str = "HS256"
@@ -392,6 +425,7 @@ class Settings:
         self.service = ServiceSettings()
         self.cache = CacheSettings()
         self.auth = AuthSettings()
+        self.rate_limit = RateLimitSettings()
         self.repo_root = REPO_ROOT
 
     @property

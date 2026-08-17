@@ -11,11 +11,18 @@ and `...seed.sql` before running this suite (see docs/setup.md).
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+
+# Off for the suite, set before anything reads settings. These tests drive the
+# API far faster than a person ever would - throttling them would be testing
+# the limiter's arithmetic against the clock, which tests/test_rate_limit.py
+# does directly and without the wait.
+os.environ.setdefault("SAD_RATELIMIT__LLM_REQUESTS", "0")
 
 import pytest
 
