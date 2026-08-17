@@ -181,6 +181,56 @@ answer.
 Full nine-scope assessment, with effort and dependency order:
 https://claude.ai/code/artifact/d175bd78-a786-4390-88e9-accf633a8724
 
+### 1c. Enterprise-readiness — merged priority (2026-08-18)
+Two independent assessments, reconciled. Every claim below was verified against
+the code, including the ones that turned out to be wrong.
+
+Rated **B- / ~7.2 of 10**: ahead of most enterprise AI where these systems are
+usually weak (a deterministic engine owns every number; the model narrates),
+and behind where they are usually adequate (governance, cost, scale). The hard
+half is done; the operational half is the cheaper one.
+
+Do these in order. The first four are ceilings - nothing else counts while
+they stand.
+
+1. **`SqliteSaver` -> a SQL Server checkpointer** (`graph.py:117`). Checkpoints
+   are pod-local, so a graph paused for review is only resumable on the replica
+   that started it. This is a persistence rewrite, not a config change: a wall,
+   not a weakness. ~2-3 days.
+2. **Classification-aware model routing.** `DataClassification` /
+   `ComplianceClassification` drive eligibility rules and are embedded into the
+   vector documents, and are consulted *nowhere* on the path to a model
+   provider. No redaction anywhere in `app/`. A Restricted application's
+   metadata goes to DeepSeek and now sits in `AgentAuditLog` at up to 64 KB a
+   call. The platform knows the classification and does not read it - this is
+   the finding an audit review opens with, and it is the same decision already
+   blocking the incident-prose work. ~1 day.
+3. **Rate limiting + token accounting.** There is no rate limiting at all, and
+   `SAD_LLM__DAILY_CALL_BUDGET` counts *calls*, not tokens - a 500-token call
+   and a 60,000-token call are identical to it. One user can burn the day's
+   budget in ninety seconds. ~1 day.
+4. **A guard on `POST /api/auth/dev-token`.** Confirmed absent:
+   `SAD_AUTH__ALLOW_DEV_TOKEN` is set in `docker/docker-compose.vm.yml:53` and
+   read by nothing - `allow_dev_token` is not in settings at all. ~half a day.
+5. **Distributed tracing.** Four model calls across three services per
+   investigation, correlated by nothing but a correlation id. ~2 days.
+6. **A golden evaluation set.** `scripts/evaluate.py` grades whatever
+   production happened to run, so two models cannot be compared unless both
+   happened to do the same work. Fixed investigations x N providers, scored on
+   extraction accuracy, drift-guard survival, latency and cost. ~1 week.
+
+Then: load testing (0 files today, and the ceiling is predictable without it -
+**every route is sync**, so a 17.6s p95 model call holds a threadpool worker
+for 17.6s), degraded-path tests (nobody has verified what happens when all four
+providers are down, or Qdrant is unreachable), a restore drill actually run,
+retention policy on conversation history and audit rows, SLOs on the metrics
+already emitted, and a runbook.
+
+One correction worth keeping: the drift guard is **not** a 5/5. It inspects
+structured numeric fields only, so every figure the model writes inside a
+sentence is unchecked - and the grounded-question path now quotes scores in
+prose. Calling it perfect is how it stays unfixed.
+
 ### 2. Host sizing is unrealistic (diagnosed, reverted once)
 A "host" is 6-12 cores; real kit is 64-128 cores and 512 GB-2 TB.
 
