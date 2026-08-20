@@ -151,6 +151,11 @@ def _fingerprinted_collection_name(base_collection: str, fingerprint: str) -> st
     return f"{base_collection}__{suffix}"
 
 
+#: Points per Qdrant upsert call. 256 at 3072 dimensions is ~9 MB, well
+#: inside Qdrant 32 MiB request cap.
+_UPSERT_BATCH = 256
+
+
 class QdrantVectorStore:
     def __init__(
         self, embedder: Embeddings, url: str, api_key: str, collection: str, dimensions: int, fingerprint: str = ""
@@ -161,6 +166,7 @@ class QdrantVectorStore:
         self._embedder = embedder
         self._collection = _fingerprinted_collection_name(collection, fingerprint) if fingerprint else collection
         self._client = QdrantClient(url=url, api_key=api_key or None)
+        self._dimensions = dimensions
         existing = [c.name for c in self._client.get_collections().collections]
         if self._collection not in existing:
             stale = [c for c in existing if c == collection or c.startswith(f"{collection}__")]
@@ -169,10 +175,15 @@ class QdrantVectorStore:
                     "vector_store.qdrant_fingerprint_changed_new_collection",
                     old_collections=stale, new_collection=self._collection,
                 )
-            self._client.create_collection(
-                collection_name=self._collection,
-                vectors_config=VectorParams(size=dimensions, distance=Distance.COSINE),
-            )
+            self._ensure_collection()
+
+    def _ensure_collection(self) -> None:
+        from qdrant_client.models import Distance, VectorParams
+
+        self._client.create_collection(
+            collection_name=self._collection,
+            vectors_config=VectorParams(size=self._dimensions, distance=Distance.COSINE),
+        )
 
     @staticmethod
     def _point_id(doc_id: str) -> int:
@@ -194,7 +205,23 @@ class QdrantVectorStore:
             )
             for doc, vec in zip(documents, vectors)
         ]
-        self._client.upsert(collection_name=self._collection, points=points)
+        # Qdrant rejects any request body over 32 MiB, and a full reindex used
+        # to send every point in one call. That is invisible with the default
+        # `hash` embedder - 384 floats a point keeps the whole corpus well
+        # under the limit - and fatal with real Gemini embeddings at 3072
+        # dimensions, where the same corpus serialised to 96 MB and the rebuild
+        # died with "JSON payload is larger than allowed". Worse, the failure
+        # landed after the collection had been recreated, so the service was
+        # left reporting not_ready with no collection at all.
+        #
+        # Chunking by point count rather than measured bytes keeps this simple
+        # and predictable: 256 points is ~9 MB at 3072 dimensions, comfortably
+        # inside the limit with room for larger payload text.
+        for start in range(0, len(points), _UPSERT_BATCH):
+            self._client.upsert(
+                collection_name=self._collection,
+                points=points[start : start + _UPSERT_BATCH],
+            )
 
     def delete(self, ids: list[str]) -> None:
         self._client.delete(collection_name=self._collection, points_selector=[self._point_id(i) for i in ids])
@@ -234,7 +261,17 @@ class QdrantVectorStore:
         return results
 
     def clear(self) -> None:
+        # Delete AND recreate. Deleting alone leaves this store pointing at a
+        # collection that no longer exists, and the collection was only ever
+        # created in __init__ - so every subsequent call 404s.
+        #
+        # index_all() clears before reindexing, which made a full rebuild
+        # self-destructive: it destroyed the index, then failed to write the
+        # new one, and left /api/ready reporting the vector store as an error
+        # with no collection at all. The in-memory backend hides this, because
+        # its clear() just empties two dicts and the store stays usable.
         self._client.delete_collection(self._collection)
+        self._ensure_collection()
 
     def count(self) -> int:
         return self._client.count(self._collection).count

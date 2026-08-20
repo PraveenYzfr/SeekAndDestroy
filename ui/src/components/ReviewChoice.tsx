@@ -75,11 +75,17 @@ export default function ReviewChoice({
   payload,
   investigationId,
   busy,
+  decided,
   onDecide,
 }: {
   payload: NonNullable<RunInvestigationResult["review_payload"]>;
   investigationId: number;
   busy: boolean;
+  /** True once this investigation has a decision. The parent normally swaps
+   *  this panel for a summary, but a resume that returns AwaitingReview again
+   *  re-renders it - and live buttons on a decided investigation are worse
+   *  than a disabled panel. */
+  decided?: boolean;
   onDecide: (id: number, decision: "Approve" | "Reject", cluster?: string, host?: string) => void;
 }) {
   const options: ReviewOption[] = payload.options ?? [];
@@ -106,10 +112,10 @@ export default function ReviewChoice({
         <p>{payload.message}</p>
         <p>{payload.top_candidates.join(", ")}</p>
         <div className="chat-review-actions">
-          <button disabled={busy} onClick={() => onDecide(investigationId, "Approve")}>
+          <button disabled={busy || decided} onClick={() => onDecide(investigationId, "Approve")}>
             Approve
           </button>
-          <button className="danger" disabled={busy} onClick={() => onDecide(investigationId, "Reject")}>
+          <button className="danger" disabled={busy || decided} onClick={() => onDecide(investigationId, "Reject")}>
             Reject
           </button>
         </div>
@@ -207,12 +213,12 @@ export default function ReviewChoice({
             after a decision (the thread keeps its history), so without this a
             second click re-resumes an already-decided investigation. */}
         <button
-          disabled={busy || !cluster}
+          disabled={busy || decided || !cluster}
           onClick={() => onDecide(investigationId, "Approve", cluster, host)}
         >
           {cluster ? `Approve ${cluster}${host ? ` / ${host}` : ""}` : "Approve"}
         </button>
-        <button className="danger" disabled={busy} onClick={() => onDecide(investigationId, "Reject")}>
+        <button className="danger" disabled={busy || decided} onClick={() => onDecide(investigationId, "Reject")}>
           Reject all
         </button>
       </div>

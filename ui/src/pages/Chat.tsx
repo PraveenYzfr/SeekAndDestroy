@@ -155,6 +155,13 @@ export default function Chat() {
     selectedClusterCode?: string,
     selectedHostName?: string,
   ) {
+    // An investigation is decided once. Marking the bubble as decided closes
+    // its controls, but that is presentation - it does not stop a second call
+    // reaching the API. A stale panel, a double click, or a resume that comes
+    // back AwaitingReview again all produce live buttons for an investigation
+    // that already has a decision recorded against it.
+    if (messages.some((m) => m.investigationId === investigationId && m.decided)) return;
+
     setBusy(true);
     const followUpId = newId();
     // Close the review bubble first: it stays in the thread as history, and
@@ -375,6 +382,7 @@ function ChatBubble({
               payload={message.reviewPayload}
               investigationId={message.investigationId}
               busy={busy}
+              decided={Boolean(message.decided)}
               onDecide={onDecide}
             />
           )
