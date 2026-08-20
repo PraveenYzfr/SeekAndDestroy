@@ -56,16 +56,31 @@ services:
       # anyone who can read the repo could otherwise forge a token for any
       # employee. Generate one and put it in the host's .env - never here:
       #   python -c "import secrets; print(secrets.token_urlsafe(48))"
-      SAD_AUTH__LOCAL_SIGNING_KEY: "${SAD_AUTH_SIGNING_KEY:?set SAD_AUTH_SIGNING_KEY in the host .env}"
-      # Whoever the tunnel serves the UI from. The default is localhost only,
-      # so a hosted front end that is not named here is refused by the browser.
-      SAD_CORS__ORIGINS: "${SAD_PUBLIC_ORIGIN:?set SAD_PUBLIC_ORIGIN, e.g. https://sad.praveenyzfr.com}"
+      #
+      # SAD_AUTH_LOCAL_SIGNING_KEY is the name the BASE compose already feeds
+      # to both this service and api-gateway. Inventing a second variable here
+      # would key the two services differently: the AI service would sign with
+      # the new secret while the gateway kept validating with the published
+      # default, and every authenticated request through the gateway would be
+      # rejected. One secret, one name, both services.
+      SAD_AUTH__LOCAL_SIGNING_KEY: "${SAD_AUTH_LOCAL_SIGNING_KEY:?generate one and set it in the host .env - see the comment above}"
+      # Only matters if this service is ever exposed to a browser directly. It
+      # is not today: nginx in the ui container serves the app and proxies
+      # /api/ to the gateway, so every browser request is same-origin and CORS
+      # never engages. Set it if that topology changes.
+      SAD_CORS__ORIGINS: "${SAD_PUBLIC_ORIGIN:-http://127.0.0.1:5173,http://localhost:5173}"
     ports: !reset []
 
   api-gateway:
     profiles: !override ["app"]
     depends_on: !reset []
     networks: [hub]
+    environment:
+      # Must be byte-identical to the AI service's key above - the gateway
+      # validates the tokens that service issues. The base compose defaults
+      # this to the published dev key; here it is required, so a deployment
+      # cannot come up half-secured with the two halves disagreeing.
+      Auth__LocalSigningKey: "${SAD_AUTH_LOCAL_SIGNING_KEY:?generate one and set it in the host .env}"
     ports: !reset []
 
   ui:
