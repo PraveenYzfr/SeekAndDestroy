@@ -72,8 +72,7 @@ export default function Login({ onSignedIn }: { onSignedIn: () => void }) {
       </form>
 
       <p className="stat-label" style={{ textAlign: "center" }}>
-        No password yet? An administrator sets one with{" "}
-        <code>scripts/set_password.py</code>.
+        Trouble signing in? Contact your administrator.
       </p>
     </div>
   );
