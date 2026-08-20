@@ -137,7 +137,6 @@ def summarize_tradeoffs(llm: BaseChatModel, title: str, candidates: list[Candida
                 "cluster_code": c.cluster_code,
                 "eligibility_status": c.eligibility_status,
                 "overall_score": float(c.overall_score) if c.overall_score is not None else None,
-                "estimated_monthly_cost": float(c.estimated_monthly_cost) if c.estimated_monthly_cost is not None else None,
             }
             for c in candidates
         ],
@@ -147,8 +146,13 @@ def summarize_tradeoffs(llm: BaseChatModel, title: str, candidates: list[Candida
 
 
 def answer_grounded_question(llm: BaseChatModel, question: str, retrieved_context: list[dict]) -> GroundedAnswer:
-    evidence = {"question": question, "retrieved_context": retrieved_context}
-    human = with_evidence(f"Answer this question using only the retrieved context: {question}", evidence)
+    # The evidence keys are part of the prompt the model reads, so they are
+    # named for the domain rather than for the retrieval machinery. Calling
+    # this "retrieved_context" is how answers ended up saying "the retrieved
+    # context contains no Java-specific information" - the model was echoing
+    # our vocabulary back at an engineer who does not care how we found it.
+    evidence = {"question": question, "records_from_the_estate": retrieved_context}
+    human = with_evidence(f"Answer this question using only the evidence: {question}", evidence)
     return run_structured(llm, GROUNDED_QA_SYSTEM, human, GroundedAnswer)
 
 

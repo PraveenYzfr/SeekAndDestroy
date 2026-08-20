@@ -57,8 +57,7 @@ def cluster_document(
         )
     text += (
         f"The cluster supports {cluster.AvailabilityTier} availability and "
-        f"{cluster.ComplianceClassification} data. Lifecycle status: {cluster.LifecycleStatus}. "
-        f"Monthly cost: {cluster.MonthlyCost}."
+        f"{cluster.ComplianceClassification} data. Lifecycle status: {cluster.LifecycleStatus}."
     )
     return RetrievalDocument(
         id=f"cluster:{cluster.ClusterId}", text=text, entity_type=EntityKind.CLUSTER,
@@ -69,11 +68,16 @@ def cluster_document(
     )
 
 
+# Cost is deliberately absent from every document below. MonthlyCost stays in
+# the database, but anything written here is embedded into the vector store
+# and handed back to the model as evidence - which is how narration ended up
+# ranking clusters by "highest monthly cost" when cost is not the question
+# this platform answers. Capacity, utilization and eligibility are.
 def node_document(node: ClusterNode, cluster_code: str) -> RetrievalDocument:
     text = (
         f"Node {node.HostName} ({node.IpAddress}) belongs to cluster {cluster_code}. "
         f"It has {node.CpuCores} CPU cores, {node.MemoryGb} GB memory and {node.StorageGb} GB storage. "
-        f"Lifecycle status: {node.LifecycleStatus}. Monthly cost: {node.MonthlyCost}."
+        f"Lifecycle status: {node.LifecycleStatus}."
     )
     return RetrievalDocument(
         id=f"node:{node.NodeId}", text=text, entity_type=EntityKind.NODE, entity_id=node.NodeId,

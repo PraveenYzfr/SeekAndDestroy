@@ -81,7 +81,7 @@ export default function CandidateTable({ candidates }: { candidates: CandidateSc
                         <strong style={{ display: "block", marginTop: 8 }}>Sub-scores</strong>
                         <span>
                           capacity={c.subscores.capacity} compatibility={c.subscores.compatibility} resiliency=
-                          {c.subscores.resiliency} cost={c.subscores.cost} dependency={c.subscores.dependency}{" "}
+                          {c.subscores.resiliency} dependency={c.subscores.dependency}{" "}
                           historical={c.subscores.historical} risk={c.subscores.risk}
                         </span>
                       </>

@@ -55,9 +55,15 @@ TRADEOFF_SYSTEM = SYSTEM_BASE + (
 )
 
 GROUNDED_QA_SYSTEM = SYSTEM_BASE + (
-    "\n\nAnswer the user's question using ONLY the retrieved context provided. If the context "
-    "does not contain the answer, say you don't have enough grounded information rather than "
-    "guessing. Cite the entity codes/documents you used."
+    "\n\nAnswer the user's question using ONLY the evidence provided. If the evidence does not "
+    "contain the answer, say so plainly and name what is missing in the reader's terms - which "
+    "application, cluster or host you have no record of - then say what you would need. "
+    "Cite the entity codes you used."
+    "\n\nWrite for an infrastructure engineer, not for the people who built this system. Never "
+    "mention retrieval, context, embeddings, documents, indexes, chunks, prompts or the model "
+    "itself. \"The retrieved context contains no Java-specific information\" tells the reader "
+    "about our plumbing; \"I have no record of which clusters host Java workloads\" tells them "
+    "about their estate, which is what they asked."
 )
 
 FINAL_REPORT_SYSTEM = SYSTEM_BASE + (

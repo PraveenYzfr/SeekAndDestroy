@@ -30,7 +30,6 @@ export default function ApplicationPlacement() {
   }
 
   const alternatives = (candidates ?? []).filter((c) => c.eligibility_status === "Eligible").slice(0, 5);
-  const bestCost = alternatives.length ? Math.min(...alternatives.map((c) => c.estimated_monthly_cost ?? Infinity)) : null;
 
   return (
     <>
@@ -64,19 +63,13 @@ export default function ApplicationPlacement() {
           <strong>Top eligible alternatives</strong>
           <table style={{ marginTop: 10 }}>
             <thead>
-              <tr><th>Cluster</th><th>Score</th><th>Monthly Cost</th><th>Headroom %</th><th></th></tr>
+              <tr><th>Cluster</th><th>Score</th><th>Headroom %</th><th></th></tr>
             </thead>
             <tbody>
               {alternatives.map((c) => (
                 <tr key={c.cluster_code}>
                   <td>{c.cluster_code}</td>
                   <td>{c.overall_score}</td>
-                  <td>
-                    ${c.estimated_monthly_cost?.toLocaleString()}
-                    {bestCost != null && c.estimated_monthly_cost === bestCost && (
-                      <span style={{ color: "var(--green)", marginLeft: 6, fontSize: 11 }}>lowest cost</span>
-                    )}
-                  </td>
                   <td>{c.projected?.projected_headroom_percent}%</td>
                   <td>
                     <button className="secondary" disabled>Request migration (out of scope - recommendations only)</button>
