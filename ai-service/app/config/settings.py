@@ -313,6 +313,42 @@ class ForecastSettings(_Base):
     supported_horizons: tuple[int, ...] = (30, 60, 90, 180)
 
 
+#: Named so the default and the check that rejects it cannot drift apart.
+_PUBLISHED_DEV_SIGNING_KEY = "dev-only-insecure-signing-key-change-me"
+
+
+class CorsSettings(_Base):
+    """Which origins a browser may call this service from.
+
+    It was ``allow_origins=["*"]`` with ``allow_credentials=True``, which is
+    both unsafe and not actually legal: browsers refuse to send credentials to
+    a wildcard origin, so the permissive-looking setting was buying nothing
+    while reading as "anyone may call this with a token".
+
+    The default is the local dev origins, so development is unchanged and a
+    deployment has to say who its front end is. Setting ``origins`` to ``*``
+    still works and drops credentials, which is the only honest reading of a
+    wildcard.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE), env_prefix="SAD_CORS__", extra="ignore", case_sensitive=False
+    )
+
+    origins: str = (
+        "http://127.0.0.1:5173,http://localhost:5173,"
+        "http://127.0.0.1:5090,http://localhost:5090"
+    )
+
+    @property
+    def origin_list(self) -> list[str]:
+        return [o.strip() for o in self.origins.split(",") if o.strip()]
+
+    @property
+    def is_wildcard(self) -> bool:
+        return self.origin_list == ["*"]
+
+
 class RateLimitSettings(_Base):
     """Per-caller throttle on the endpoints that spend money.
 
@@ -366,12 +402,45 @@ class AuthSettings(_Base):
     #: docker/docker-compose.vm.yml already does.
     allow_dev_token: bool = True
 
-    local_signing_key: str = "dev-only-insecure-signing-key-change-me"
+    #: The HMAC secret that makes a token authentic. The default below is
+    #: committed to this repository, so anyone who can read the repo can forge
+    #: a token for any employee id - including one that approves
+    #: recommendations. It is fine for local development and catastrophic
+    #: anywhere else, which is exactly the kind of default that ships by
+    #: accident. See the validator at the bottom of this class.
+    local_signing_key: str = _PUBLISHED_DEV_SIGNING_KEY
     local_token_ttl_minutes: int = 60
     algorithm_local: str = "HS256"
     oidc_authority: str = ""
     oidc_audience: str = ""
     oidc_jwks_url: str = ""  # optional override; derived from oidc_authority if blank
+
+    @model_validator(mode="after")
+    def _refuse_a_published_secret_on_a_locked_down_deployment(self) -> "AuthSettings":
+        """A deployment that has switched the dev-token back door off is not a
+        development deployment, and must not be signing tokens with the key
+        printed in this repository.
+
+        Tied to ``allow_dev_token`` rather than a new "is production" flag
+        because there is no legitimate configuration that disables the back
+        door and keeps the public key - and a knob nobody sets protects
+        nobody. Local development sets neither and is unaffected.
+        """
+        if self.mode != "local" or self.allow_dev_token:
+            return self
+        if self.local_signing_key == _PUBLISHED_DEV_SIGNING_KEY:
+            raise ValueError(
+                "SAD_AUTH__LOCAL_SIGNING_KEY is still the default published in this repository, "
+                "and SAD_AUTH__ALLOW_DEV_TOKEN=false says this deployment is not a development one. "
+                "Anyone who can read the repo could forge a token for any employee. "
+                "Set SAD_AUTH__LOCAL_SIGNING_KEY to a secret of at least 32 characters."
+            )
+        if len(self.local_signing_key) < 32:
+            raise ValueError(
+                f"SAD_AUTH__LOCAL_SIGNING_KEY is {len(self.local_signing_key)} characters. "
+                "HS256 needs at least 32 to be worth signing with (RFC 7518 3.2)."
+            )
+        return self
 
 
 class CacheSettings(_Base):
@@ -426,6 +495,7 @@ class Settings:
         self.cache = CacheSettings()
         self.auth = AuthSettings()
         self.rate_limit = RateLimitSettings()
+        self.cors = CorsSettings()
         self.repo_root = REPO_ROOT
 
     @property

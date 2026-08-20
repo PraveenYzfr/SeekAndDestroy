@@ -51,6 +51,15 @@ services:
       # Issues a valid token for any known employee number with NO credential
       # check. Must stay off on anything internet-reachable.
       SAD_AUTH__ALLOW_DEV_TOKEN: "false"
+      # Required, not optional: with ALLOW_DEV_TOKEN=false the service refuses
+      # to start on the signing key committed to this repository, because
+      # anyone who can read the repo could otherwise forge a token for any
+      # employee. Generate one and put it in the host's .env - never here:
+      #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+      SAD_AUTH__LOCAL_SIGNING_KEY: "${SAD_AUTH_SIGNING_KEY:?set SAD_AUTH_SIGNING_KEY in the host .env}"
+      # Whoever the tunnel serves the UI from. The default is localhost only,
+      # so a hosted front end that is not named here is refused by the browser.
+      SAD_CORS__ORIGINS: "${SAD_PUBLIC_ORIGIN:?set SAD_PUBLIC_ORIGIN, e.g. https://sad.praveenyzfr.com}"
     ports: !reset []
 
   api-gateway:

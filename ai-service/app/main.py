@@ -43,8 +43,16 @@ app = FastAPI(
     version="1.0.0",
 )
 
+_cors = get_settings().cors
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=_cors.origin_list,
+    # A wildcard origin and credentials are mutually exclusive by spec, and
+    # browsers enforce it - claiming both meant the header was ignored while
+    # the config read as "anybody, authenticated". Say which one you mean.
+    allow_credentials=not _cors.is_wildcard,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

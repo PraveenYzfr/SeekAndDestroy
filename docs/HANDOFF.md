@@ -265,10 +265,31 @@ too few hosts) depends on exact demand-to-capacity ratios. Treat it as one
 focused piece of work with the test suite as the check.
 
 ### 3. Before anything is internet-reachable
-- `POST /api/auth/dev-token` issues a valid token with **no credential check**.
-  Needs a flag to disable it independently of OIDC mode.
-- `SAD_AUTH__LOCAL_SIGNING_KEY` still defaults to a value published in this repo.
-- No TLS. Cloudflare Tunnel + `praveenyzfr.com` was the agreed approach.
+- ~~`POST /api/auth/dev-token` issues a valid token with no credential check.~~
+  **Done** - `SAD_AUTH__ALLOW_DEV_TOKEN=false` shuts it, returning 404.
+- ~~`SAD_AUTH__LOCAL_SIGNING_KEY` defaults to a value published in this repo.~~
+  **Done** - the service now *refuses to start* on the published key whenever
+  `ALLOW_DEV_TOKEN=false`, and rejects any key under 32 characters. Tied to
+  that flag rather than a new "is production" switch because no legitimate
+  configuration disables the back door and keeps the public key, and a knob
+  nobody sets protects nobody. Local development sets neither and is
+  unaffected.
+- ~~CORS was `allow_origins=["*"]` with `allow_credentials=True`~~ - unsafe,
+  and not even legal: browsers refuse credentials to a wildcard origin, so it
+  read as "anyone, authenticated" while buying nothing. Now
+  `SAD_CORS__ORIGINS`, defaulting to the local dev origins; a wildcard is
+  still allowed and drops credentials, which is the only honest reading of it.
+- `docker/docker-compose.vm.yml` now **demands** `SAD_AUTH_SIGNING_KEY` and
+  `SAD_PUBLIC_ORIGIN` from the host `.env` - compose fails rather than starting
+  something insecure.
+- **Still open:** no TLS. Cloudflare Tunnel + `praveenyzfr.com` was the agreed
+  approach and terminates TLS for you.
+- **Still open before real data:** every prompt goes to DeepSeek unredacted and
+  is stored in `AgentAuditLog`, and `DataClassification` is never consulted on
+  that path (item 1c #2). Irrelevant while the estate is generated seed data;
+  a blocker the moment any of it is real.
+- **Still open:** only `/api/investigations` and `/resume` are rate limited.
+  The `explain=true` paths spend too and are not throttled.
 
 ### 4. Multi-replica (AKS/OCP only)
 LangGraph checkpoints go to pod-local SQLite, so a graph paused for human review
