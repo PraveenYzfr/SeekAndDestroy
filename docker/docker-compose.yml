@@ -151,7 +151,22 @@ services:
       SAD_DB__INTEGRATED_SECURITY: "false" # container has no Windows identity - see docs/setup.md
       SAD_DB__USERNAME: "${SAD_DB_USERNAME:-sad_app}"
       SAD_DB__PASSWORD: "${SAD_DB_PASSWORD:-}"
-      SAD_LLM__PROVIDER: "mock"
+      # NO DEFAULT, deliberately. This used to read `"mock"`, which meant a
+      # local stack silently narrated from a canned model while looking
+      # identical to production - and the VM nearly shipped that way, passing
+      # every health check. Three of the bugs found during the first real
+      # deployment were unreachable locally purely because local defaults
+      # differed from the VM's.
+      #
+      # Set SAD_LLM_PROVIDER=mock explicitly if you want the mock. An
+      # unset value now stops the stack instead of quietly changing what it is.
+      SAD_LLM__PROVIDER: "${SAD_LLM_PROVIDER:?set SAD_LLM_PROVIDER in docker/.env - see docker/.env.example}"
+      SAD_LLM__MODEL: "${SAD_LLM_MODEL:-}"
+      SAD_LLM__API_KEY: "${SAD_LLM_API_KEY:-}"
+      SAD_LLM__BASE_URL: "${SAD_LLM_BASE_URL:-}"
+      SAD_LLM__PROVIDER_LABEL: "${SAD_LLM_PROVIDER_LABEL:-}"
+      SAD_LLM__MAX_OUTPUT_TOKENS: "${SAD_LLM_MAX_OUTPUT_TOKENS:-8192}"
+      SAD_LLM__DAILY_CALL_BUDGET: "${SAD_LLM_DAILY_CALL_BUDGET:-100}"
       SAD_RETRIEVAL__BACKEND: "qdrant"
       SAD_RETRIEVAL__QDRANT_URL: "http://qdrant:6333"
       SAD_RETRIEVAL__QDRANT_API_KEY: "${SAD_QDRANT_API_KEY:-}"
@@ -159,10 +174,14 @@ services:
       # the image (see .dockerignore), so a real provider's key must be
       # injected at deploy time rather than baked into a layer. Left unset,
       # the service falls back to the offline hash embedder.
-      SAD_RETRIEVAL__EMBEDDING_PROVIDER: "${SAD_EMBEDDING_PROVIDER:-hash}"
-      SAD_RETRIEVAL__EMBEDDING_MODEL: "${SAD_EMBEDDING_MODEL:-}"
+      # Defaults match production. hash/384 was the old local default and it
+      # hid a real bug: a full reindex at 3072 dimensions serialises to 96 MB
+      # and exceeds Qdrant's 32 MiB request cap, which 384-dimension vectors
+      # never approach. That failure was structurally unreachable locally.
+      SAD_RETRIEVAL__EMBEDDING_PROVIDER: "${SAD_EMBEDDING_PROVIDER:-gemini}"
+      SAD_RETRIEVAL__EMBEDDING_MODEL: "${SAD_EMBEDDING_MODEL:-gemini-embedding-001}"
       SAD_RETRIEVAL__EMBEDDING_API_KEY: "${SAD_EMBEDDING_API_KEY:-}"
-      SAD_RETRIEVAL__EMBEDDING_DIMENSIONS: "${SAD_EMBEDDING_DIMENSIONS:-384}"
+      SAD_RETRIEVAL__EMBEDDING_DIMENSIONS: "${SAD_EMBEDDING_DIMENSIONS:-3072}"
       SAD_CACHE__BACKEND: "redis"
       SAD_CACHE__REDIS_URL: "redis://redis:6379/0"
       # local mode default - CHANGE SAD_AUTH__LOCAL_SIGNING_KEY (both here and on

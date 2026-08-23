@@ -69,27 +69,12 @@ services:
       # /api/ to the gateway, so every browser request is same-origin and CORS
       # never engages. Set it if that topology changes.
       SAD_CORS__ORIGINS: "${SAD_PUBLIC_ORIGIN:-http://127.0.0.1:5173,http://localhost:5173}"
-      # The BASE compose hardcodes SAD_LLM__PROVIDER: "mock". That is correct
-      # for a laptop with no keys, and wrong for the VM - deploying as-is would
-      # ship a platform whose narration comes from a canned model rather than a
-      # real one, while looking identical from the outside. Overridden here,
-      # with the values in the host's docker/.env so no key reaches this file.
-      SAD_LLM__PROVIDER: "${SAD_LLM_PROVIDER:?set SAD_LLM_PROVIDER in docker/.env on the VM}"
-      SAD_LLM__MODEL: "${SAD_LLM_MODEL:?set SAD_LLM_MODEL in docker/.env on the VM}"
-      SAD_LLM__API_KEY: "${SAD_LLM_API_KEY:?set SAD_LLM_API_KEY in docker/.env on the VM}"
-      # A hard stop on spend rather than an alert - Google and Azure budgets
-      # only notify, so this is the actual ceiling.
-      SAD_LLM__DAILY_CALL_BUDGET: "${SAD_LLM_DAILY_CALL_BUDGET:-100}"
-      # DeepSeek V4 models reason before answering. The 2048 default is spent
-      # entirely on reasoning, so the API returns 200 with EMPTY content and
-      # finish_reason=length - which reads like a broken model, not a budget.
-      SAD_LLM__MAX_OUTPUT_TOKENS: "${SAD_LLM_MAX_OUTPUT_TOKENS:-8192}"
-      # Any OpenAI-compatible endpoint - Groq, Together, Fireworks - runs
-      # through provider=openai with a custom base_url. PROVIDER_LABEL keeps
-      # its metrics and cache key attributed to the real vendor instead of
-      # filing four providers under "openai".
-      SAD_LLM__BASE_URL: "${SAD_LLM_BASE_URL:-}"
-      SAD_LLM__PROVIDER_LABEL: "${SAD_LLM_PROVIDER_LABEL:-}"
+      # No LLM overrides here any more. The base compose used to hardcode
+      # SAD_LLM__PROVIDER: "mock", so the VM had to override it; that meant two
+      # places defining the same thing, which is how they drift. The base now
+      # reads the same variables from docker/.env and refuses to start without
+      # a provider, so local and VM are configured identically and differ only
+      # in the values in their own .env.
     ports: !reset []
 
   api-gateway:
