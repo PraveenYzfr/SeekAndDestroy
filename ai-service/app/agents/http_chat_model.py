@@ -12,12 +12,13 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import httpx
-from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from app.utils.http_retry import request_with_retry
+from app.utils.http_retry import arequest_with_retry, request_with_retry
+
 
 class EmptyCompletionError(RuntimeError):
     """The provider answered 200 with no usable text. Distinct from a transport
@@ -47,6 +48,10 @@ class HttpChatModel(BaseChatModel):
     extra_headers: dict = {}
     provider_name: str = "unknown"  # metrics label only (see app.observability.metrics) - not sent on the wire
     transport: Optional[httpx.BaseTransport] = None  # test-only hook (httpx.MockTransport); None uses real networking
+    # Separate async hook: httpx.MockTransport is sync-only and AsyncClient
+    # requires an AsyncBaseTransport, so one field cannot serve both. Tests
+    # that exercise the async path pass httpx.MockTransport's async twin here.
+    async_transport: Optional[httpx.AsyncBaseTransport] = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -54,15 +59,15 @@ class HttpChatModel(BaseChatModel):
     def _llm_type(self) -> str:
         return "seekanddestroy-http-openai-compatible"
 
-    def _generate(
-        self,
-        messages: list[BaseMessage],
-        stop: Optional[list[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> ChatResult:
+    # --- shared between the sync and async paths -----------------------------
+    # Split out deliberately. The only real difference between _generate and
+    # _agenerate is which httpx client makes the call; duplicating the budget
+    # check, the payload shape, the empty-content detection and the usage
+    # accounting would mean two places to fix every future provider quirk, and
+    # they would drift.
+
+    def _prepare(self, messages: list[BaseMessage], stop: Optional[list[str]]):
         from app.config import get_settings
-        from app.observability.metrics import llm_calls_total, llm_tokens_total
         from app.services.spend_budget import check_and_increment
 
         check_and_increment("llm_chat", get_settings().llm.daily_call_budget)
@@ -78,14 +83,11 @@ class HttpChatModel(BaseChatModel):
         }
         if stop:
             payload["stop"] = stop
-        url = self.base_url.rstrip("/") + "/chat/completions"
-        try:
-            with httpx.Client(timeout=self.timeout_seconds, transport=self.transport) as client:
-                response = request_with_retry(lambda: client.post(url, headers=headers, json=payload))
-            data = response.json()
-        except Exception:
-            llm_calls_total.labels(provider=self.provider_name, outcome="error").inc()
-            raise
+        return self.base_url.rstrip("/") + "/chat/completions", headers, payload
+
+    def _result_from(self, data: dict) -> ChatResult:
+        from app.observability.metrics import llm_calls_total, llm_tokens_total
+
         choice = data["choices"][0]
         content = (choice["message"].get("content") or "").strip()
         if not content:
@@ -104,11 +106,10 @@ class HttpChatModel(BaseChatModel):
                 + ")"
             )
         llm_calls_total.labels(provider=self.provider_name, outcome="success").inc()
-        # Every OpenAI-compatible provider returns token counts and we threw
-        # them away. Without them there is no per-call cost, and a platform
-        # whose purpose is comparing providers cannot answer "what did that
-        # cost" for any of them. Carried on llm_output, which is where
-        # LangChain expects run-level metadata.
+        # Every OpenAI-compatible provider returns token counts and we used to
+        # throw them away. Without them there is no per-call cost, and a
+        # platform whose purpose is comparing providers cannot answer "what did
+        # that cost" for any of them.
         usage = data.get("usage") or {}
         llm_tokens_total.labels(provider=self.provider_name, kind="prompt").inc(
             usage.get("prompt_tokens") or 0)
@@ -129,3 +130,51 @@ class HttpChatModel(BaseChatModel):
             generations=[ChatGeneration(message=AIMessage(content=content, response_metadata=meta))],
             llm_output=meta,
         )
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        from app.observability.metrics import llm_calls_total
+
+        url, headers, payload = self._prepare(messages, stop)
+        try:
+            with httpx.Client(timeout=self.timeout_seconds, transport=self.transport) as client:
+                response = request_with_retry(lambda: client.post(url, headers=headers, json=payload))
+            data = response.json()
+        except Exception:
+            llm_calls_total.labels(provider=self.provider_name, outcome="error").inc()
+            raise
+        return self._result_from(data)
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """The path that actually matters under load.
+
+        An investigation makes several of these back to back, each waiting
+        seconds on a provider. Sync, that wait holds a worker thread doing
+        nothing; async, the event loop serves other requests meanwhile. This is
+        the whole reason for the async conversion - the LLM call is where the
+        time goes.
+        """
+        from app.observability.metrics import llm_calls_total
+
+        url, headers, payload = self._prepare(messages, stop)
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds, transport=self.async_transport) as client:
+                response = await arequest_with_retry(
+                    lambda: client.post(url, headers=headers, json=payload)
+                )
+            data = response.json()
+        except Exception:
+            llm_calls_total.labels(provider=self.provider_name, outcome="error").inc()
+            raise
+        return self._result_from(data)

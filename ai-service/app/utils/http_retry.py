@@ -10,8 +10,9 @@ retried - that's a permanent problem, not a transient one.
 
 from __future__ import annotations
 
+import asyncio
 import time
-from typing import Callable
+from typing import Awaitable, Callable
 
 import httpx
 
@@ -38,6 +39,38 @@ def request_with_retry(send: Callable[[], httpx.Response], *, max_attempts: int 
             if attempt == max_attempts - 1:
                 raise
             time.sleep(1.0)
+            last_exc = exc
+    raise last_exc  # pragma: no cover - loop always returns or raises above
+
+
+async def arequest_with_retry(
+    send: Callable[[], Awaitable[httpx.Response]], *, max_attempts: int = 3
+) -> httpx.Response:
+    """Async twin of :func:`request_with_retry`, same policy.
+
+    Separate rather than shared because the difference is not just ``await``:
+    the backoff must be ``asyncio.sleep``. ``time.sleep`` inside a coroutine
+    blocks the whole event loop - so a single provider rate-limiting us for
+    five seconds would freeze every other request in the process. That is the
+    exact failure this codebase converted to async to avoid, and it would be
+    invisible until a 429 arrived under load.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            response = await send()
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if attempt == max_attempts - 1 or (status < 500 and status != 429):
+                raise
+            await asyncio.sleep(_retry_delay_seconds(exc.response, status))
+            last_exc = exc
+        except httpx.TransportError as exc:
+            if attempt == max_attempts - 1:
+                raise
+            await asyncio.sleep(1.0)
             last_exc = exc
     raise last_exc  # pragma: no cover - loop always returns or raises above
 
