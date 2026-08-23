@@ -24,6 +24,7 @@ same candidate/cluster is explained more than once within the cache TTL.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import threading
 import json
@@ -236,4 +237,103 @@ def _invoke(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_mo
             f"required schema. Respond again with ONLY the JSON object, no other text."
         )
         result2 = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=repair_prompt)])
+        return parser.parse(result2.content)
+
+
+async def arun_structured(
+    llm: BaseChatModel, system_prompt: str, human_prompt: str, output_model: type[T]
+) -> T:
+    """Async twin of :func:`run_structured`.
+
+    Same cache, same audit, same repair retry - the difference is that the
+    model call is awaited rather than blocking a worker thread, which is the
+    entire point: an investigation makes several of these in sequence and each
+    one waits seconds on a provider.
+
+    The cache and audit calls stay synchronous but are pushed onto a thread.
+    They are millisecond operations, so at first glance they look harmless to
+    run inline - but "harmless" on an event loop means every other request in
+    the process waits for them, and there are several per investigation. Redis
+    and SQL Server are also the two things most likely to stall unexpectedly,
+    and a stalled call inline would freeze the whole service rather than one
+    request.
+    """
+    from app.observability.metrics import narration_cache_total
+
+    store = get_cache_store()
+    model_identity = _model_identity(llm)
+    cache_key = _cache_key(system_prompt, human_prompt, output_model, model_identity)
+    cached = await asyncio.to_thread(store.get, cache_key)
+    if cached is not None:
+        narration_cache_total.labels(result="hit").inc()
+        audit_id = await asyncio.to_thread(
+            _audit_start, model_identity, system_prompt, human_prompt, output_model, True
+        )
+        await asyncio.to_thread(
+            _audit_complete, audit_id, output_json=cached[:AUDIT_LIMIT], success=True
+        )
+        return output_model.model_validate_json(cached)
+    narration_cache_total.labels(result="miss").inc()
+
+    audit_id = await asyncio.to_thread(
+        _audit_start, model_identity, system_prompt, human_prompt, output_model, False
+    )
+    _last_usage.value = None
+    try:
+        parsed = await _ainvoke(llm, system_prompt, human_prompt, output_model)
+    except Exception as exc:
+        await asyncio.to_thread(
+            _audit_complete, audit_id, output_json=None, success=False,
+            error_message=str(exc)[:2000],
+        )
+        raise
+    usage = _last_usage.value
+    await asyncio.to_thread(
+        _audit_complete, audit_id, output_json=parsed.model_dump_json()[:AUDIT_LIMIT],
+        success=True, usage=usage,
+    )
+
+    payload = parsed.model_dump_json()
+    ttl = get_settings().cache.default_ttl_seconds
+    # A lambda rather than to_thread(store.set, ...): ttl_seconds is
+    # keyword-only, and to_thread forwards positionally.
+    await asyncio.to_thread(lambda: store.set(cache_key, payload, ttl_seconds=ttl))
+    return parsed
+
+
+async def _ainvoke(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_model: type[T]) -> T:
+    """Async mirror of :func:`_invoke`, including the repair retry.
+
+    ``_last_usage`` is thread-local and this runs on the event loop thread, so
+    every coroutine in one process shares a slot. That is safe only because
+    the value is written and read within a single un-awaited stretch - set
+    immediately after the model returns, consumed by the caller before its
+    next await. Anything that awaits between those two points would let
+    another investigation overwrite it.
+    """
+    if isinstance(llm, (MockChatModel, GeminiChatModel)):
+        bound = llm.bind_response_schema(output_model)
+        result = await bound.ainvoke(
+            [SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)]
+        )
+        _last_usage.value = getattr(result, "response_metadata", None) or None
+        return output_model.model_validate_json(result.content)
+
+    parser = PydanticOutputParser(pydantic_object=output_model)
+    full_human = f"{human_prompt}\n\n{parser.get_format_instructions()}"
+    messages = [SystemMessage(content=system_prompt), HumanMessage(content=full_human)]
+
+    result = await llm.ainvoke(messages)
+    _last_usage.value = getattr(result, "response_metadata", None) or None
+    try:
+        return parser.parse(result.content)
+    except Exception:
+        repair_prompt = (
+            f"{full_human}\n\nYour previous response could not be parsed as valid JSON matching the "
+            f"required schema. Respond again with ONLY the JSON object, no other text."
+        )
+        result2 = await llm.ainvoke(
+            [SystemMessage(content=system_prompt), HumanMessage(content=repair_prompt)]
+        )
+        _last_usage.value = getattr(result2, "response_metadata", None) or None
         return parser.parse(result2.content)

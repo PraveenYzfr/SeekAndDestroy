@@ -10,7 +10,7 @@ from functools import lru_cache
 from typing import Any, Optional
 
 import structlog
-from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatResult
@@ -136,6 +136,35 @@ class FallbackChatModel(BaseChatModel):
         for i, (name, model) in enumerate(self.members):
             try:
                 return model._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+            except Exception as exc:  # noqa: BLE001 - must try the next provider regardless of failure cause
+                logger.warning("llm_factory.fallback.provider_failed", provider=name, error=str(exc))
+                if i < len(self.members) - 1:
+                    llm_fallback_total.labels(from_provider=name).inc()
+                last_exc = exc
+        raise RuntimeError(
+            f"all LLM providers failed: {[n for n, _ in self.members]}"
+        ) from last_exc
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """Same ordered walk as _generate, awaiting each member.
+
+        Note it calls _agenerate directly rather than ainvoke: ainvoke wraps
+        the result in callbacks and would double-count this chain's members in
+        the metrics, and a member without _agenerate would silently be run in
+        a thread pool instead of failing over.
+        """
+        from app.observability.metrics import llm_fallback_total
+
+        last_exc: Exception | None = None
+        for i, (name, model) in enumerate(self.members):
+            try:
+                return await model._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
             except Exception as exc:  # noqa: BLE001 - must try the next provider regardless of failure cause
                 logger.warning("llm_factory.fallback.provider_failed", provider=name, error=str(exc))
                 if i < len(self.members) - 1:

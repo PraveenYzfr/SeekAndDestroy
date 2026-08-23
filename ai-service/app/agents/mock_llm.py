@@ -22,7 +22,7 @@ import random
 import re
 from typing import Any, Optional, Union, get_args, get_origin
 
-from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -159,3 +159,19 @@ class MockChatModel(BaseChatModel):
             text = deterministic_text(prompt_text)
         message = AIMessage(content=text)
         return ChatResult(generations=[ChatGeneration(message=message)])
+
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """Delegates. The mock does no I/O, so there is nothing to await - but
+        the async path must still work end to end, and a BaseChatModel without
+        _agenerate falls back to running _generate in a thread pool, which
+        would quietly reintroduce the thread-per-call behaviour the async
+        conversion exists to remove.
+        """
+        return self._generate(messages, stop=stop, **kwargs)

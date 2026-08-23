@@ -37,12 +37,12 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import httpx
-from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from app.utils.http_retry import request_with_retry
+from app.utils.http_retry import arequest_with_retry, request_with_retry
 
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 #: A moving alias on purpose. Pinned versions get retired *and* closed to new
@@ -145,6 +145,7 @@ class GeminiChatModel(BaseChatModel):
     #: enforces it server-side. See bind_response_schema().
     response_schema: Optional[dict] = None
     transport: Optional[httpx.BaseTransport] = None  # test-only hook (httpx.MockTransport)
+    async_transport: Optional[httpx.AsyncBaseTransport] = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -176,15 +177,8 @@ class GeminiChatModel(BaseChatModel):
     def _url(self) -> str:
         return f"{self.base_url.rstrip('/')}/{self._model_path()}:generateContent"
 
-    def _generate(
-        self,
-        messages: list[BaseMessage],
-        stop: Optional[list[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> ChatResult:
+    def _prepare(self, messages: list[BaseMessage], stop: Optional[list[str]]):
         from app.config import get_settings
-        from app.observability.metrics import llm_calls_total, llm_tokens_total
         from app.services.spend_budget import check_and_increment
 
         # Same spend guardrail as every other real provider - a runaway graph
@@ -207,18 +201,14 @@ class GeminiChatModel(BaseChatModel):
             payload["systemInstruction"] = system_instruction
 
         headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
+        return self._url(), headers, payload
 
-        try:
-            with httpx.Client(timeout=self.timeout_seconds, transport=self.transport) as client:
-                response = request_with_retry(lambda: client.post(self._url(), headers=headers, json=payload))
-            data = response.json()
-            content = self._extract_text(data)
-        except Exception:
-            llm_calls_total.labels(provider=self.provider_name, outcome="error").inc()
-            raise
+    def _result_from(self, data: dict) -> ChatResult:
+        from app.observability.metrics import llm_calls_total, llm_tokens_total
 
+        content = self._extract_text(data)
         llm_calls_total.labels(provider=self.provider_name, outcome="success").inc()
-        usage = (data.get("usageMetadata") or {})
+        usage = data.get("usageMetadata") or {}
         llm_tokens_total.labels(provider=self.provider_name, kind="prompt").inc(
             usage.get("promptTokenCount") or 0)
         llm_tokens_total.labels(provider=self.provider_name, kind="completion").inc(
@@ -238,6 +228,46 @@ class GeminiChatModel(BaseChatModel):
             generations=[ChatGeneration(message=AIMessage(content=content, response_metadata=meta))],
             llm_output=meta,
         )
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        from app.observability.metrics import llm_calls_total
+
+        url, headers, payload = self._prepare(messages, stop)
+        try:
+            with httpx.Client(timeout=self.timeout_seconds, transport=self.transport) as client:
+                response = request_with_retry(lambda: client.post(url, headers=headers, json=payload))
+            data = response.json()
+        except Exception:
+            llm_calls_total.labels(provider=self.provider_name, outcome="error").inc()
+            raise
+        return self._result_from(data)
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        from app.observability.metrics import llm_calls_total
+
+        url, headers, payload = self._prepare(messages, stop)
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds, transport=self.async_transport) as client:
+                response = await arequest_with_retry(
+                    lambda: client.post(url, headers=headers, json=payload)
+                )
+            data = response.json()
+        except Exception:
+            llm_calls_total.labels(provider=self.provider_name, outcome="error").inc()
+            raise
+        return self._result_from(data)
 
     @staticmethod
     def _extract_text(data: dict) -> str:
