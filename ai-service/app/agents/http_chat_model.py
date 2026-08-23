@@ -62,7 +62,7 @@ class HttpChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         from app.config import get_settings
-        from app.observability.metrics import llm_calls_total
+        from app.observability.metrics import llm_calls_total, llm_tokens_total
         from app.services.spend_budget import check_and_increment
 
         check_and_increment("llm_chat", get_settings().llm.daily_call_budget)
@@ -104,4 +104,28 @@ class HttpChatModel(BaseChatModel):
                 + ")"
             )
         llm_calls_total.labels(provider=self.provider_name, outcome="success").inc()
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])
+        # Every OpenAI-compatible provider returns token counts and we threw
+        # them away. Without them there is no per-call cost, and a platform
+        # whose purpose is comparing providers cannot answer "what did that
+        # cost" for any of them. Carried on llm_output, which is where
+        # LangChain expects run-level metadata.
+        usage = data.get("usage") or {}
+        llm_tokens_total.labels(provider=self.provider_name, kind="prompt").inc(
+            usage.get("prompt_tokens") or 0)
+        llm_tokens_total.labels(provider=self.provider_name, kind="completion").inc(
+            usage.get("completion_tokens") or 0)
+        meta = {
+            "provider": self.provider_name,
+            "model": self.model,
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+        }
+        # Set in both places on purpose. llm_output is where LangChain puts
+        # run-level metadata, but invoke() returns the message rather than the
+        # ChatResult - so llm_output alone is invisible to every caller in this
+        # codebase. response_metadata rides on the message and survives.
+        return ChatResult(
+            generations=[ChatGeneration(message=AIMessage(content=content, response_metadata=meta))],
+            llm_output=meta,
+        )

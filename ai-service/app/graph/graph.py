@@ -114,9 +114,55 @@ def _build_graph() -> StateGraph:
 
 
 @lru_cache(maxsize=1)
-def get_checkpointer() -> SqliteSaver:
-    path = str(get_settings().service.checkpoint_file)
+def get_checkpointer():
+    """Where a paused investigation lives between ``interrupt()`` and resume.
+
+    Redis when configured, SQLite otherwise.
+
+    The SQLite saver was the original, and it has three problems that only a
+    shared store fixes:
+
+    * **It is a file, so it cannot be shared.** Two replicas mean two files.
+      Investigation 42 pauses on replica A; the engineer's Approve lands on
+      replica B, which has never heard of that thread, and the investigation
+      is unresumable. No load balancer helps - the state is on another
+      machine's disk. This alone pinned the service to a single replica.
+    * **The file lives inside the container** at ``.state/checkpoints.db``
+      with no volume behind it, so every redeploy destroyed every paused
+      investigation. That was silent: a redeploy looks successful, and the
+      loss only appears when somebody clicks Approve on a review that is now
+      a dead thread.
+    * **SQLite serialises writes.** One connection shared across threads means
+      concurrent investigations contend on a single file lock.
+
+    Redis is already on the ``hub`` network for caching, so this adds no new
+    infrastructure. ``setup()`` is idempotent and creates the indices on first
+    use. SQLite remains the default for a laptop with no Redis running, where
+    a single process makes all three problems moot.
+    """
+    settings = get_settings()
+    url = settings.cache.checkpoint_redis_url or (
+        settings.cache.redis_url if settings.cache.backend == "redis" else ""
+    )
+    if url:
+        from langgraph.checkpoint.redis import RedisSaver
+
+        # from_conn_string is a context manager; entering it without exiting
+        # keeps the connection open for the process lifetime, which is what a
+        # module-level singleton wants.
+        saver = RedisSaver.from_conn_string(url).__enter__()
+        saver.setup()
+        logger.info("graph.checkpointer", backend="redis")
+        return saver
+
+    path = str(settings.service.checkpoint_file)
     conn = sqlite3.connect(path, check_same_thread=False)
+    logger.warning(
+        "graph.checkpointer",
+        backend="sqlite",
+        detail="single-process only; paused investigations are lost on restart",
+        path=path,
+    )
     return SqliteSaver(conn)
 
 

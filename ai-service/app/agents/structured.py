@@ -25,6 +25,7 @@ same candidate/cluster is explained more than once within the cache TTL.
 from __future__ import annotations
 
 import hashlib
+import threading
 import json
 from typing import TypeVar
 
@@ -81,6 +82,25 @@ def _cache_key(system_prompt: str, human_prompt: str, output_model: type[BaseMod
 #: to be generous enough to keep a full report prompt intact - a final report
 #: carries five scored candidates and runs well past 8 KB.
 AUDIT_LIMIT = 64_000
+
+
+class _ThreadLocalUsage(threading.local):
+    """Token counts from the most recent model call on THIS thread.
+
+    _invoke returns the parsed Pydantic object, so the raw message - and the
+    usage riding on its response_metadata - is gone by the time the caller
+    writes the audit row. Threading it through every return type would touch
+    ten chains for one field.
+
+    Thread-local rather than a module global: FastAPI runs sync endpoints in a
+    worker thread pool, so two concurrent investigations share the process.
+    A plain global would attribute one investigation's tokens to the other.
+    """
+
+    value: dict | None = None
+
+
+_last_usage = _ThreadLocalUsage()
 
 
 def _audit_payload(model_identity: str, system_prompt: str, human_prompt: str,
@@ -140,12 +160,13 @@ def _audit_start(model_identity: str, system_prompt: str, human_prompt: str,
 
 
 def _audit_complete(audit_id: int | None, *, output_json: str | None, success: bool,
-                    error_message: str | None = None) -> None:
+                    error_message: str | None = None, usage: dict | None = None) -> None:
     if audit_id is None:
         return
     try:
         audit_repository.log_complete(
-            audit_id, output_json=output_json, success=success, error_message=error_message
+            audit_id, output_json=output_json, success=success, error_message=error_message,
+            usage=usage,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("audit.llm_call_complete_failed", error=str(exc), audit_id=audit_id)
@@ -170,12 +191,19 @@ def run_structured(llm: BaseChatModel, system_prompt: str, human_prompt: str, ou
     narration_cache_total.labels(result="miss").inc()
 
     audit_id = _audit_start(model_identity, system_prompt, human_prompt, output_model, cache_hit=False)
+    _last_usage.value = None
     try:
         parsed = _invoke(llm, system_prompt, human_prompt, output_model)
     except Exception as exc:
         _audit_complete(audit_id, output_json=None, success=False, error_message=str(exc)[:2000])
         raise
-    _audit_complete(audit_id, output_json=parsed.model_dump_json()[:AUDIT_LIMIT], success=True)
+    # Deliberately not passed on the cache-hit path above: a served response
+    # consumed no tokens, and recording the original call's counts against it
+    # would double-count every cached narration.
+    _audit_complete(
+        audit_id, output_json=parsed.model_dump_json()[:AUDIT_LIMIT], success=True,
+        usage=_last_usage.value,
+    )
 
     store.set(cache_key, parsed.model_dump_json(), ttl_seconds=get_settings().cache.default_ttl_seconds)
     return parsed
@@ -191,6 +219,7 @@ def _invoke(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_mo
     if isinstance(llm, (MockChatModel, GeminiChatModel)):
         bound = llm.bind_response_schema(output_model)
         result = bound.invoke([SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
+        _last_usage.value = getattr(result, "response_metadata", None) or None
         return output_model.model_validate_json(result.content)
 
     parser = PydanticOutputParser(pydantic_object=output_model)
@@ -198,6 +227,7 @@ def _invoke(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_mo
     messages = [SystemMessage(content=system_prompt), HumanMessage(content=full_human)]
 
     result = llm.invoke(messages)
+    _last_usage.value = getattr(result, "response_metadata", None) or None
     try:
         return parser.parse(result.content)
     except Exception:

@@ -16,6 +16,14 @@ from prometheus_client import Counter
 llm_calls_total = Counter(
     "sad_llm_calls_total", "Real (non-mock) LLM chat-model calls attempted", ["provider", "outcome"]
 )
+
+#: Tokens billed, split prompt vs completion and labelled by provider. The call
+#: counter answers "how often"; this answers "how much", which is the axis that
+#: actually differs between providers - a reasoning model can spend ten times
+#: the tokens of a non-reasoning one on the same prompt.
+llm_tokens_total = Counter(
+    "sad_llm_tokens_total", "Tokens consumed by real LLM calls", ["provider", "kind"]
+)
 llm_fallback_total = Counter(
     "sad_llm_fallback_total", "Times the LLM fallback chain moved on to the next configured provider",
     ["from_provider"],

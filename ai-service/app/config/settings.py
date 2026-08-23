@@ -456,6 +456,12 @@ class CacheSettings(_Base):
 
     backend: Literal["memory", "redis"] = "memory"
     redis_url: str = "redis://localhost:6379/0"
+    #: Where LangGraph stores a paused investigation between interrupt() and
+    #: resume. Separate from redis_url on purpose: the narration cache is
+    #: disposable and can sit in memory, but a checkpoint is the only copy of
+    #: an investigation that is waiting on a human. Blank falls back to
+    #: redis_url when backend="redis", and to SQLite otherwise.
+    checkpoint_redis_url: str = ""
     default_ttl_seconds: int = 300
 
 

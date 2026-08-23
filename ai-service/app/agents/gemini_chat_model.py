@@ -184,7 +184,7 @@ class GeminiChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         from app.config import get_settings
-        from app.observability.metrics import llm_calls_total
+        from app.observability.metrics import llm_calls_total, llm_tokens_total
         from app.services.spend_budget import check_and_increment
 
         # Same spend guardrail as every other real provider - a runaway graph
@@ -218,7 +218,26 @@ class GeminiChatModel(BaseChatModel):
             raise
 
         llm_calls_total.labels(provider=self.provider_name, outcome="success").inc()
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])
+        usage = (data.get("usageMetadata") or {})
+        llm_tokens_total.labels(provider=self.provider_name, kind="prompt").inc(
+            usage.get("promptTokenCount") or 0)
+        llm_tokens_total.labels(provider=self.provider_name, kind="completion").inc(
+            usage.get("candidatesTokenCount") or 0)
+        meta = {
+            "provider": self.provider_name,
+            "model": self.model,
+            # Gemini names these differently from the OpenAI shape. Normalised
+            # here so an audit row reads the same whichever provider produced
+            # it - otherwise comparing cost across providers means special-casing
+            # the field names at every read site.
+            "prompt_tokens": usage.get("promptTokenCount"),
+            "completion_tokens": usage.get("candidatesTokenCount"),
+            "total_tokens": usage.get("totalTokenCount"),
+        }
+        return ChatResult(
+            generations=[ChatGeneration(message=AIMessage(content=content, response_metadata=meta))],
+            llm_output=meta,
+        )
 
     @staticmethod
     def _extract_text(data: dict) -> str:
