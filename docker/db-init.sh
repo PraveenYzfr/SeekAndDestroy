@@ -86,7 +86,14 @@ GRANT INSERT         ON sad.ConversationTurn             TO [$APP_LOGIN];
 GRANT INSERT, UPDATE ON sad.InfrastructureRecommendation TO [$APP_LOGIN];
 GRANT INSERT         ON sad.RecommendationDecision       TO [$APP_LOGIN];
 GRANT INSERT         ON sad.CapacityRequest              TO [$APP_LOGIN];
-GRANT INSERT         ON sad.AgentAuditLog                TO [$APP_LOGIN];
+GRANT INSERT, UPDATE ON sad.AgentAuditLog                TO [$APP_LOGIN];
+  -- auth.login performs an opportunistic rehash when scrypt parameters change,
+  -- which UPDATEs these two columns inside the login request. Without this the
+  -- first login after a policy change fails on a *correct* password, and the
+  -- error surfaces from the request path rather than at startup. Column-scoped
+  -- so the app still cannot touch IsActive, Email or anything else.
+  GRANT UPDATE ON sad.Employee(PasswordHash, PasswordUpdatedAt) TO [$APP_LOGIN];
+
 "
 
 echo "==> verification"
