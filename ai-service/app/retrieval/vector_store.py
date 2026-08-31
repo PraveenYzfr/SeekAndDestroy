@@ -29,6 +29,7 @@ from langchain_core.embeddings import Embeddings
 
 from app.config import get_settings
 from app.models.retrieval import RetrievalDocument, SearchResult
+from app.retrieval import sparse
 from app.retrieval.embedder import get_embedder, get_embedder_fingerprint
 
 logger = structlog.get_logger(__name__)
@@ -147,13 +148,37 @@ def _fingerprinted_collection_name(base_collection: str, fingerprint: str) -> st
     talking to a different, empty collection automatically; the old one is
     simply left orphaned rather than queried with an incompatible embedder.
     """
-    suffix = hashlib.blake2b(fingerprint.encode("utf-8"), digest_size=4).hexdigest()
+    suffix = hashlib.blake2b(
+        f"{fingerprint}|schema=v{_COLLECTION_SCHEMA}".encode("utf-8"), digest_size=4
+    ).hexdigest()
     return f"{base_collection}__{suffix}"
+
+
+#: Bumped when the collection's *shape* changes, independently of the embedder.
+#: v2 renamed the dense vector from unnamed to "dense" and added a named
+#: "sparse" vector for BM25. A collection created under v1 has neither, so
+#: upserting into it fails - folding this into the name means an existing
+#: deployment quietly builds a new collection on next index instead of erroring,
+#: exactly as it already does when the embedder changes.
+_COLLECTION_SCHEMA = 2
 
 
 #: Points per Qdrant upsert call. 256 at 3072 dimensions is ~9 MB, well
 #: inside Qdrant 32 MiB request cap.
 _UPSERT_BATCH = 256
+
+#: Named vectors. Qdrant allows one unnamed dense vector, but mixing an unnamed
+#: dense with a named sparse makes the Prefetch syntax for fusion awkward and
+#: easy to get subtly wrong. Naming both keeps every query symmetric.
+DENSE = "dense"
+SPARSE = "sparse"
+
+#: Reserved point holding the BM25 corpus statistics. They live in the
+#: collection they describe rather than in a file or the cache: a file inside
+#: the container is lost on redeploy, and the cache expires - either way the
+#: sparse half would silently return nothing until someone reindexed. Here the
+#: stats are created, replaced and destroyed with the collection itself.
+_STATS_POINT_ID = 0
 
 
 class QdrantVectorStore:
@@ -161,12 +186,15 @@ class QdrantVectorStore:
         self, embedder: Embeddings, url: str, api_key: str, collection: str, dimensions: int, fingerprint: str = ""
     ):
         from qdrant_client import QdrantClient
-        from qdrant_client.models import Distance, VectorParams
 
         self._embedder = embedder
         self._collection = _fingerprinted_collection_name(collection, fingerprint) if fingerprint else collection
         self._client = QdrantClient(url=url, api_key=api_key or None)
         self._dimensions = dimensions
+        #: Corpus statistics, read lazily from the collection on first use. None
+        #: means "not yet read", which is distinct from BM25Stats() meaning "read,
+        #: and the corpus is empty" - the difference decides fit-versus-merge.
+        self._bm25: sparse.BM25Stats | None = None
         existing = [c.name for c in self._client.get_collections().collections]
         if self._collection not in existing:
             stale = [c for c in existing if c == collection or c.startswith(f"{collection}__")]
@@ -178,33 +206,105 @@ class QdrantVectorStore:
             self._ensure_collection()
 
     def _ensure_collection(self) -> None:
-        from qdrant_client.models import Distance, VectorParams
+        from qdrant_client.models import (
+            Distance, SparseIndexParams, SparseVectorParams, VectorParams,
+        )
 
+        # Both vectors are always created and always written, regardless of
+        # search_mode. The mode is a query-time choice: baking it into the
+        # index would mean re-embedding the entire corpus to compare dense
+        # against hybrid, which is how that comparison ends up never happening.
         self._client.create_collection(
             collection_name=self._collection,
-            vectors_config=VectorParams(size=self._dimensions, distance=Distance.COSINE),
+            vectors_config={DENSE: VectorParams(size=self._dimensions, distance=Distance.COSINE)},
+            sparse_vectors_config={SPARSE: SparseVectorParams(index=SparseIndexParams())},
         )
+
+    def _load_stats(self) -> sparse.BM25Stats:
+        """Corpus statistics for the sparse half, cached per store instance.
+
+        Read from the collection rather than a file or the shared cache. A file
+        inside the container does not survive a redeploy and the cache expires;
+        either way the sparse half would keep scoring against statistics that no
+        longer describe the corpus, and the failure mode is quietly worse
+        ranking rather than an error anyone would notice.
+        """
+        if self._bm25 is not None:
+            return self._bm25
+        try:
+            found = self._client.retrieve(
+                collection_name=self._collection, ids=[_STATS_POINT_ID], with_payload=True
+            )
+        except Exception:
+            # A collection written before this schema existed has no stats point.
+            # Treating that as an empty corpus degrades hybrid to dense, which is
+            # exactly the old behaviour, rather than failing the search.
+            found = []
+        raw = (found[0].payload or {}).get("bm25") if found else None
+        self._bm25 = sparse.BM25Stats.from_dict(raw) if raw else sparse.BM25Stats()
+        return self._bm25
+
+    def _save_stats(self, stats: sparse.BM25Stats) -> None:
+        from qdrant_client.models import PointStruct
+
+        # No vectors on this point, only payload. Qdrant allows a point to carry
+        # any subset of a collection's named vectors, and carrying none means it
+        # can never be returned by a dense or a sparse query - so the statistics
+        # live inside the collection they describe without ever polluting a
+        # result set. count() excludes it explicitly.
+        self._client.upsert(
+            collection_name=self._collection,
+            points=[PointStruct(id=_STATS_POINT_ID, vector={}, payload={"bm25": stats.to_dict()})],
+        )
+        self._bm25 = stats
 
     @staticmethod
     def _point_id(doc_id: str) -> int:
         import hashlib
 
-        return int(hashlib.blake2b(doc_id.encode("utf-8"), digest_size=8).hexdigest(), 16) % (2**63)
+        point_id = int(hashlib.blake2b(doc_id.encode("utf-8"), digest_size=8).hexdigest(), 16) % (2**63)
+        # _STATS_POINT_ID is reserved. One document in 2**63 would hash onto it
+        # and overwrite the corpus statistics with a document payload, breaking
+        # the sparse half estate-wide until the next full reindex. The odds do
+        # not justify thinking about it twice, and neither does the fix.
+        return point_id or 1
 
     def upsert(self, documents: list[RetrievalDocument]) -> None:
-        from qdrant_client.models import PointStruct
+        from qdrant_client.models import PointStruct, SparseVector
 
         if not documents:
             return
-        vectors = self._embedder.embed_documents([d.text for d in documents])
-        points = [
-            PointStruct(
-                id=self._point_id(doc.id),
-                vector=vec,
-                payload={"doc_id": doc.id, "text": doc.text, **doc.metadata()},
+        texts = [d.text for d in documents]
+        vectors = self._embedder.embed_documents(texts)
+
+        # Fit or merge, decided by whether the collection already has statistics.
+        # index_all() clears first, which destroys the stats point along with the
+        # collection, so a full rebuild always lands on the exact fit() path with
+        # no special-casing here. Anything arriving into a populated corpus is an
+        # incremental reindex and merges - see sparse.merge on the drift that
+        # implies.
+        existing = self._load_stats()
+        stats = sparse.fit(texts) if existing.document_count == 0 else sparse.merge(existing, texts)
+
+        points = []
+        for doc, vec in zip(documents, vectors):
+            indices, values = sparse.encode_document(doc.text, stats)
+            points.append(
+                PointStruct(
+                    id=self._point_id(doc.id),
+                    # Named, not bare. _ensure_collection creates the collection with
+                    # vectors_config={DENSE: ...}, and Qdrant rejects an unnamed vector
+                    # against a named-vector collection with a 400 "Not existing vector
+                    # name error" - at *index* time, before search is ever reached.
+                    #
+                    # A document whose text tokenises to nothing still gets a sparse
+                    # entry, empty. Omitting the key would leave the point without the
+                    # sparse vector at all, and it would then be invisible to the
+                    # sparse half of a hybrid query for a reason no log would explain.
+                    vector={DENSE: vec, SPARSE: SparseVector(indices=indices, values=values)},
+                    payload={"doc_id": doc.id, "text": doc.text, **doc.metadata()},
+                )
             )
-            for doc, vec in zip(documents, vectors)
-        ]
         # Qdrant rejects any request body over 32 MiB, and a full reindex used
         # to send every point in one call. That is invisible with the default
         # `hash` embedder - 384 floats a point keeps the whole corpus well
@@ -222,14 +322,20 @@ class QdrantVectorStore:
                 collection_name=self._collection,
                 points=points[start : start + _UPSERT_BATCH],
             )
+        # After the documents, never before: if a batch fails partway, the stored
+        # statistics still describe the corpus as it was, and a retry re-derives
+        # them. Writing them first would leave a corpus described by statistics
+        # counting documents that were never indexed.
+        self._save_stats(stats)
 
     def delete(self, ids: list[str]) -> None:
         self._client.delete(collection_name=self._collection, points_selector=[self._point_id(i) for i in ids])
 
     def search(self, query: str, *, top_k: int = 8, filters: dict | None = None) -> list[SearchResult]:
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
+        from qdrant_client.models import (
+            FieldCondition, Filter, Fusion, FusionQuery, MatchValue, Prefetch, SparseVector,
+        )
 
-        query_vec = self._embedder.embed_query(query)
         qdrant_filter = None
         if filters:
             conditions = [
@@ -237,15 +343,63 @@ class QdrantVectorStore:
             ]
             if conditions:
                 qdrant_filter = Filter(must=conditions)
+
+        retrieval = get_settings().retrieval
+        mode = retrieval.search_mode
+        sparse_indices, sparse_values = sparse.encode_query(query, self._load_stats())
+        # A query with no sparse representation - no statistics stored yet, or
+        # every term stopworded - cannot use the sparse half. Falling back to
+        # dense keeps the old behaviour instead of returning nothing, which is
+        # what a pure-sparse query against an unfitted corpus would do.
+        has_sparse = bool(sparse_indices)
+        if mode == "sparse" and not has_sparse:
+            mode = "dense"
+        elif mode == "hybrid" and not has_sparse:
+            mode = "dense"
+
         # query_points, not the older search(): qdrant-client removed
         # QdrantClient.search/search_batch, so on the pinned 1.18 client the
         # old call raised AttributeError. That failed *silently* in practice -
         # graph.retrieve_related_context catches retrieval errors and degrades
         # to no context - so the symptom was worse answers, never an error.
-        hits = self._client.query_points(
-            collection_name=self._collection, query=query_vec, limit=top_k, query_filter=qdrant_filter,
-            with_payload=True,
-        ).points
+        if mode == "dense":
+            hits = self._client.query_points(
+                collection_name=self._collection, query=self._embedder.embed_query(query),
+                using=DENSE, limit=top_k, query_filter=qdrant_filter, with_payload=True,
+            ).points
+        elif mode == "sparse":
+            hits = self._client.query_points(
+                collection_name=self._collection,
+                query=SparseVector(indices=sparse_indices, values=sparse_values),
+                using=SPARSE, limit=top_k, query_filter=qdrant_filter, with_payload=True,
+            ).points
+        else:
+            # Reciprocal Rank Fusion over two independently ranked lists. RRF
+            # combines *ranks*, not scores, which is the whole reason it is
+            # usable here: a cosine similarity and a BM25 score have no shared
+            # scale, and any weighted sum of the two would be tuning a constant
+            # against a corpus rather than combining evidence.
+            #
+            # Both halves are filtered, not just the outer query. Filtering only
+            # at the end would let one half fill its prefetch with documents the
+            # filter then discards, so a filtered hybrid search would return
+            # fewer results than an unfiltered one for no legitimate reason.
+            prefetch_limit = max(retrieval.hybrid_prefetch, top_k)
+            hits = self._client.query_points(
+                collection_name=self._collection,
+                prefetch=[
+                    Prefetch(
+                        query=self._embedder.embed_query(query), using=DENSE,
+                        limit=prefetch_limit, filter=qdrant_filter,
+                    ),
+                    Prefetch(
+                        query=SparseVector(indices=sparse_indices, values=sparse_values),
+                        using=SPARSE, limit=prefetch_limit, filter=qdrant_filter,
+                    ),
+                ],
+                query=FusionQuery(fusion=Fusion.RRF),
+                limit=top_k, with_payload=True,
+            ).points
         results = []
         for hit in hits:
             payload = dict(hit.payload or {})
@@ -272,9 +426,22 @@ class QdrantVectorStore:
         # its clear() just empties two dicts and the store stays usable.
         self._client.delete_collection(self._collection)
         self._ensure_collection()
+        # The stats point died with the collection. Dropping the cache is what
+        # makes the next upsert take the fit() path rather than merging a fresh
+        # corpus into statistics describing one that no longer exists.
+        self._bm25 = None
 
     def count(self) -> int:
-        return self._client.count(self._collection).count
+        from qdrant_client.models import Filter, HasIdCondition
+
+        # The BM25 statistics live in this collection as a reserved point. It is
+        # bookkeeping, not a document, and counting it would make this backend
+        # disagree with InMemoryVectorStore by exactly one - the kind of
+        # off-by-one that surfaces as a puzzling number on /api/ready.
+        return self._client.count(
+            self._collection,
+            count_filter=Filter(must_not=[HasIdCondition(has_id=[_STATS_POINT_ID])]),
+        ).count
 
 
 def build_vector_store() -> VectorStore:

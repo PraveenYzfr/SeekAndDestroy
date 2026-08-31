@@ -168,6 +168,21 @@ class RetrievalSettings(_Base):
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str = ""
     collection: str = "seekanddestroy"
+    #: dense  - vector similarity only. What this platform did before hybrid.
+    #: sparse - BM25 only. Exact tokens, no semantics. Mostly useful as a
+    #:          baseline when measuring what the dense half contributes.
+    #: hybrid - both, fused with Reciprocal Rank Fusion. The default.
+    #:
+    #: Switchable at QUERY time, not index time: indexing always writes both
+    #: vectors, so flipping this needs no reindex. If the mode were baked into
+    #: the index, comparing modes would mean re-embedding the whole corpus for
+    #: each run, which is how a comparison ends up never being made.
+    search_mode: Literal["dense", "sparse", "hybrid"] = "hybrid"
+    #: Candidates each half retrieves before fusion. Fusion needs a deeper pool
+    #: than the final top_k or it has nothing to re-order - a document ranked
+    #: 30th by dense and 2nd by sparse is exactly what hybrid exists to surface,
+    #: and it is invisible if both halves only return 8.
+    hybrid_prefetch: int = 50
     embedding_provider: Literal["hash", "sentence-transformers", "api", "gemini"] = "hash"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dimensions: int = 384
