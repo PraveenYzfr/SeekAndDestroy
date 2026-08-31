@@ -47,6 +47,8 @@ yarn-error.log*
 # --- Qdrant / docker local volumes --------------------------------------------
 docker/qdrant_storage/
 docker/.env
+docker/.env.bak*
+**/.env.bak*
 
 # --- editors / OS -----------------------------------------------------------------
 .idea/

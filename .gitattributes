@@ -1,0 +1,12 @@
+# Files that are read by Linux containers must be checked out with LF, even on
+# Windows. Without this, git's autocrlf turns db-init.sh into CRLF on checkout,
+# the file is bind-mounted into the SQL Server container as-is, and bash reads
+# `set -euo pipefail\r` - reporting `set: pipefail: invalid option name`, where
+# the trailing \r is invisible in the error. The same class of failure has also
+# appeared on the VM as `$'\r': command not found`.
+*.sh        text eol=lf
+*.sql       text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+.env.example text eol=lf
