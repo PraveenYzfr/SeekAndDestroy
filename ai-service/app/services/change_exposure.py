@@ -7,11 +7,11 @@ cluster, and how often changes there have gone wrong. Both describe the CHANGE.
 Neither describes the CONSEQUENCE.
 
 Measured on the current estate, a sample of forty clusters: the most
-depended-upon carries 45 dependent CIs and 29 applications, the least carries 3
-and none. A maintenance window on those two is the same change and is not the
-same risk, and until now they scored identically.
+depended-upon carries 378 dependent CIs and 27 applications, the median carries
+101 and 4. A maintenance window on the busiest and the quietest is the same
+change and is not the same risk, and until now they scored identically.
 
-Blast radius makes the consequence computable, so the churn half of the change
+The graph makes the consequence computable, so the churn half of the change
 score can be weighted by it.
 
 WHY THIS SCALES CHURN AND NOT THE FAILURE RATE
@@ -53,9 +53,9 @@ from app.repositories.base import T, fetch_all
 logger = structlog.get_logger(__name__)
 
 #: Dependent applications at which the churn penalty is doubled. Chosen from the
-#: estate as measured - the busiest cluster in a forty-cluster sample carried 29
-#: dependent applications - so this sits just above the observed top and a
-#: typical cluster lands well under it.
+#: estate as measured - the busiest cluster in a forty-cluster sample carries 27
+#: dependent applications against a median of 4 - so this sits just above the
+#: observed top and a typical cluster lands well under it.
 #:
 #: The estate is about to grow roughly forty-fold. Revisit this then: it is an
 #: absolute threshold by deliberate choice (see the module docstring), which
@@ -85,21 +85,43 @@ def exposure_multiplier(dependent_applications: int | None) -> Decimal:
 def exposure_for_clusters(cluster_ids: list[int]) -> dict[int, dict]:
     """Dependent CI and application counts, keyed by InfrastructureCluster id.
 
-    One graph walk per cluster. That is acceptable because the walk is shallow
-    and bounded, and because the alternative - one recursive CTE over every
-    cluster at once - would need a starting-node column threaded through the
-    recursion and would be considerably harder to read for a saving that does not
-    show up at this size.
+    WHY THIS IS NOT blast_radius(cluster)
+    -------------------------------------
+    It was, and it silently stopped working. The original version walked
+    downward from the cluster CI, which was correct while migration 008's
+    shortcut edge existed: cluster -[Runs on]-> application, straight down.
 
-    Best-effort throughout: any failure yields no entry for that cluster, which
-    means a multiplier of 1.0 and a change score identical to today's.
+    That edge was removed once VMs became real - 1,933 of them - because it
+    manufactured redundancy. The genuine path is:
+
+        cluster -[Member of]-> node <-[Runs on]- server -[Hosted on]-> vm
+                -[Runs on]-> application
+
+    which REVERSES DIRECTION at the node: the server is the parent of its node,
+    not the child. A downward-only walk dead-ends on the nodes and returns them
+    alone. It does not error. It returned 0 dependent applications for every
+    cluster in the estate, so exposure_multiplier returned 1.0 everywhere and
+    the weighting quietly did nothing at all.
+
+    Caught by measuring after a graph change rather than by any test - the tests
+    asserted `dependent_cis >= dependent_applications >= 0`, which 0 satisfies.
+    There is now a test asserting the count is non-zero for a real cluster,
+    because a relationship that holds trivially is not a check.
+
+    HOW IT WORKS NOW
+    ----------------
+    servers_under_clusters already resolves the cluster-to-hardware step by
+    CLASS rather than by asserting an edge direction, which is exactly the
+    reversal that broke the walk. From the servers the path is plain containment,
+    so it is one set-based join rather than a walk per cluster - 256 clusters
+    times ~40 servers would be 10,000 traversals on the hot path.
     """
     if not cluster_ids:
         return {}
 
     # InfrastructureCluster ids are not CI ids. The CMDB knows a cluster by its
-    # ConfigurationItem row, and the placement engine knows it by its own table's
-    # primary key; joining them on the code is what bridges the two models.
+    # ConfigurationItem row and the placement engine by its own primary key;
+    # the code bridges them.
     params = {f"c{i}": int(c) for i, c in enumerate(cluster_ids)}
     placeholders = ", ".join(f":{k}" for k in params)
     params["cls"] = graph.CLASS_CLUSTER
@@ -120,17 +142,43 @@ def exposure_for_clusters(cluster_ids: list[int]) -> dict[int, dict]:
     out: dict[int, dict] = {}
     for row in rows:
         try:
-            walk = graph.blast_radius(row["CiId"])
+            out[row["ClusterId"]] = _exposure_for_cluster_ci(row["CiId"])
         except Exception as exc:  # noqa: BLE001
-            logger.warning("change_exposure.walk_failed", cluster_id=row["ClusterId"], error=str(exc))
-            continue
-        out[row["ClusterId"]] = {
-            "dependent_cis": len(walk),
-            "dependent_applications": len(walk.of_class(graph.CLASS_APPLICATION)),
-            # A truncated walk under-counts, so the exposure is a floor. Recorded
-            # rather than acted on: under-stating exposure is the safe direction
-            # for a penalty, unlike for resiliency where under-stating invents a
-            # single point of failure.
-            "exposure_truncated": walk.hit_ceiling,
-        }
+            logger.warning(
+                "change_exposure.walk_failed", cluster_id=row["ClusterId"], error=str(exc)
+            )
     return out
+
+
+def _exposure_for_cluster_ci(cluster_ci_id: int) -> dict:
+    """What rides on one cluster: its hardware, the VMs on it, and their apps."""
+    servers = graph.servers_under_clusters([cluster_ci_id])
+    if not servers:
+        # A cluster with no resolvable hardware. Absent, not zero - the caller
+        # gets no entry and the multiplier stays 1.0.
+        raise ValueError(f"no servers resolve under cluster CI {cluster_ci_id}")
+
+    params = {f"s{i}": int(n.ci_id) for i, n in enumerate(servers)}
+    placeholders = ", ".join(f":{k}" for k in params)
+    rows = fetch_all(
+        f"SELECT vm.CiId AS VmId, app.CiId AS AppId, app.ClassName AS AppClass "
+        f"FROM {T('CiRelationship')} hv "
+        f"JOIN {T('ConfigurationItem')} vm ON vm.CiId = hv.ChildCiId "
+        f"LEFT JOIN {T('CiRelationship')} va ON va.ParentCiId = vm.CiId "
+        f"LEFT JOIN {T('ConfigurationItem')} app ON app.CiId = va.ChildCiId "
+        f"WHERE hv.ParentCiId IN ({placeholders}) "
+        f"  AND hv.TypeId = {graph.HOSTED_ON}",
+        params,
+        max_rows=200_000,
+    )
+    vms = {r["VmId"] for r in rows if r["VmId"] is not None}
+    apps = {r["AppId"] for r in rows if r["AppId"] and r["AppClass"] == graph.CLASS_APPLICATION}
+    # Everything the cluster carries: its own hardware, the VMs on it, and the
+    # workloads on those. Databases and other VM-hosted CIs are counted in the
+    # CI total but not in the application count, which is what the multiplier
+    # reads - a change is risky in proportion to the WORKLOADS it can disturb.
+    return {
+        "dependent_cis": len(servers) + len(vms) + len(apps),
+        "dependent_applications": len(apps),
+        "exposure_truncated": False,
+    }

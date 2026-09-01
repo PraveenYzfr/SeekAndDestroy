@@ -114,23 +114,84 @@ class TestExposureLookup:
             assert cluster_id in ids
             assert values["dependent_cis"] >= values["dependent_applications"] >= 0
 
+    def test_a_real_cluster_actually_carries_applications(self):
+        """The assertion that was missing, and the reason this regressed.
+
+        The existing check was `dependent_cis >= dependent_applications >= 0`,
+        which is satisfied by zero. When e7 removed the 1,933 shortcut
+        cluster-to-application edges, the downward walk dead-ended on the cluster
+        nodes and returned 0 dependent applications for EVERY cluster in the
+        estate. The multiplier became 1.0 everywhere, the weighting silently did
+        nothing, and this suite stayed green throughout.
+
+        A relationship that holds trivially is not a check. This asserts the
+        measurement is non-zero somewhere, which is the weakest claim that still
+        has teeth.
+        """
+        require_loaded_graph()
+        rows = fetch_all(
+            "SELECT TOP 20 ic.ClusterId FROM sad.InfrastructureCluster ic "
+            "JOIN sad.ConfigurationItem ci ON ci.Name = ic.ClusterCode "
+            "AND ci.ClassName = 'cmdb_ci_cluster' ORDER BY ic.ClusterId",
+            max_rows=20,
+        )
+        if not rows:
+            pytest.skip("no cluster CIs in the graph")
+        out = change_exposure.exposure_for_clusters([r["ClusterId"] for r in rows])
+        assert out, "clusters that exist in the CMDB must resolve"
+        assert any(v["dependent_applications"] > 0 for v in out.values()), (
+            "every sampled cluster carries zero applications - the traversal has "
+            "stopped reaching workloads and exposure weighting is inert"
+        )
+        assert any(v["dependent_cis"] > 10 for v in out.values()), (
+            "no cluster carries more than ten CIs - the walk is not reaching "
+            "the VMs behind the hardware"
+        )
+
+    def test_exposure_varies_between_clusters(self):
+        """If every cluster returns the same number, the feature ranks nothing
+        even when the number is non-zero."""
+        require_loaded_graph()
+        rows = fetch_all(
+            "SELECT TOP 20 ic.ClusterId FROM sad.InfrastructureCluster ic "
+            "JOIN sad.ConfigurationItem ci ON ci.Name = ic.ClusterCode "
+            "AND ci.ClassName = 'cmdb_ci_cluster' ORDER BY ic.ClusterId",
+            max_rows=20,
+        )
+        if not rows:
+            pytest.skip("no cluster CIs in the graph")
+        out = change_exposure.exposure_for_clusters([r["ClusterId"] for r in rows])
+        assert len({v["dependent_cis"] for v in out.values()}) > 1, (
+            "every cluster has identical exposure - nothing is being discriminated"
+        )
+
     def test_an_unknown_cluster_id_is_simply_absent(self):
         """Not an error, and not a zero. A cluster the CMDB does not know about
         gets no entry, which means a multiplier of 1.0 downstream."""
         assert change_exposure.exposure_for_clusters([-1]) == {}
 
-    def test_the_count_matches_a_direct_walk(self):
-        """Guards against the ClusterId-to-CiId bridge silently pairing the wrong
-        rows - the two id spaces are different and the join is on the code."""
+    def test_the_cluster_to_ci_bridge_pairs_the_right_rows(self):
+        """Guards the ClusterId-to-CiId join, which is on the CODE because the
+        two id spaces are unrelated. Pairing the wrong rows would report a real
+        number for the wrong cluster, which no range check would catch.
+
+        This no longer compares against blast_radius: exposure deliberately
+        stopped being a downward walk when the shortcut edge was removed, so the
+        two are no longer the same computation.
+        """
         require_loaded_graph()
         rows = fetch_all(
-            "SELECT TOP 1 ic.ClusterId, ci.CiId FROM sad.InfrastructureCluster ic "
+            "SELECT TOP 3 ic.ClusterId, ic.ClusterCode, ci.CiId "
+            "FROM sad.InfrastructureCluster ic "
             "JOIN sad.ConfigurationItem ci ON ci.Name = ic.ClusterCode "
-            "AND ci.ClassName = 'cmdb_ci_cluster'",
-            max_rows=1,
+            "AND ci.ClassName = 'cmdb_ci_cluster' ORDER BY ic.ClusterId",
+            max_rows=3,
         )
         if not rows:
             pytest.skip("no cluster CIs in the graph")
-        out = change_exposure.exposure_for_clusters([rows[0]["ClusterId"]])
-        direct = graph.blast_radius(rows[0]["CiId"])
-        assert out[rows[0]["ClusterId"]]["dependent_cis"] == len(direct)
+        for row in rows:
+            servers = graph.servers_under_clusters([row["CiId"]])
+            out = change_exposure.exposure_for_clusters([row["ClusterId"]])
+            assert out[row["ClusterId"]]["dependent_cis"] >= len(servers), (
+                f"{row['ClusterCode']}: exposure is smaller than its own hardware count"
+            )
