@@ -678,6 +678,27 @@ SCENARIOS = {
     "strong_alternative_applications": [a.code for a in _strong_alt],
 }
 
+# The CMDB fixtures live in seed_cmdb and are only produced when main() runs, so
+# they are persisted to database/scenarios.json at generation time and merged back
+# here. Without this, importing generate_seed gives a SCENARIOS dict that is
+# missing every CMDB key - and a test using .get() on a missing key passes while
+# asserting nothing.
+def _load_persisted_scenarios() -> None:
+    import json
+    path = OUTPUT_PATH.parent / "scenarios.json"
+    if not path.exists():
+        return
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return          # a corrupt fixture file must not stop the generator
+    for key, value in stored.items():
+        SCENARIOS.setdefault(key, value)
+
+
+_load_persisted_scenarios()
+
+
 # =============================================================================
 # 5. Time-series generation
 # =============================================================================
@@ -1197,6 +1218,33 @@ def main() -> None:
          "PreferredLocation", "DataClassification", "RequiredByDate", "Status"],
         build_capacity_request_rows(),
     )
+
+    # The CMDB layer goes last: every configuration item, class table and edge has
+    # a foreign key into rows the blocks above created, and the whole graph
+    # references CiIds this module allocates rather than ones the database picks.
+    import seed_cmdb
+    estate = seed_cmdb.build(CLUSTERS, APPLICATIONS, NODES, rng, ANCHOR_DATE,
+                             NEIGHBORHOOD_INDEX)
+    seed_cmdb.emit(lines, estate)
+    SCENARIOS.update(estate.scenarios)
+
+    # Persisted so tests can read the fixtures WITHOUT regenerating a 74 MB seed.
+    #
+    # The CMDB fixtures are produced by seed_cmdb.build(), which runs here in
+    # main() - so a test that imports this module never sees them, and
+    # SCENARIOS silently contains only the older cluster and application keys.
+    # That is worse than an error: an assertion reading SCENARIOS["orphan_cis"]
+    # raises KeyError, but one reading .get("orphan_cis", []) passes vacuously.
+    #
+    # This file IS committed, unlike seed.sql. It is a few kilobytes, it is the
+    # contract between the generator and every test that asserts against it, and
+    # regenerating the seed rewrites it in step.
+    import json as _json
+    scenarios_path = OUTPUT_PATH.parent / "scenarios.json"
+    scenarios_path.write_text(
+        _json.dumps(SCENARIOS, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    print(f"  fixtures: {scenarios_path} ({len(SCENARIOS)} keys)")
+    print(f"  CMDB: {len(estate.cis):,} configuration items, {len(estate.edges):,} relationships")
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
