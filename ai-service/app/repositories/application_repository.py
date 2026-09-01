@@ -60,19 +60,36 @@ def list_all(limit: int = 200) -> list[CmdbApplication]:
     return [CmdbApplication(**r) for r in rows]
 
 
-def changed_since(since, limit: int = 5000) -> list[CmdbApplication]:
-    """Applications updated after ``since``; all of them when ``since`` is None.
+def changed_since(since, last_id: int = 0, limit: int = 500) -> list[CmdbApplication]:
+    """One page of rows at or after the cursor ``(since, last_id)``.
 
-    ``UpdatedAt`` is maintained by the application layer, not a trigger, so this
-    is only as accurate as the writers are disciplined. That is acceptable here
-    because a full rebuild remains the correctness backstop.
+    Keyset pagination on ``(UpdatedAt, ApplicationId)``, not OFFSET and not a bare
+    timestamp comparison. Both alternatives are wrong here:
+
+    * ``WHERE UpdatedAt > :since`` alone loses rows whenever a page boundary
+      falls inside a group sharing one timestamp - the next query excludes the
+      whole group, so those rows are skipped permanently rather than late.
+    * OFFSET re-scans everything it has already skipped, so the last page of a
+      large corpus costs the most exactly when the run is most likely to be
+      interrupted.
+
+    The cursor is exact, which is what lets the caller persist it after every
+    batch and resume from it rather than restarting.
+
+    ``since=None`` means "never indexed": the first page starts at the beginning.
     """
     if since is None:
-        rows = fetch_all(f"SELECT TOP (:limit) * FROM {T('CmdbApplication')} ORDER BY UpdatedAt", {"limit": limit}, max_rows=limit)
+        rows = fetch_all(
+            f"SELECT TOP (:limit) * FROM {T('CmdbApplication')} ORDER BY UpdatedAt, ApplicationId",
+            {"limit": limit},
+            max_rows=limit,
+        )
     else:
         rows = fetch_all(
-            f"SELECT TOP (:limit) * FROM {T('CmdbApplication')} WHERE UpdatedAt > :since ORDER BY UpdatedAt",
-            {"since": since, "limit": limit},
+            f"SELECT TOP (:limit) * FROM {T('CmdbApplication')} "
+            f"WHERE UpdatedAt > :since OR (UpdatedAt = :since AND ApplicationId > :last_id) "
+            f"ORDER BY UpdatedAt, ApplicationId",
+            {"since": since, "last_id": last_id or 0, "limit": limit},
             max_rows=limit,
         )
     return [CmdbApplication(**r) for r in rows]

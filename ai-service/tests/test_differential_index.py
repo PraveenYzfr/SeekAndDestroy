@@ -16,7 +16,9 @@ import pytest
 
 from app.repositories import index_watermark_repository as wm
 
-SOURCES = ("application", "node", "cluster", "hosting", "incident", "dependency")
+# Imported rather than restated: this list changed when incidents split into
+# opened/closed cursors, and a hardcoded copy here failed for that reason.
+from app.retrieval.pipeline import SOURCES
 
 
 @pytest.fixture(autouse=True)

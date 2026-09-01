@@ -77,6 +77,32 @@ services:
       # in the values in their own .env.
     ports: !reset []
 
+  ai-indexer:
+    # Without this the worker keeps the base file's "core" profile and simply
+    # never starts under `--profile app` - no error, no container, and every
+    # index request sits Queued forever while /api/index/status reports a
+    # growing queue depth and nothing consuming it.
+    profiles: !override ["app"]
+    depends_on: !reset []
+    networks: [hub]
+    environment:
+      # Deliberately repeated rather than anchored from ai-service: this file
+      # is an overlay, and YAML anchors do not cross documents. These must stay
+      # byte-identical to the ai-service block above - a worker pointed at a
+      # different Qdrant or a different database writes vectors into a
+      # collection nothing queries, and nothing errors.
+      SAD_DB__SERVER: "${SAD_DB_HOST:-hub-sqlserver}"
+      SAD_RETRIEVAL__QDRANT_URL: "http://hub-qdrant:6333"
+      SAD_CACHE__REDIS_URL: "redis://hub-redis:6379/0"
+      SAD_AUTH__ALLOW_DEV_TOKEN: "false"
+      SAD_AUTH__LOCAL_SIGNING_KEY: "${SAD_AUTH_LOCAL_SIGNING_KEY:?generate one and set it in the host .env}"
+      # Paces batches against the embedding provider. The laptop sets 5s for
+      # exactly this reason; unset, a full index fires ~38 Gemini calls back to
+      # back and earns a 429 partway through - which now costs a failed run
+      # rather than a failed request, but still costs the run.
+      SAD_RETRIEVAL__EMBEDDING_BATCH_DELAY_SECONDS: "${SAD_EMBEDDING_BATCH_DELAY_SECONDS:-5}"
+    ports: !reset []
+
   api-gateway:
     profiles: !override ["app"]
     depends_on: !reset []

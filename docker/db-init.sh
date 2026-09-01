@@ -91,6 +91,11 @@ GRANT INSERT, UPDATE ON sad.AgentAuditLog                TO [$APP_LOGIN];
 -- how far it got last time and writes back how far it got this time, so it
 -- needs INSERT and UPDATE. SELECT already comes from the schema grant.
 GRANT INSERT, UPDATE ON sad.IndexWatermark              TO [$APP_LOGIN];
+-- Index run history (migration 005). The API inserts a Queued run; the
+-- worker updates its status, heartbeat and progress. Both processes use
+-- this same login, so INSERT and UPDATE cover both. No DELETE: run
+-- history is an audit trail of what was indexed and what it cost.
+GRANT INSERT, UPDATE ON sad.IndexRun                    TO [$APP_LOGIN];
   -- auth.login performs an opportunistic rehash when scrypt parameters change,
   -- which UPDATEs these two columns inside the login request. Without this the
   -- first login after a policy change fails on a *correct* password, and the

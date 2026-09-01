@@ -141,7 +141,7 @@ services:
     # compose network. Only the ui service needs a public port.
     ports:
       - "127.0.0.1:8088:8088"
-    environment:
+    environment: &ai_environment
       # Defaults to the sqlserver container. Set SAD_DB_HOST=host.docker.internal
       # in docker/.env to use an external instance instead.
       SAD_DB__SERVER: "${SAD_DB_HOST:-sqlserver}"
@@ -202,6 +202,47 @@ services:
         condition: service_completed_successfully
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  # ---------------------------------------------------------------------------
+  # ai-indexer - the indexing worker. Same image as ai-service, different command.
+  #
+  # Separate from ai-service because indexing is long, memory-hungry and bound on
+  # an external provider, and none of that belongs in the process serving
+  # interactive investigations. A full index used to run inside the HTTP request
+  # that triggered it, holding a worker thread for minutes.
+  #
+  # No ports: it serves nothing. It consumes a Redis list and writes to Qdrant
+  # and SQL Server. Progress is visible through ai-service's /api/index/runs,
+  # which reads the same sad.IndexRun rows this worker writes.
+  #
+  # The environment is a YAML anchor from ai-service rather than a copy. These
+  # two must agree about the database, the embedder and the vector store: a
+  # worker embedding with different settings from the service that queries would
+  # write vectors into a collection nothing searches, and nothing would error.
+  # ---------------------------------------------------------------------------
+  ai-indexer:
+    profiles: ["core"]
+    build:
+      context: ../ai-service
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.retrieval.worker"]
+    environment: *ai_environment
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Restarts on crash; a deliberate `compose stop` stays stopped. The worker
+    # drains on SIGTERM, so a restart costs at most the batch in flight.
+    restart: unless-stopped
+    # SIGTERM, then 60s to finish the current batch before SIGKILL. The default
+    # 10s is not enough for a batch waiting on an embedding provider, and being
+    # killed mid-batch means repeating that batch on the next run.
+    stop_grace_period: 60s
 
   api-gateway:
     profiles: ["core"]
