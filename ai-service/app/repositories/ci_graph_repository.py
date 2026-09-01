@@ -74,8 +74,23 @@ PROVIDES = 6  # Provides::Uses       parent = array/volume/switch, child = consu
 #: an app simply because it calls many services.
 SUPPORT_EDGES = (RUNS_ON, HOSTED_ON, MEMBER_OF, LOCATED_IN, PROVIDES)
 
+#: Structural edges only. Used when descending from a cluster to find hardware,
+#: where following `Depends on::Used by` would wander into other applications'
+#: estates and return machines that have nothing to do with this cluster.
+CONTAINMENT_EDGES = (RUNS_ON, HOSTED_ON, MEMBER_OF, LOCATED_IN)
+
 #: ServiceNow class names, as stored in sad.ConfigurationItem.ClassName.
 CLASS_SERVER = "cmdb_ci_server"
+#: A cluster NODE is a membership record - a machine's share of a cluster, with
+#: the utilisation history attached. A SERVER is the machine. They were one row
+#: until migration 011, and conflating them produced hardware that averaged 7
+#: cores and 27GB because the row carried total_cpu / node_count.
+#:
+#: Counting nodes where you meant servers is the dangerous version of this
+#: mistake: today there is one server per node, so the two counts AGREE, and
+#: they diverge silently the moment anything shares hardware. Failure domains
+#: are counted in SERVERS - a machine is what fails.
+CLASS_CLUSTER_NODE = "cmdb_ci_cluster_node"
 CLASS_VM = "cmdb_ci_vm_instance"
 CLASS_CLUSTER = "cmdb_ci_cluster"
 CLASS_ZONE = "cmdb_ci_zone"
@@ -255,40 +270,73 @@ def blast_radius(
     return _walk(ci_id, upward=False, max_depth=max_depth, edge_types=edge_types)
 
 
-def cluster_members(cluster_ci_ids: list[int]) -> list[GraphNode]:
-    """Physical hosts belonging to these clusters - one hop DOWN.
+def servers_under_clusters(cluster_ci_ids: list[int], *, max_depth: int = 3) -> list[GraphNode]:
+    """Physical servers belonging to these clusters, whatever the shape between.
 
     Needed because of an asymmetry in the current topology: an application is
-    attached to its cluster (`Runs on::Runs`, parent = cluster) and hosts are
-    members of that cluster (`Member of::Members`, parent = cluster). So hosts
-    are SIBLINGS of the application beneath a shared cluster, not ancestors of
-    it, and a pure upward walk never reaches them.
+    attached to its cluster and hardware hangs beneath that cluster, so hosts are
+    SIBLINGS of the application rather than ancestors of it, and a pure upward
+    walk never reaches them. Once VM instances sit between application and server
+    the upward walk reaches hardware directly and this stops being needed.
 
-    Once VM instances land between application and host the upward walk reaches
-    hosts directly and this stops being needed for those applications. It is
-    kept rather than removed because the two shapes will coexist: an app placed
-    on a cluster and an app placed on a VM are both legitimate.
+    WHY THIS IS NOT ONE JOIN
 
-    Callers must record WHICH mechanism supplied the hosts - see
-    resiliency.failure_domains. A count that silently changes meaning depending
-    on the topology is worse than one that is absent.
+    It was, and the join was `cluster -[Member of]-> ClassName='cmdb_ci_server'`.
+    That is correct for the shape where clusters contain servers directly and
+    returns NOTHING, silently, for the shape migration 011 introduces, where a
+    cluster contains NODES and a node relates to a SERVER. An empty host count
+    does not raise; it just reports fewer failure domains than exist, and
+    under-counting a failure domain manufactures a single point of failure.
+
+    seekanddestroy-e7 also flagged that the server-to-node edge DIRECTION may
+    still flip - whether a node is the parent of its server or the child is not
+    settled. So this resolves by CLASS rather than by asserting a direction:
+
+      1. everything reachable downward from the cluster, bounded
+      2. servers among them - covers cluster -> server and cluster -> node -> server
+      3. plus servers that are PARENTS of any node found - covers the flip
+
+    Both directions cost one bounded query each. Hardcoding the direction that
+    happens to be true tonight costs a rewrite and, until the rewrite, a wrong
+    number that looks right.
     """
     if not cluster_ci_ids:
         return []
-    params = {f"c{i}": int(c) for i, c in enumerate(cluster_ci_ids)}
-    placeholders = ", ".join(f":{k}" for k in params)
-    sql = f"""
-    SELECT ci.CiId, ci.Name, ci.ClassName, 1 AS Depth
-    FROM {T('CiRelationship')} r
-    JOIN {T('ConfigurationItem')} ci ON ci.CiId = r.ChildCiId
-    WHERE r.ParentCiId IN ({placeholders})
-      AND r.TypeId = {MEMBER_OF}
-      AND ci.ClassName = '{CLASS_SERVER}'
-    """
-    return [
-        GraphNode(ci_id=r["CiId"], name=r["Name"], class_name=r["ClassName"], depth=r["Depth"])
-        for r in fetch_all(sql, params, max_rows=100_000)
-    ]
+
+    found: dict[int, GraphNode] = {}
+    node_ids: list[int] = []
+    for cluster_id in cluster_ci_ids:
+        for n in _walk(cluster_id, upward=False, max_depth=max_depth, edge_types=CONTAINMENT_EDGES):
+            if n.class_name == CLASS_SERVER:
+                found[n.ci_id] = n
+            elif n.class_name == CLASS_CLUSTER_NODE:
+                node_ids.append(n.ci_id)
+
+    # The flip case: server sits ABOVE the node rather than below it.
+    if node_ids:
+        params = {f"n{i}": int(v) for i, v in enumerate(sorted(set(node_ids)))}
+        placeholders = ", ".join(f":{k}" for k in params)
+        params["cls"] = CLASS_SERVER
+        rows = fetch_all(
+            f"SELECT DISTINCT ci.CiId, ci.Name, ci.ClassName "
+            f"FROM {T('CiRelationship')} r "
+            f"JOIN {T('ConfigurationItem')} ci ON ci.CiId = r.ParentCiId "
+            f"WHERE r.ChildCiId IN ({placeholders}) AND ci.ClassName = :cls",
+            params,
+            max_rows=100_000,
+        )
+        for r in rows:
+            found.setdefault(
+                r["CiId"],
+                GraphNode(ci_id=r["CiId"], name=r["Name"], class_name=r["ClassName"], depth=2),
+            )
+
+    return list(found.values())
+
+
+#: Backwards-compatible alias. The old name said "members", which is now exactly
+#: the thing this must NOT return - cluster members are nodes.
+cluster_members = servers_under_clusters
 
 
 def ci_for_application(application_code: str) -> GraphNode | None:

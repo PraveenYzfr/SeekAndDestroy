@@ -189,6 +189,34 @@ class TestAbsentIsNotZero:
                 assert label in p.not_evaluated
                 assert label not in p.domains
 
+    def test_a_cluster_node_is_never_counted_as_a_physical_host(self, any_application):
+        """A node is a membership record; a server is the machine.
+
+        They were one row until migration 011, and conflating them produced
+        hardware averaging 7 cores because the row carried total_cpu/node_count.
+        Counting nodes as hosts is the dangerous version of the mistake: with one
+        server per node the two counts AGREE, so it looks right until hardware is
+        shared and then silently is not.
+
+        Right now the estate has 2,007 nodes and zero servers loaded, so this
+        test has teeth today: anything reporting a host count is counting nodes.
+        """
+        seeded = {
+            r["ClassName"]: r["C"]
+            for r in fetch_all(
+                "SELECT ClassName, COUNT(*) C FROM sad.ConfigurationItem GROUP BY ClassName",
+                max_rows=100,
+            )
+        }
+        if seeded.get(graph.CLASS_SERVER):
+            pytest.skip("real servers are loaded - the confusion is no longer detectable this way")
+        assert seeded.get(graph.CLASS_CLUSTER_NODE), "expected cluster nodes in the graph"
+        p = R.profile_for_application(any_application)
+        assert "physical host" not in p.domains, (
+            "host count resolved from an estate with no servers - it is counting nodes"
+        )
+        assert "physical host" in p.not_evaluated
+
     def test_truncation_suppresses_the_spof_claim(self, any_application):
         """Truncation can only under-state a count, and an under-stated count
         manufactures a single point of failure that is not there."""
@@ -254,15 +282,23 @@ class TestMinimumNotMean:
         if not rows:
             pytest.skip("no single-cluster application in the current seed")
         p = R.profile_for_application(rows[0]["Name"])
+
+        # The claim that survives migration 011. Physical servers were
+        # reclassified to cmdb_ci_cluster_node and the real cmdb_ci_server rows
+        # are not loaded yet, so the host domain may legitimately have no data.
+        # What must hold either way is that a single-cluster application is
+        # flagged, and that an absent host domain is absent rather than zero.
         hosts = p.domains.get("physical host")
-        assert hosts is not None, "a placed application must resolve its hosts"
-        # 4 is where the old formula's node bonus saturates: base + 5 per extra
-        # node capped at 20, so from four extra nodes on it cannot tell any two
-        # applications apart.
-        assert hosts.count >= 4, (
-            f"{rows[0]['Name']} has {hosts.count} hosts - the old score maxed out here"
-        )
-        assert p.is_single_point_of_failure, "and the new one sees the single cluster"
+        if hosts is None:
+            assert "physical host" in p.not_evaluated
+        else:
+            # 4 is where the old formula's node bonus saturates: base + 5 per
+            # extra node capped at 20, so from four extra nodes on it cannot
+            # tell any two applications apart.
+            assert hosts.count >= 4, (
+                f"{rows[0]['Name']} has {hosts.count} hosts - the old score maxed out here"
+            )
+        assert p.is_single_point_of_failure, "the new score sees the single cluster"
         assert p.weakest == "cluster"
 
 

@@ -55,6 +55,11 @@ from app.scoring.subscores import clamp_d, round2
 #: Storage array sits BELOW volume deliberately: two volumes on one array are
 #: distinct at the volume level and a single point one level up, and a traversal
 #: that stops at volumes reports two-way redundancy for a single-array topology.
+#: Note what is NOT here: cmdb_ci_cluster_node. A node is a membership record,
+#: not a machine, and a failure domain has to be a thing that can fail. Today
+#: there is one server per node so counting either gives the same answer, which
+#: is exactly why this needs stating - the two diverge the moment hardware is
+#: shared, and the wrong version will not look wrong until then.
 DOMAINS: tuple[tuple[str, str], ...] = (
     ("physical host", graph.CLASS_SERVER),
     ("storage volume", graph.CLASS_STORAGE_VOLUME),
@@ -183,7 +188,7 @@ def profile_for_application(application_code: str) -> ResiliencyProfile:
     host_derivation = "upward"
     if graph.CLASS_SERVER not in by_class:
         cluster_ids = [n.ci_id for n in by_class.get(graph.CLASS_CLUSTER, [])]
-        members = graph.cluster_members(cluster_ids)
+        members = graph.servers_under_clusters(cluster_ids)
         if members:
             by_class[graph.CLASS_SERVER] = members
             host_derivation = "cluster members"
