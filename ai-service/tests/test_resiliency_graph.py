@@ -187,21 +187,81 @@ class TestGuards:
 
 class TestAbsentIsNotZero:
     def test_an_unplaced_application_is_unknown_not_fragile(self):
+        """The 87, asserted against the fixture rather than found incidentally.
+
+        Two sessions arrived at this population from opposite ends: I found 87
+        applications whose resiliency cannot be assessed, and c2 found 87
+        applications the packer never placed. They are the same set - Staging
+        applications that hit the 97%-of-physical-cores allocation ceiling,
+        because non-production clusters are sized at 0.75 of a production target.
+        The trade-off is deliberate; an overcommitted cluster is worse than an
+        unplaced application.
+
+        What matters here is that they come back UNKNOWN and never RISKY.
+        Reporting "0 hosts, single point of failure" for an application nobody
+        recorded a placement for is a confident answer to a question the CMDB
+        cannot answer, and it would put 87 fabricated findings in front of a
+        reader who has no way to tell them from the 387 real ones.
+        """
+        import generate_seed
+
+        unhosted = generate_seed.SCENARIOS.get("unhosted_applications") or []
+        if not unhosted:
+            pytest.skip("no unhosted_applications fixture")
+        require_loaded_graph()
+        for name in unhosted:
+            p = R.profile_for_application(name)
+            assert p.redundancy is None, f"{name} is unhosted but reported a redundancy figure"
+            assert not p.is_single_point_of_failure, (
+                f"{name} has no recorded placement and must not be called fragile"
+            )
+            assert R.graph_resiliency_subscore(p, "Tier-1") is None
+
+    def test_the_two_derivations_of_the_unassessable_set_agree(self):
+        """Cross-check between sessions.
+
+        c2 derives this set from the packer's allocation failures; I derive it
+        from applications whose support graph yields no evaluable failure domain.
+        Nothing forces the two to match, so if they diverge, one of us has a bug
+        and neither would notice from inside our own code.
+        """
+        import generate_seed
+
+        unhosted = set(generate_seed.SCENARIOS.get("unhosted_applications") or [])
+        if not unhosted:
+            pytest.skip("no unhosted_applications fixture")
+        require_loaded_graph()
         rows = fetch_all(
-            "SELECT TOP 1 a.Name FROM sad.ConfigurationItem a WHERE a.ClassName='cmdb_ci_appl' "
-            "AND NOT EXISTS (SELECT 1 FROM sad.CiRelationship r WHERE r.ChildCiId = a.CiId)",
+            "SELECT Name FROM sad.ConfigurationItem WHERE ClassName='cmdb_ci_appl'",
+            max_rows=5000,
+        )
+        mine = {r["Name"] for r in rows if R.profile_for_application(r["Name"]).redundancy is None}
+        assert mine == unhosted, (
+            f"the two derivations disagree - only I see {sorted(mine - unhosted)[:5]}, "
+            f"only the packer sees {sorted(unhosted - mine)[:5]}"
+        )
+
+    def test_the_unassessable_population_stays_small(self):
+        """e7's invariant, checked from my side too.
+
+        A handful of unplaceable staging applications is a capacity trade-off. A
+        large fraction would mean resiliency is silently not being measured for
+        most of the estate, and the headline SPOF count would be describing a
+        minority while reading like a census.
+        """
+        import generate_seed
+
+        unhosted = generate_seed.SCENARIOS.get("unhosted_applications") or []
+        if not unhosted:
+            pytest.skip("no unhosted_applications fixture")
+        total = fetch_all(
+            "SELECT COUNT(*) AS C FROM sad.ConfigurationItem WHERE ClassName='cmdb_ci_appl'",
             max_rows=1,
+        )[0]["C"]
+        assert len(unhosted) < total * 0.10, (
+            f"{len(unhosted)} of {total} applications are unassessable - resiliency is "
+            f"not being measured for a meaningful share of the estate"
         )
-        if not rows:
-            pytest.skip("every application has a placement in the current seed")
-        p = R.profile_for_application(rows[0]["Name"])
-        assert p.unplaced
-        assert p.redundancy is None
-        assert not p.is_single_point_of_failure, (
-            "an application nobody recorded a placement for is not thereby a single "
-            "point of failure - that is a confident answer to an unanswerable question"
-        )
-        assert R.graph_resiliency_subscore(p, "Tier-1") is None
 
     def test_an_unknown_application_does_not_raise(self):
         p = R.profile_for_application("APP-DOES-NOT-EXIST-ANYWHERE")
