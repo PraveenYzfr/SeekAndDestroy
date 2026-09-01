@@ -43,3 +43,16 @@ def get_active_for_node(node_id: int, limit: int = 200) -> list[ApplicationHosti
 
 
 assert ACTIVE_HOSTING_STATES == frozenset({"Active", "Migrating"})
+
+
+def changed_since(since, limit: int = 20000) -> list[ApplicationHosting]:
+    """Hosting rows updated after ``since``; all of them when ``since`` is None."""
+    if since is None:
+        rows = fetch_all(f"SELECT TOP (:limit) * FROM {T('ApplicationHosting')} ORDER BY UpdatedAt", {"limit": limit}, max_rows=limit)
+    else:
+        rows = fetch_all(
+            f"SELECT TOP (:limit) * FROM {T('ApplicationHosting')} WHERE UpdatedAt > :since ORDER BY UpdatedAt",
+            {"since": since, "limit": limit},
+            max_rows=limit,
+        )
+    return [ApplicationHosting(**r) for r in rows]

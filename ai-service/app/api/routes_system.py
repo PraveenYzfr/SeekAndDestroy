@@ -53,3 +53,38 @@ def rebuild_index(current: AuthenticatedEmployee = Depends(get_current_employee)
 
     count = index_all()
     return {"indexed_documents": count}
+
+
+@router.post("/api/index/refresh")
+def refresh_index_endpoint(current: AuthenticatedEmployee = Depends(get_current_employee)):
+    """Index only what changed since the last run. Manually triggered.
+
+    Same authentication as /api/index/rebuild - it mutates the index and it
+    spends money at the embedding provider, so it is not a probe.
+
+    Returns a per-source breakdown rather than a bare total, because "the job
+    ran" and "the job indexed something" have to stay distinguishable. A refresh
+    that legitimately finds nothing returns zeros, which is a different and
+    equally useful answer from one that found nothing because a watermark was
+    never written.
+    """
+    from app.retrieval.indexer import refresh_index
+
+    return refresh_index()
+
+
+@router.get("/api/index/status")
+def index_status(current: AuthenticatedEmployee = Depends(get_current_employee)):
+    """How far each source has been indexed, and how many documents are stored.
+
+    Authenticated with the others: it reports row counts and table names, which
+    is more than an unauthenticated caller needs to know about the estate.
+    """
+    from app.repositories import index_watermark_repository
+    from app.retrieval.vector_store import get_vector_store
+
+    try:
+        indexed = get_vector_store().count()
+    except Exception as exc:
+        indexed = f"error: {exc}"
+    return {"documents_in_index": indexed, "watermarks": index_watermark_repository.list_all()}

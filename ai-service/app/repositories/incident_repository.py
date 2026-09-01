@@ -65,3 +65,24 @@ def get_open_severe_for_cluster(cluster_id: int) -> list[Incident]:
         {"id": cluster_id},
     )
     return [Incident(**r) for r in rows]
+
+
+def changed_since(since, limit: int = 20000) -> list[Incident]:
+    """Incidents opened or closed after ``since``; all of them when None.
+
+    KNOWN BLIND SPOT: sad.Incident has no UpdatedAt. An edit that changes
+    Severity, Status or RootCauseCategory without touching OpenedAt or ClosedAt
+    is invisible here and will not be re-indexed until the next full rebuild.
+    Adding UpdatedAt to the table is the fix; until then this is a limitation of
+    the schema being worked around, not a complete change feed.
+    """
+    if since is None:
+        rows = fetch_all(f"SELECT TOP (:limit) * FROM {T('Incident')} ORDER BY OpenedAt", {"limit": limit}, max_rows=limit)
+    else:
+        rows = fetch_all(
+            f"SELECT TOP (:limit) * FROM {T('Incident')} "
+            f"WHERE OpenedAt > :since OR (ClosedAt IS NOT NULL AND ClosedAt > :since) ORDER BY OpenedAt",
+            {"since": since, "limit": limit},
+            max_rows=limit,
+        )
+    return [Incident(**r) for r in rows]

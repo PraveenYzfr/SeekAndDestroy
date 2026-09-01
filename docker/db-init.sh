@@ -87,6 +87,10 @@ GRANT INSERT, UPDATE ON sad.InfrastructureRecommendation TO [$APP_LOGIN];
 GRANT INSERT         ON sad.RecommendationDecision       TO [$APP_LOGIN];
 GRANT INSERT         ON sad.CapacityRequest              TO [$APP_LOGIN];
 GRANT INSERT, UPDATE ON sad.AgentAuditLog                TO [$APP_LOGIN];
+-- Differential indexing watermarks (migration 004). The refresh job reads
+-- how far it got last time and writes back how far it got this time, so it
+-- needs INSERT and UPDATE. SELECT already comes from the schema grant.
+GRANT INSERT, UPDATE ON sad.IndexWatermark              TO [$APP_LOGIN];
   -- auth.login performs an opportunistic rehash when scrypt parameters change,
   -- which UPDATEs these two columns inside the login request. Without this the
   -- first login after a policy change fails on a *correct* password, and the

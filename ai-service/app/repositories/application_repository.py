@@ -58,3 +58,21 @@ def list_all(limit: int = 200) -> list[CmdbApplication]:
         f"SELECT TOP (:limit) * FROM {T('CmdbApplication')} ORDER BY ApplicationCode", {"limit": limit}
     )
     return [CmdbApplication(**r) for r in rows]
+
+
+def changed_since(since, limit: int = 5000) -> list[CmdbApplication]:
+    """Applications updated after ``since``; all of them when ``since`` is None.
+
+    ``UpdatedAt`` is maintained by the application layer, not a trigger, so this
+    is only as accurate as the writers are disciplined. That is acceptable here
+    because a full rebuild remains the correctness backstop.
+    """
+    if since is None:
+        rows = fetch_all(f"SELECT TOP (:limit) * FROM {T('CmdbApplication')} ORDER BY UpdatedAt", {"limit": limit}, max_rows=limit)
+    else:
+        rows = fetch_all(
+            f"SELECT TOP (:limit) * FROM {T('CmdbApplication')} WHERE UpdatedAt > :since ORDER BY UpdatedAt",
+            {"since": since, "limit": limit},
+            max_rows=limit,
+        )
+    return [CmdbApplication(**r) for r in rows]

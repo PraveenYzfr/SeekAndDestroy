@@ -72,3 +72,16 @@ def list_all(limit: int = 500) -> list[InfrastructureCluster]:
         {"limit": limit},
     )
     return [InfrastructureCluster(**r) for r in rows]
+
+
+def changed_since(since, limit: int = 5000) -> list[InfrastructureCluster]:
+    """Clusters updated after ``since``; all of them when ``since`` is None."""
+    if since is None:
+        rows = fetch_all(f"SELECT TOP (:limit) * FROM {T('InfrastructureCluster')} ORDER BY UpdatedAt", {"limit": limit}, max_rows=limit)
+    else:
+        rows = fetch_all(
+            f"SELECT TOP (:limit) * FROM {T('InfrastructureCluster')} WHERE UpdatedAt > :since ORDER BY UpdatedAt",
+            {"since": since, "limit": limit},
+            max_rows=limit,
+        )
+    return [InfrastructureCluster(**r) for r in rows]
