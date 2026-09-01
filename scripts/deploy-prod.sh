@@ -25,6 +25,18 @@
 #                              Leaving them mixes two estates in one index.
 #   verify by QUERY            not by exit code. See the seed note above.
 #
+#   NOBODY RUNS TESTS DURING THIS. reset.sql drops every table in [sad] and the
+#                              seed reloads them, so IDENTITY restarts at 1. A test
+#                              that created an investigation and holds its id loses
+#                              the parent row underneath it and fails on a foreign
+#                              key into sad.AgentAuditLog - which reads as a bug in
+#                              audit logging, in code that is fine. A false GREEN
+#                              (a suite that skips) costs a missed signal; a false
+#                              RED with a confident wrong cause costs an hour and,
+#                              in CI, earns an @flaky decorator that buries it. This
+#                              is not limited to CMDB tests: anything that writes a
+#                              row and reads it back later is unsafe in this window.
+#                              Announce the start and the end.
 set -euo pipefail
 set +x                      # never echo the SA password
 
