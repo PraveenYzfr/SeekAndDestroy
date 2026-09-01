@@ -24,7 +24,16 @@ from pathlib import Path
 SEED = 20240101
 ANCHOR_DATE = date(2026, 8, 4)  # "today" for the seed data - fixed, never derived from the clock
 HISTORY_DAYS = 180
-BATCH_SIZE = 1000
+#: Rows per multi-row INSERT. Was 1000, which SQL Server Express could not
+#: ingest once the corpus reached 89,912 comment rows carrying NVARCHAR(MAX)
+#: bodies: the seed died partway with "Msg 701 - insufficient system memory in
+#: resource pool 'internal'", having loaded applications and clusters but no
+#: incidents. Express caps its buffer pool at ~1.4 GB regardless of
+#: MSSQL_MEMORY_LIMIT_MB, and on the VM that pool is shared with RLogistics and
+#: AutoCoder. 200 keeps each statement small enough to parse and commit inside
+#: it, at the cost of a slightly larger file and more round trips - both cheap
+#: next to a seed that stops halfway.
+BATCH_SIZE = 200
 
 OUTPUT_PATH = Path(__file__).resolve().parents[1] / "database" / "seed.sql"
 
