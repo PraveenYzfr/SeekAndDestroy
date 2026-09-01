@@ -627,6 +627,29 @@ HOSTING_ROWS, PRIMARY_CLUSTER_BY_APP = seed_scale.pack_applications(
 for _a in APPLICATIONS:
     _a.primary_cluster_idx = PRIMARY_CLUSTER_BY_APP.get(_a.idx)
 
+#: Applications the packer could not place, exported so the number is a measured
+#: property rather than a discovery.
+#:
+#: pack_applications() deliberately refuses to allocate a cluster past 97% of its
+#: physical cores, on the reasoning that an unhosted application is a data bug and
+#: an overcommitted cluster is a worse one. That trade-off is right, and it was
+#: invisible: 87 applications - every one of them Staging, where capacity is
+#: tightest because non-production clusters are drawn at 0.75 of a production
+#: target - ended up with no hosting row, no VM, and no relationship of any kind.
+#: seekanddestroy-c2 found them while auditing CMDB orphans and had to chase them
+#: back through three layers to establish they were not a bug in the CI graph.
+#:
+#: They are also realistic. A real bank's CMDB carries applications nobody ever
+#: mapped to infrastructure - decommissioned, shadow IT, or registered ahead of a
+#: build. So they stay, as a named fixture with a bound: if this list grows past a
+#: tenth of the estate, the packer is failing rather than being principled.
+_HOSTED_IDS = {row[0] for row in HOSTING_ROWS}
+UNHOSTED_APPLICATIONS = [a.code for a in APPLICATIONS if a.idx not in _HOSTED_IDS]
+assert len(UNHOSTED_APPLICATIONS) < len(APPLICATIONS) * 0.10, (
+    f"{len(UNHOSTED_APPLICATIONS)} of {len(APPLICATIONS)} applications are unhosted - "
+    "the packer is out of capacity, not exercising judgement"
+)
+
 # Rewrite each cluster's utilisation trend so the measured series agrees with
 # what it now hosts. compute_cluster_capacity() takes the worse of allocated and
 # measured, so leaving the old trend would have clusters that are 88% allocated
@@ -676,6 +699,7 @@ SCENARIOS = {
     "consolidation_applications": [a.code for a in _consolidate],
     "expansion_applications": [a.code for a in _expansion],
     "strong_alternative_applications": [a.code for a in _strong_alt],
+    "unhosted_applications": UNHOSTED_APPLICATIONS,
 }
 
 # The CMDB fixtures live in seed_cmdb and are only produced when main() runs, so
