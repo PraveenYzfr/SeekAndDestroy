@@ -1158,12 +1158,19 @@ def main() -> None:
         problem_rows,
     )
 
-    lines.append(f"-- {len(incident_rows)} incidents")
+    # Fill ProblemId and CausedByChangeId now that both sides exist. Without
+    # this the columns are present on 10,000 rows and populated on none, and
+    # "has this happened before" has nothing to follow.
+    linked_p, linked_c = seed_itsm.link_incidents(
+        incident_rows, problem_rows, event_ids, change_rows, rng
+    )
+    lines.append(f"-- {len(incident_rows)} incidents "
+                 f"({linked_p} linked to a problem, {linked_c} to a causing change)")
     emit_inserts(
         lines, "sad.Incident",
         ["ApplicationId", "ClusterId", "NodeId", "Severity", "OpenedAt", "ClosedAt", "Status",
          "RootCauseCategory", "Number", "ShortDescription", "Description", "CloseNotes",
-         "AssignmentGroup", "Impact", "Urgency"],
+         "AssignmentGroup", "Impact", "Urgency", "ProblemId", "CausedByChangeId"],
         incident_rows,
     )
 
@@ -1195,6 +1202,7 @@ def main() -> None:
     OUTPUT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"Wrote {OUTPUT_PATH} ({len(lines)} lines)")
     loaded = [p for p in LOAD_PLANS.values() if p.app_count]
+    print(f"  incidents linked  : {linked_p} to a problem, {linked_c} to a change")
     print(f"  applications      : {len(APPLICATIONS)}")
     print(f"  hosting rows      : {len(HOSTING_ROWS)}")
     print(f"  clusters occupied : {len(loaded)} of {len(CLUSTERS)}")

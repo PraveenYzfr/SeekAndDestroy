@@ -481,11 +481,16 @@ def build_incidents(clusters, applications, nodes, load_plans, change_count, rng
         impact, urgency = _IMPACT_URGENCY[severity]
         closed = opened + timedelta(hours=rng.randint(1, 40)) if rng.random() < 0.93 else None
         status = "Closed" if closed else rng.choice(["Open", "InProgress"])
-        incidents.append((
+        # ProblemId and CausedByChangeId are appended as None here and filled in
+        # by link_incidents() once the problems exist. They cannot be set now:
+        # a problem is defined by the incidents it explains, so the incidents
+        # have to exist first, and the identity of a problem row is its position
+        # in the insert order.
+        incidents.append([
             app.idx if app else None, cluster.idx, None, severity, opened, closed, status,
             root_cause, "INC%07d" % (INCIDENT_NUMBER_BASE + idx), short, desc,
-            close if closed else None, group, impact, urgency,
-        ))
+            close if closed else None, group, impact, urgency, None, None,
+        ])
         for c in _comments_for(opened, cluster.code, node_name(cluster.idx),
                                app.code if app else "", rng):
             comments.append((idx,) + c)
@@ -530,6 +535,75 @@ def build_incidents(clusters, applications, nodes, load_plans, change_count, rng
              _fill(tpl["close"], rng, **ctx), rng.choice(ASSIGNMENT_GROUPS))
 
     return incidents, comments, event_incident_ids
+
+
+def link_incidents(incidents, problem_rows, event_incident_ids, changes, rng):
+    """Fill ProblemId and CausedByChangeId, turning the pile into a chain.
+
+    Without this the schema has the columns and the data has none of the
+    relationships, so "has this happened before" and "what caused this" cannot
+    be answered however good retrieval is - which is the whole reason
+    retrieval-design.md calls the links the point.
+
+    Three kinds of link, and each is defensible rather than decorative:
+
+    * Every incident belonging to a major event points at that event's problem
+      record. That is what makes 100 tickets in three days one story.
+    * Incidents on a cluster with a recurring-capacity problem point at it, but
+      only the capacity-caused ones - a disk failure on a busy cluster is not
+      evidence of over-commitment, and linking it would be the kind of tidy
+      falsehood that makes an explanation untrustworthy.
+    * A minority of incidents point at a change that FAILED on the same cluster
+      shortly before they opened. Most incidents are not caused by a change and
+      saying so with NULL is more honest than inventing a culprit.
+    """
+    problem_by_event = {}
+    for i, row in enumerate(problem_rows, start=1):
+        for event in MAJOR_EVENTS:
+            if row[1] == event["title"]:
+                problem_by_event[event["key"]] = i
+    # Recurring-capacity problems carry their ClusterId in position 9.
+    problem_by_cluster = {row[9]: i for i, row in enumerate(problem_rows, start=1) if row[9]}
+
+    linked_problem = linked_change = 0
+
+    for key, ids in event_incident_ids.items():
+        pid = problem_by_event.get(key)
+        if not pid:
+            continue
+        for incident_idx in ids:
+            incidents[incident_idx - 1][15] = pid
+            linked_problem += 1
+
+    # Failed changes, indexed by cluster and completion time, so an incident can
+    # be attributed to one that actually preceded it on the same infrastructure.
+    failures_by_cluster = {}
+    for i, c in enumerate(changes, start=1):
+        if c[12] in ("Failed", "BackedOut") and c[11] is not None:
+            failures_by_cluster.setdefault(c[5], []).append((c[11], i))
+
+    for pos, row in enumerate(incidents, start=1):
+        cluster_idx, opened, root_cause = row[1], row[4], row[7]
+        if row[15] is None and root_cause == "Capacity" and cluster_idx in problem_by_cluster:
+            row[15] = problem_by_cluster[cluster_idx]
+            linked_problem += 1
+        if row[16] is None:
+            # A change that ended in the 10 days before the incident opened.
+            # 72 hours was the first attempt and produced 45 links out of
+            # 10,000 - 0.45%, against the 10-30% a real estate runs at. A bad
+            # change frequently surfaces days later: a memory leak needs to
+            # accumulate, a config error waits for the next batch window.
+            # Ten days is still short enough that the attribution is plausible
+            # rather than speculation dressed as data.
+            candidates = [
+                cid for ended, cid in failures_by_cluster.get(cluster_idx, [])
+                if ended <= opened and (opened - ended).total_seconds() <= 10 * 86400
+            ]
+            if candidates and rng.random() < 0.85:
+                row[16] = candidates[-1]
+                linked_change += 1
+
+    return linked_problem, linked_change
 
 
 def build_problems(clusters, load_plans, event_incident_ids, change_count, rng, anchor):
