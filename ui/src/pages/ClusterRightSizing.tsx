@@ -59,11 +59,11 @@ export default function ClusterRightSizing() {
             </div>
             <div>
               {/* Node change, not currency. The two savings figures that were
-                  here are still returned by the API and are still computed from
-                  sad.InfrastructureCluster.MonthlyCost - they are simply not
-                  shown, because cost is not a dimension this platform scores on
-                  and putting a dollar figure beside a capacity recommendation
-                  invites a comparison the scoring never made. */}
+                  here are still returned by the API and still computed from
+                  sad.InfrastructureCluster.MonthlyCost; they are only hidden.
+                  Node delta is the unit the recommendation is actually made in -
+                  right-sizing decides a node count, and the money was a
+                  derived restatement of that one number. */}
               <div className="stat-label">Node change</div>
               <div>{r.node_delta > 0 ? `+${r.node_delta}` : r.node_delta}</div>
             </div>

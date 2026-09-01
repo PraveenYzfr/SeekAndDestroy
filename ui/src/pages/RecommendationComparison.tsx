@@ -96,7 +96,12 @@ export default function RecommendationComparison() {
               <tr><td>Capacity score</td>{rows.map((r) => <td key={r.cluster_code}>{r.subscores?.capacity ?? "—"}</td>)}</tr>
               <tr><td>Compatibility score</td>{rows.map((r) => <td key={r.cluster_code}>{r.subscores?.compatibility ?? "—"}</td>)}</tr>
               <tr><td>Resiliency score</td>{rows.map((r) => <td key={r.cluster_code}>{r.subscores?.resiliency ?? "—"}</td>)}</tr>
-              <tr><td>Cost score</td>{rows.map((r) => <td key={r.cluster_code}>{r.subscores?.cost ?? "—"}</td>)}</tr>
+              {/* Cost score is deliberately not rendered. It is still computed
+                  and still contributes to the overall score - weight_cost 0.15
+                  for clusters, node_weight_cost 0.20 for nodes - so the ranking
+                  is unchanged; it is only hidden. If cost should stop affecting
+                  the ranking too, set those weights to 0 in settings.py rather
+                  than adding the row back. */}
               <tr><td>Dependency score</td>{rows.map((r) => <td key={r.cluster_code}>{r.subscores?.dependency ?? "—"}</td>)}</tr>
               <tr><td>Risk score</td>{rows.map((r) => <td key={r.cluster_code}>{r.subscores?.risk ?? "—"}</td>)}</tr>
               <tr>
