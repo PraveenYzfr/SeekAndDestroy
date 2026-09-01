@@ -47,7 +47,21 @@ from dataclasses import dataclass, field
 # which means raising cluster node counts, which re-runs packing and utilisation
 # and therefore the forecast fixtures. That is its own change with the test suite
 # as the gate, not a constant quietly bumped at the end of a long session.
-INFRA_SERVERS = 2_700          # servers that are not cluster members
+INFRA_SERVERS = 7_993          # servers that belong to no cluster
+#
+# 2,007 cluster-member hosts + 7,993 standalone = 10,000 servers.
+#
+# The split is the point. A bank does not run everything on clustered
+# virtualisation: the clusters are the hypervisor estate, and most of the
+# floor is standalone - physical database hosts too large or too licensed to
+# virtualise, batch farms, integration and web tiers, plus the shared services
+# nobody counts until they fail. None of them appear in any application's
+# hosting record, which is exactly why the old model could not see them.
+#
+# Cluster node counts are deliberately NOT raised to reach the total.
+# per_node_cpu is total_cpu / node_count, so tripling node_count would divide
+# a 200-core cluster into 7-core nodes - a bigger number describing a less
+# realistic estate.
 VMS_PER_HYPERVISOR = 15        # consolidation ratio on the app-hosting hosts
 STORAGE_ARRAYS_PER_DC = 15
 VOLUMES_PER_ARRAY = 50
@@ -60,13 +74,22 @@ BUSINESS_SERVICES = 120
 #: a real floor is: shared services and storage outnumber authentication, and
 #: nothing is a round number because real estates are not.
 INFRA_ROLE_MIX = [
-    ("DNS", 0.052), ("NTP", 0.021), ("SMTPRelay", 0.028), ("FileServer", 0.084),
-    ("JumpHost", 0.037), ("ArtifactRepo", 0.026), ("ConfigMgmt", 0.033),
-    ("DomainController", 0.062), ("LDAP", 0.038), ("IAM", 0.031),
-    ("PKI", 0.024), ("RADIUS", 0.019), ("MFA", 0.017),
-    ("StorageController", 0.129), ("BackupMedia", 0.101),
-    ("Monitoring", 0.058), ("LogCollector", 0.049), ("SIEM", 0.034),
-    ("MessageBroker", 0.071), ("Middleware", 0.086),
+    # workload tiers - most of a real floor, and entirely absent before
+    ("DatabaseServer", 0.148), ("AppServer", 0.121), ("WebServer", 0.083),
+    ("BatchServer", 0.074), ("IntegrationServer", 0.052), ("EtlServer", 0.041),
+    ("ReportingServer", 0.036), ("CacheServer", 0.029), ("SearchServer", 0.023),
+    ("ApiGateway", 0.027), ("Middleware", 0.058), ("MessageBroker", 0.039),
+    # shared services
+    ("FileServer", 0.046), ("DNS", 0.028), ("Proxy", 0.024), ("ConfigMgmt", 0.021),
+    ("JumpHost", 0.018), ("ArtifactRepo", 0.016), ("SMTPRelay", 0.014),
+    ("PrintServer", 0.011), ("NTP", 0.009),
+    # storage and protection
+    ("StorageController", 0.038), ("BackupMedia", 0.031), ("TapeLibrary", 0.008),
+    # observability
+    ("Monitoring", 0.026), ("LogCollector", 0.022), ("SIEM", 0.013),
+    # authentication and directory
+    ("DomainController", 0.019), ("LDAP", 0.012), ("IAM", 0.010),
+    ("PKI", 0.008), ("RADIUS", 0.006), ("MFA", 0.005),
 ]
 
 #: Which zone type each role belongs in. Storage, authentication, network and
@@ -74,14 +97,32 @@ INFRA_ROLE_MIX = [
 #: which is how a floor is laid out and what makes a zone-level question return
 #: something coherent.
 ROLE_ZONE = {
-    "DNS": "Core", "NTP": "Core", "SMTPRelay": "Core", "FileServer": "Core",
-    "JumpHost": "Management", "ArtifactRepo": "Management", "ConfigMgmt": "Management",
+    # Workload tiers sit in compute alongside the clusters they serve.
+    "DatabaseServer": "Compute", "AppServer": "Compute", "WebServer": "Compute",
+    "BatchServer": "Compute", "IntegrationServer": "Compute", "EtlServer": "Compute",
+    "ReportingServer": "Compute", "CacheServer": "Compute", "SearchServer": "Compute",
+    "ApiGateway": "Network", "Middleware": "Compute", "MessageBroker": "Core",
+    "FileServer": "Core", "DNS": "Core", "Proxy": "Network", "ConfigMgmt": "Management",
+    "JumpHost": "Management", "ArtifactRepo": "Management", "SMTPRelay": "Core",
+    "PrintServer": "Core", "NTP": "Core",
+    "StorageController": "Storage", "BackupMedia": "Storage", "TapeLibrary": "Storage",
+    "Monitoring": "Management", "LogCollector": "Management", "SIEM": "Management",
     "DomainController": "Core", "LDAP": "Core", "IAM": "Core",
     "PKI": "Core", "RADIUS": "Core", "MFA": "Core",
-    "StorageController": "Storage", "BackupMedia": "Storage",
-    "Monitoring": "Management", "LogCollector": "Management", "SIEM": "Management",
-    "MessageBroker": "Core", "Middleware": "Core",
 }
+
+#: Physical server hardware. A node's share of a cluster is 7 cores on average in
+#: this estate; a machine is not. These are the boxes that share is taken from -
+#: two-socket, 32 to 96 cores, 256GB to 1.5TB, which is what a bank actually racks.
+SERVER_SKUS = [
+    ("Dell",  "PowerEdge R650",  2, 16, 256),
+    ("Dell",  "PowerEdge R750",  2, 24, 512),
+    ("HPE",   "ProLiant DL380",  2, 24, 512),
+    ("HPE",   "ProLiant DL580",  4, 24, 1024),
+    ("Lenovo","ThinkSystem SR650",2, 32, 768),
+    ("Cisco", "UCS C240 M6",     2, 32, 1024),
+    ("Dell",  "PowerEdge R760",  2, 48, 1536),
+]
 
 _ARRAY_VENDORS = ["NetApp", "Dell EMC", "Pure Storage", "HPE", "Hitachi"]
 _SWITCH_VENDORS = ["Cisco", "Arista", "Juniper"]
@@ -136,6 +177,7 @@ class Estate:
     edges: list[tuple[int, int, int]] = field(default_factory=list)   # parent, child, type
     data_centres: list[dict] = field(default_factory=list)
     zones: list[dict] = field(default_factory=list)
+    servers: list[dict] = field(default_factory=list)
     infra_servers: list[dict] = field(default_factory=list)
     vms: list[dict] = field(default_factory=list)
     arrays: list[dict] = field(default_factory=list)
@@ -240,13 +282,39 @@ def build(clusters, applications, nodes, rng, anchor_date) -> Estate:
         if c.neighborhood_code in zone_ci:
             e.link(zone_ci[c.neighborhood_code], ci.ci_id, 5)
 
+    # A node is a membership; a server is a machine. They were one row, which is
+    # why a "server" in this estate averaged 7 cores - it was carrying the
+    # cluster's capacity divided by its member count, which is the right number
+    # for a share and the wrong number for hardware. Both now exist.
     node_ci: dict[str, int] = {}
+    server_ci: dict[str, int] = {}
     for n in nodes:
-        ci = e.add_ci("server", n.host_name, n.host_name, "cmdb_ci_server",
+        ci = e.add_ci("node", n.host_name, n.host_name, "cmdb_ci_cluster_node",
                       environment=n.cluster.environment, discovery_source="Discovery",
                       first_discovered=stamp, last_discovered=stamp)
         node_ci[n.host_name] = ci.ci_id
         e.link(cluster_ci[n.cluster.code], ci.ci_id, 3)
+
+        vendor, model, sockets, per_socket, memory = SERVER_SKUS[
+            stable_hash(n.host_name) % len(SERVER_SKUS)]
+        host = f"{n.host_name}-esx"
+        sci = e.add_ci("server", host, host, "cmdb_ci_server",
+                       environment=n.cluster.environment, discovery_source="Discovery",
+                       first_discovered=old, last_discovered=stamp)
+        server_ci[n.host_name] = sci.ci_id
+        e.servers.append({
+            "ci_id": sci.ci_id, "name": host, "role": "Hypervisor",
+            "zone_ci": None, "cluster_code": n.cluster.code,
+            "cpu": sockets * per_socket, "memory_gb": memory,
+            "storage_gb": rng.choice([960, 1920, 3840]),
+            "os": n.cluster.os, "sockets": sockets, "cores_per_socket": per_socket,
+            "vendor": vendor, "model": model, "hypervisor": 1,
+            "rack": f"R{(stable_hash(host) % 40) + 1:02d}-U{(stable_hash(host) % 40) + 4:02d}",
+            "node_host": n.host_name,
+        })
+        # The server RUNS the node: hardware is the parent, membership the child,
+        # so a server failure propagates down to the cluster that depended on it.
+        e.link(sci.ci_id, ci.ci_id, 1)
 
     # ---- applications -------------------------------------------------------
     app_ci: dict[str, int] = {}
@@ -316,16 +384,16 @@ def build(clusters, applications, nodes, rng, anchor_date) -> Estate:
     for n in nodes:
         pool = switches_by_dc.get(n.cluster.datacenter) or []
         if pool:
-            e.link(pool[sum(ord(ch) for ch in n.host_name) % len(pool)], node_ci[n.host_name], 6)
+            e.link(pool[sum(ord(ch) for ch in n.host_name) % len(pool)], server_ci[n.host_name], 6)
 
-    return _build_virtual(e, clusters, applications, nodes, node_ci, app_ci,
-                          cluster_ci, typed_zone, dc_ci, rng, stamp, old)
+    return _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
+                          app_ci, cluster_ci, typed_zone, dc_ci, rng, stamp, old)
 
 # =============================================================================
 # The virtual layer, the infrastructure estate, and the planted failure domains
 # =============================================================================
-def _build_virtual(e, clusters, applications, nodes, node_ci, app_ci,
-                   cluster_ci, typed_zone, dc_ci, rng, stamp, old):
+def _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
+                   app_ci, cluster_ci, typed_zone, dc_ci, rng, stamp, old):
     """VMs on hosts, applications on VMs, and the shared dependencies that decide
     whether redundancy is real.
 
@@ -366,13 +434,13 @@ def _build_virtual(e, clusters, applications, nodes, node_ci, app_ci,
                        "vcpu": rng.choice([2, 4, 4, 8, 8, 16]),
                        "memory_gb": rng.choice([8, 16, 16, 32, 64]),
                        "disk_gb": rng.choice([80, 120, 250, 500]),
-                       "host_ci": node_ci[host.host_name],
+                       "host_ci": server_ci[host.host_name],
                        "volume_ci": vol["ci_id"] if vol else None,
                        "os": c.os, "cluster": c.code}
                 e.vms.append(rec)
                 vms_by_cluster.setdefault(c.code, []).append(rec)
                 # Host hosts VM; volume provides storage to VM.
-                e.link(node_ci[host.host_name], ci.ci_id, 2)
+                e.link(server_ci[host.host_name], ci.ci_id, 2)
                 if vol:
                     e.link(vol["ci_id"], ci.ci_id, 6)
 
@@ -408,6 +476,14 @@ def _build_virtual(e, clusters, applications, nodes, node_ci, app_ci,
             e.link(vm["ci_id"], app_ci[a.code], 1)
 
     # ---- infrastructure servers: the estate that hosts no application -------
+    # Workload-tier servers belong in compute, alongside the clusters they serve.
+    # Those zones are the estate's original named neighbourhoods rather than the
+    # four typed ones added per site, so they are resolved separately.
+    compute_zones: dict[str, list] = {}
+    for z in e.zones:
+        if z["type"] == "Compute":
+            compute_zones.setdefault(z["dc"], []).append(z["ci_id"])
+
     infra_seq = 0
     dc_list = sorted(dc_ci)
     for role, share in INFRA_ROLE_MIX:
@@ -422,6 +498,11 @@ def _build_virtual(e, clusters, applications, nodes, node_ci, app_ci,
                 name = f"{name}-{infra_seq:04d}"
             # Ownership and classification are deliberately incomplete: a real CMDB
             # has gaps and a completeness check that finds none has not been tested.
+            if ztype == "Compute":
+                pool_z = compute_zones.get(dc_name) or [typed_zone[(dc_name, "Core")]]
+                zone_for_role = pool_z[infra_seq % len(pool_z)]
+            else:
+                zone_for_role = typed_zone[(dc_name, ztype)]
             owned = rng.randint(1, 20) if rng.random() < 0.72 else None
             ci = e.add_ci("server", name, name, "cmdb_ci_server", environment="Production",
                           owned_by_id=owned,
@@ -433,12 +514,12 @@ def _build_virtual(e, clusters, applications, nodes, node_ci, app_ci,
                           last_discovered=stamp if rng.random() < 0.88 else old)
             e.infra_servers.append({
                 "ci_id": ci.ci_id, "name": name, "role": role,
-                "zone_ci": typed_zone[(dc_name, ztype)],
+                "zone_ci": zone_for_role,
                 "cpu": rng.choice([4, 8, 16, 32]), "memory_gb": rng.choice([16, 32, 64, 128]),
                 "storage_gb": rng.choice([200, 500, 1000, 2000]),
                 "os": rng.choice(["Linux/RHEL9", "Linux/Ubuntu22", "Windows/2022"]),
             })
-            e.link(typed_zone[(dc_name, ztype)], ci.ci_id, 5)
+            e.link(zone_for_role, ci.ci_id, 5)
 
     # ---- database instances, on VMs -----------------------------------------
     for i in range(1, DB_INSTANCES + 1):
