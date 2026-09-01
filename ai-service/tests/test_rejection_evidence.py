@@ -98,17 +98,25 @@ class TestRejectionEvidence:
         docs = _rejection_rule_evidence(_query(f"Why was {cluster.ClusterCode} rejected for {app.ApplicationCode}?"))
         assert docs, "no rule evidence produced for a genuinely rejected pair"
         assert docs[0]["entity_type"] == "eligibility_verdict"
-        assert "Rejected" in docs[0]["text"]
+        # Case-insensitive: this asserted "Rejected" and broke when the wording
+        # became "was rejected for". Third time today a test has pinned copy
+        # rather than behaviour - the property is that the verdict is stated,
+        # not that it is capitalised.
+        assert "rejected" in docs[0]["text"].lower()
         assert cluster.ClusterCode in docs[0]["text"]
 
-    def test_the_failing_rule_is_first_among_the_rules(self, rejected_pair):
-        """It is the answer to "why". The model reads this list in order, and
-        burying the failure under the passes invites a summary that leads with
-        what went right."""
+    def test_only_failures_are_sent_as_evidence(self, rejected_pair):
+        """The passes are not the answer to "why was this rejected".
+
+        This used to send all ten rules with failures sorted first, and the model
+        dutifully narrated the nine that passed - reproducing exactly the
+        detailed summary the feature was built to replace. Sorting was not
+        enough; the passes had to stop being sent at all.
+        """
         app, cluster = rejected_pair
         docs = _rejection_rule_evidence(_query(f"Why was {cluster.ClusterCode} rejected for {app.ApplicationCode}?"))
         rules = [d for d in docs if d["entity_type"] == "eligibility_rule"]
-        assert "FAILED" in rules[0]["text"]
+        assert "failed" in rules[0]["text"].lower()
 
     def test_every_rule_is_traceable_to_a_rule_id(self, rejected_pair):
         """The point of this path: each claim the model can make is anchored to

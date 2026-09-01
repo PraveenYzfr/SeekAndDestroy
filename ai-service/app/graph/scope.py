@@ -109,26 +109,18 @@ _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
 #: only saying what it will not do. Someone who asked an off-topic question has
 #: no idea what the on-topic ones look like, and "that is out of scope" leaves
 #: them guessing - which is how a person decides the tool is useless and stops.
-#: One line per investigation type the graph actually routes to, each with a
-#: real example, so the next thing they type can be copied from this answer.
+#:
+#: Three examples, not six. The first version listed every investigation type
+#: with a description and an example, which read as a manual at the moment
+#: somebody wanted a redirect. Three copyable lines teach the shape of a valid
+#: question; the remaining types are discoverable by asking one.
 OUT_OF_SCOPE_REPLY = (
-    "I am an infrastructure agent for this estate. I do not answer general questions - "
-    "I have not run an investigation for that one.\n\n"
-    "What I can answer:\n"
-    "- Hosting - where to place a workload. "
-    '"Find the best clusters for hosting APP-CRM"\n'
-    "- Capacity - what fits, and where there is headroom. "
-    '"I need 32 cores, 128 GB RAM and 2 TB storage in production"\n'
-    "- Right-sizing - which clusters are over- or under-provisioned. "
-    '"Which clusters are underutilized?"\n'
-    "- Consolidation - which workloads could share infrastructure. "
-    '"Can anything be consolidated onto fewer clusters?"\n'
-    "- Forecasts - where utilization is heading. "
-    '"What will CPU look like in 6 months?"\n'
-    "- Trade-offs and decisions - why a cluster was chosen or rejected. "
-    '"Why was atl-03 rejected for APP-CRM?"\n\n'
-    "I work from the CMDB - clusters, their nodes, the applications they host, "
-    "their dependencies and their incident history."
+    "I only answer questions about this infrastructure estate - where to place "
+    "workloads, what capacity exists, and why.\n\n"
+    "Try:\n"
+    '  "Where can I host a Tier-1 production Java app needing 32 cores and 128 GB?"\n'
+    '  "Which clusters are underutilized?"\n'
+    '  "Why was atl-03 rejected?"'
 )
 
 

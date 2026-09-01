@@ -656,44 +656,56 @@ def _rejection_rule_evidence(state: InfrastructureRecommendationState) -> list[d
         logger.warning("graph.rejection_rule_evidence_failed", error=str(exc))
         return []
 
-    results = list(candidate.rule_results or [])
-    # Failures first. They are the answer to "why", and the model reads this
-    # list in order; burying two failures under nine passes invites a summary
-    # that leads with what went right.
-    results.sort(key=lambda r: bool(r.get("passed")))
+    # ONLY the failures. They are the answer to "why was this rejected"; the
+    # passes are not.
+    #
+    # This previously sent all ten rules with the failures sorted first, which
+    # produced exactly the summary the feature was meant to replace: the model
+    # was handed nine things that went right and dutifully narrated them. A
+    # rejection is one or two sentences - which rule, and by how much - and the
+    # rest is answerable by asking.
+    failures = [r for r in (candidate.rule_results or []) if not r.get("passed")]
+    results = failures
 
     status = candidate.eligibility_status
     docs = [
         {
             "text": (
-                f"Eligibility rule {r.get('rule_id')} ({r.get('name')}) "
-                f"{'PASSED' if r.get('passed') else 'FAILED'} when {app.ApplicationCode} was "
-                f"evaluated against cluster {cluster.ClusterCode}: {r.get('reason')}"
+                f"{cluster.ClusterCode} failed {r.get('rule_id')} ({r.get('name')}): {r.get('reason')}"
             ),
             "score": 1.0,
             "entity_type": "eligibility_rule",
         }
         for r in results
     ]
-    docs.insert(
-        0,
-        {
-            "text": (
-                f"Cluster {cluster.ClusterCode} is {status} for application "
-                f"{app.ApplicationCode}. This verdict comes from the deterministic "
-                f"eligibility engine, not from retrieved documents. "
-                f"{sum(1 for r in results if not r.get('passed'))} of {len(results)} rules failed."
-            ),
-            "score": 1.0,
-            "entity_type": "eligibility_verdict",
-        },
-    )
+    if status == "Eligible":
+        # Nothing failed. Say so in one line rather than listing ten passes.
+        docs = [
+            {
+                "text": f"{cluster.ClusterCode} is eligible for {app.ApplicationCode}. No rule failed.",
+                "score": 1.0,
+                "entity_type": "eligibility_verdict",
+            }
+        ]
+    else:
+        docs.insert(
+            0,
+            {
+                "text": (
+                    f"{cluster.ClusterCode} was rejected for {app.ApplicationCode}. "
+                    f"{len(results)} rule(s) failed, listed below. This verdict is from the "
+                    f"eligibility engine, not from retrieved documents."
+                ),
+                "score": 1.0,
+                "entity_type": "eligibility_verdict",
+            },
+        )
     logger.info(
         "graph.rejection_rule_evidence",
         application=app.ApplicationCode,
         cluster=cluster.ClusterCode,
         status=status,
-        failed_rules=sum(1 for r in results if not r.get("passed")),
+        failed_rules=len(results),
     )
     return docs
 

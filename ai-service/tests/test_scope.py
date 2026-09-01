@@ -36,20 +36,37 @@ class TestOutOfScope:
     def test_a_question_with_nothing_from_the_estate_in_it_is_refused(self, query):
         assert scope.out_of_scope_reply(query) is not None, query
 
-    def test_the_reply_says_what_it_is_and_what_it_does(self):
+    def test_the_reply_says_what_it_is_for_and_gives_copyable_examples(self):
         """Naming only what it refuses leaves the asker guessing, which is how
-        someone decides the tool is useless. Every investigation type the graph
-        routes to has to appear, with an example to copy."""
-        reply = scope.OUT_OF_SCOPE_REPLY.lower()
-        assert "infrastructure agent" in reply
-        for capability in ("hosting", "capacity", "right-sizing", "consolidation", "forecast"):
-            assert capability in reply, f"the reply never mentions {capability}"
-        assert "app-crm" in reply, "no copyable example"
+        someone decides the tool is useless.
 
-    def test_it_states_plainly_that_nothing_was_run(self):
-        """The user saw a full report with risks and next steps for a question
-        about actors. Silence about what happened invites the same confusion."""
-        assert "not run an investigation" in scope.OUT_OF_SCOPE_REPLY
+        This used to require all five investigation types by name, each with its
+        own description and example. Praveen read that version and called it
+        clumsy, correctly: it was a manual delivered at the moment somebody
+        wanted a redirect. The property that matters is not "every capability is
+        listed" but "the asker can see what this is for and copy a working
+        question", so that is what is asserted now.
+        """
+        reply = scope.OUT_OF_SCOPE_REPLY.lower()
+        assert "infrastructure" in reply, "the reply never says what domain it covers"
+        # NOT a specific application code. The examples originally named APP-CRM,
+        # which was the wrong shape entirely: an application that already has a
+        # code is already hosted, so "where should APP-CRM go" is a question
+        # nobody has. A placement example has to describe a workload - tier,
+        # platform, size - the way somebody with something new to place would.
+        assert reply.count('"') >= 4, "fewer than two quoted examples to copy"
+        assert any(w in reply for w in ("cores", "gb", "tier-1")), (
+            "no example describes a workload by its requirements"
+        )
+
+    def test_the_reply_stays_short(self):
+        """The reason the long version failed. A refusal is read in a second or
+        not at all, and six bullets is a page. Kept as a test rather than a
+        comment because the natural pressure on this string is to grow: every
+        new investigation type will look like it deserves a line."""
+        assert len(scope.OUT_OF_SCOPE_REPLY) < 400, (
+            f"refusal is {len(scope.OUT_OF_SCOPE_REPLY)} chars - it is turning back into a manual"
+        )
 
 
 class TestInScope:
