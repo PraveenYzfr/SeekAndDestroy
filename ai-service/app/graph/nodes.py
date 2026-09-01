@@ -28,6 +28,7 @@ from app.agents.chains import (
     parse_investigation_plan,
 )
 from app.agents.llm_factory import get_chat_model
+from app.graph import scope
 from app.agents.mock_llm import MockChatModel
 from app.forecasting.engine import forecast_cluster
 from app.graph.state import InfrastructureRecommendationState
@@ -54,7 +55,24 @@ from app.utils.json_utils import to_jsonable
 logger = structlog.get_logger(__name__)
 
 _APP_CODE_RE = re.compile(r"\bAPP-[A-Z0-9]+\b")
-_CLUSTER_CODE_RE = re.compile(r"\bCL-[A-Z0-9-]+\b")
+#: Cluster codes as they actually appear in the CMDB: `atl-03` and `cmh-p212`.
+#: This used to be `\bCL-[A-Z0-9-]+\b`, which matched 0 of the 256 clusters in
+#: the database - it had never fired once. Two things were quietly broken by
+#: that and neither produced an error:
+#:   * run_capacity_forecast could never find a cluster named in the query, so
+#:     "forecast cmh-p212" silently returned a fleet-wide forecast instead
+#:   * conversation.names_a_cluster was permanently False
+#: Case-insensitive because callers search both the raw query and query.upper().
+#: A node name (`cmh-p212-NODE-04`) yields its cluster, which is the useful
+#: reading of "why was cmh-p212-NODE-04 rejected".
+_CLUSTER_CODE_RE = re.compile(r"\b[a-z]{3}-p?\d{2,3}\b", re.IGNORECASE)
+
+#: "Why was X rejected/not eligible for Y" - a question about a rule verdict,
+#: not about documents. See _rejection_rule_evidence.
+_REJECTION_QUESTION_RE = re.compile(
+    r"\bwhy\b[^?]*\b(rejected|not eligible|ineligible|not chosen|not selected|excluded|ruled out|failed)\b",
+    re.IGNORECASE,
+)
 
 _REFUSAL_KEYWORDS = [
     "provision", "deploy this", "migrate the", "decommission", "shut down", "shutdown",
@@ -123,6 +141,19 @@ def quick_reply(query: str) -> str | None:
             "(for example APP-CRM), or the resources you need such as \"32 cores and 128 GB RAM\", "
             "and I will rank the clusters and hosts that can take it."
         )
+
+    # Nothing from this estate in it at all - not an identifier, not a resource
+    # quantity, not one word of domain vocabulary. "Who is the best actor in
+    # India?" ran the whole graph and reported, at High confidence, that
+    # dal-p056-NODE-01 holds no information about actors: an Investigation row,
+    # a model call and a retrieval spent to say so.
+    #
+    # Checked before the classifier, because classify_investigation_type() has
+    # no "none of the above" - everything it does not recognise becomes a
+    # Question, which is precisely how an off-topic query reaches the model.
+    out_of_scope = scope.out_of_scope_reply(text)
+    if out_of_scope is not None:
+        return out_of_scope
 
     lower = text.lower()
     # Only ever intercept queries that would otherwise fall through to the
@@ -573,6 +604,91 @@ def select_candidate_nodes(state: InfrastructureRecommendationState) -> dict:
 # =============================================================================
 
 
+def _rejection_rule_evidence(state: InfrastructureRecommendationState) -> list[dict]:
+    """Rule verdicts for "why was <cluster> rejected for <app>", or [].
+
+    This exists because that question was being answered from the vector index.
+    A rejection is not a fact about documents - it is the output of
+    rules.eligibility, which returns a rule id, a pass/fail and a written
+    reason for every rule. Answering from retrieved prose meant the narration
+    could disagree with the engine that actually rejected the cluster, and
+    nothing anywhere would flag the contradiction.
+
+    So the rules are re-evaluated for exactly the pair named in the question and
+    handed to the model as evidence. The model still writes the sentence; it no
+    longer decides the verdict, and every claim it can make is now traceable to
+    a rule id. That keeps this on the same footing as the rest of the platform,
+    where Python decides and the model narrates.
+
+    Returns [] whenever the question is not of this shape, either name is
+    missing, or either name does not resolve - in which case retrieval proceeds
+    exactly as before. A wrong guess here would be worse than no answer.
+    """
+    query = effective_query(state)
+    if not _REJECTION_QUESTION_RE.search(query):
+        return []
+
+    cluster_match = _CLUSTER_CODE_RE.search(query)
+    app_match = _APP_CODE_RE.search(query.upper())
+    if not cluster_match or not app_match:
+        return []
+
+    try:
+        app = application_repository.get_by_code(app_match.group(0))
+        cluster = cluster_repository.get_by_code(cluster_match.group(0).lower())
+        if app is None or cluster is None:
+            return []
+        requirement = placement.requirement_for_application(app)
+        candidate, _ctx = placement.evaluate_candidate(requirement, cluster)
+    except Exception as exc:  # noqa: BLE001
+        # Same posture as retrieval below: evidence is best-effort, and a
+        # failure here degrades to the old behaviour rather than failing the
+        # whole investigation.
+        logger.warning("graph.rejection_rule_evidence_failed", error=str(exc))
+        return []
+
+    results = list(candidate.rule_results or [])
+    # Failures first. They are the answer to "why", and the model reads this
+    # list in order; burying two failures under nine passes invites a summary
+    # that leads with what went right.
+    results.sort(key=lambda r: bool(r.get("passed")))
+
+    status = candidate.eligibility_status
+    docs = [
+        {
+            "text": (
+                f"Eligibility rule {r.get('rule_id')} ({r.get('name')}) "
+                f"{'PASSED' if r.get('passed') else 'FAILED'} when {app.ApplicationCode} was "
+                f"evaluated against cluster {cluster.ClusterCode}: {r.get('reason')}"
+            ),
+            "score": 1.0,
+            "entity_type": "eligibility_rule",
+        }
+        for r in results
+    ]
+    docs.insert(
+        0,
+        {
+            "text": (
+                f"Cluster {cluster.ClusterCode} is {status} for application "
+                f"{app.ApplicationCode}. This verdict comes from the deterministic "
+                f"eligibility engine, not from retrieved documents. "
+                f"{sum(1 for r in results if not r.get('passed'))} of {len(results)} rules failed."
+            ),
+            "score": 1.0,
+            "entity_type": "eligibility_verdict",
+        },
+    )
+    logger.info(
+        "graph.rejection_rule_evidence",
+        application=app.ApplicationCode,
+        cluster=cluster.ClusterCode,
+        status=status,
+        failed_rules=sum(1 for r in results if not r.get("passed")),
+    )
+    return docs
+
+
 def retrieve_related_context(state: InfrastructureRecommendationState) -> dict:
     # The previous investigation's own evidence, when this turn is a follow-up.
     # It goes first and is never displaced by a vector hit: "why was that
@@ -581,6 +697,12 @@ def retrieve_related_context(state: InfrastructureRecommendationState) -> dict:
     # Question path answered "I don't have enough grounded information" - true,
     # and useless, when the answer was sitting in the previous turn.
     prior_docs = list(state.get("prior_context_docs") or [])
+
+    # Rule verdicts first, ahead of both prior context and the vector hits. A
+    # "why was X rejected" question is answered by rules.eligibility, and a
+    # similarity search over the estate cannot produce that verdict - it can
+    # only produce prose that resembles it.
+    rule_docs = _rejection_rule_evidence(state)
 
     # Retrieval is optional grounding for narration, never a hard dependency -
     # a runtime embedding failure (e.g. a real API embedder going down after a
@@ -591,12 +713,12 @@ def retrieve_related_context(state: InfrastructureRecommendationState) -> dict:
         results = store.search(effective_query(state), top_k=6)
     except Exception as exc:  # noqa: BLE001
         logger.warning("graph.retrieve_related_context_failed", error=str(exc))
-        return {"retrieved_context": prior_docs}
+        return {"retrieved_context": rule_docs + prior_docs}
     retrieved = [
         {"text": r.document.text, "score": r.score, "entity_type": r.document.entity_type}
         for r in results
     ]
-    return {"retrieved_context": prior_docs + retrieved}
+    return {"retrieved_context": rule_docs + prior_docs + retrieved}
 
 
 # =============================================================================
