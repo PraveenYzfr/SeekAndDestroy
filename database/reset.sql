@@ -1,59 +1,86 @@
-/* =============================================================================
-   SeekAndDestroy - reset script
-   Drops every object in schema [sad] only. Never touches anything outside that
-   schema, so it is safe to run against a shared PraveenDB database.
+/*  Reset - drop every object in schema [sad], and nothing outside it.
 
-   Run with:
-     sqlcmd -S LAPTOP-R6U8H616 -d PraveenDB -E -C -i database\reset.sql
-============================================================================= */
+    WHY THIS IS GENERATED RATHER THAN LISTED
+    ----------------------------------------
+    This file used to be a hand-ordered list of DROP TABLE statements in strict
+    reverse-dependency order. That is correct exactly until someone adds a table,
+    and then it fails in a way that reads like a permissions problem:
+
+        Could not drop object 'sad.Employee' because it is referenced by a
+        FOREIGN KEY constraint.
+
+    Migration 008 added sad.ConfigurationItem, which references Employee and
+    SupportGroup, and is referenced in turn by ClusterNode, CmdbApplication,
+    InfrastructureCluster and Neighborhood. Nine more tables followed it across
+    009 to 011. The hand-ordered list knew about none of them, so a reset left the
+    schema half-dropped, the schema script then failed on objects that still
+    existed, and the first visible error was four steps downstream of the cause.
+
+    The ordering problem is real but it is not interesting, and a list that has to
+    be re-derived by hand on every migration will be wrong again. So: drop every
+    foreign key in the schema first, which makes the table order irrelevant, then
+    drop the tables. Nothing to maintain and nothing to forget.
+
+    SCOPE IS STILL EXACTLY [sad]. Both cursors filter on the schema name, so a
+    shared database keeps everything outside it - which is the property the
+    original file was protecting and the reason it is worth being careful here.
+*/
+
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
 
 SET NOCOUNT ON;
-GO
 
-IF EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'sad')
+IF SCHEMA_ID('sad') IS NULL
 BEGIN
-    -- Drop in strict reverse-dependency order.
-    IF OBJECT_ID('sad.AgentAuditLog', 'U') IS NOT NULL DROP TABLE sad.AgentAuditLog;
-    IF OBJECT_ID('sad.RecommendationDecision', 'U') IS NOT NULL DROP TABLE sad.RecommendationDecision;
-    IF OBJECT_ID('sad.InfrastructureRecommendation', 'U') IS NOT NULL DROP TABLE sad.InfrastructureRecommendation;
-    -- ConversationTurn references both Investigation and Conversation, and
-    -- Investigation references Conversation - so turns go first and
-    -- Conversation goes after Investigation, not next to it.
-    IF OBJECT_ID('sad.ConversationTurn', 'U') IS NOT NULL DROP TABLE sad.ConversationTurn;
-    IF OBJECT_ID('sad.Investigation', 'U') IS NOT NULL DROP TABLE sad.Investigation;
-    IF OBJECT_ID('sad.Conversation', 'U') IS NOT NULL DROP TABLE sad.Conversation;
-    IF OBJECT_ID('sad.CapacityRequest', 'U') IS NOT NULL DROP TABLE sad.CapacityRequest;
-    -- Comments before their parents, and Incident before Problem and Change:
-    -- Incident carries FKs to both, so dropping either first fails. Added with
-    -- migration_007 - a reset that does not know about a table leaves it behind
-    -- holding a foreign key, and the failure names the parent rather than the
-    -- child that is actually blocking it.
-    IF OBJECT_ID('sad.IncidentComment', 'U') IS NOT NULL DROP TABLE sad.IncidentComment;
-    IF OBJECT_ID('sad.ChangeComment', 'U') IS NOT NULL DROP TABLE sad.ChangeComment;
-    IF OBJECT_ID('sad.Incident', 'U') IS NOT NULL DROP TABLE sad.Incident;
-    IF OBJECT_ID('sad.Problem', 'U') IS NOT NULL DROP TABLE sad.Problem;
-    IF OBJECT_ID('sad.Change', 'U') IS NOT NULL DROP TABLE sad.Change;
-    IF OBJECT_ID('sad.ApplicationDependency', 'U') IS NOT NULL DROP TABLE sad.ApplicationDependency;
-    IF OBJECT_ID('sad.ApplicationUsage', 'U') IS NOT NULL DROP TABLE sad.ApplicationUsage;
-    IF OBJECT_ID('sad.NodeUtilization', 'U') IS NOT NULL DROP TABLE sad.NodeUtilization;
-    IF OBJECT_ID('sad.ClusterUtilization', 'U') IS NOT NULL DROP TABLE sad.ClusterUtilization;
-    IF OBJECT_ID('sad.ApplicationHosting', 'U') IS NOT NULL DROP TABLE sad.ApplicationHosting;
-    IF OBJECT_ID('sad.ClusterNode', 'U') IS NOT NULL DROP TABLE sad.ClusterNode;
-    IF OBJECT_ID('sad.InfrastructureCluster', 'U') IS NOT NULL DROP TABLE sad.InfrastructureCluster;
-    IF OBJECT_ID('sad.Neighborhood', 'U') IS NOT NULL DROP TABLE sad.Neighborhood;
-    IF OBJECT_ID('sad.CmdbApplication', 'U') IS NOT NULL DROP TABLE sad.CmdbApplication;
-    IF OBJECT_ID('sad.SupportGroup', 'U') IS NOT NULL DROP TABLE sad.SupportGroup;
-    IF OBJECT_ID('sad.Employee', 'U') IS NOT NULL DROP TABLE sad.Employee;
+    PRINT 'schema [sad] does not exist - nothing to reset';
+    RETURN;
 END
-GO
 
-IF EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'sad')
+DECLARE @sql NVARCHAR(MAX);
+
+-- 1. Every foreign key in [sad]. Once these are gone the drop order below does
+--    not matter, which is the whole point.
+SET @sql = N'';
+SELECT @sql = @sql + N'ALTER TABLE ' + QUOTENAME(s.name) + N'.' + QUOTENAME(t.name)
+                   + N' DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';' + CHAR(10)
+FROM   sys.foreign_keys fk
+JOIN   sys.tables  t ON t.object_id = fk.parent_object_id
+JOIN   sys.schemas s ON s.schema_id = t.schema_id
+WHERE  s.name = 'sad';
+
+IF LEN(ISNULL(@sql, N'')) > 0
 BEGIN
-    DECLARE @remaining INT = (
-        SELECT COUNT(*) FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id
-        WHERE s.name = N'sad'
-    );
-    IF @remaining = 0
-        EXEC('DROP SCHEMA sad');
+    EXEC sp_executesql @sql;
+    PRINT 'dropped foreign keys in [sad]';
 END
+
+-- 2. Views before tables: a view over a dropped table is not an error at drop
+--    time, but leaving it behind means the schema script fails re-creating it.
+SET @sql = N'';
+SELECT @sql = @sql + N'DROP VIEW ' + QUOTENAME(s.name) + N'.' + QUOTENAME(v.name) + N';' + CHAR(10)
+FROM   sys.views v JOIN sys.schemas s ON s.schema_id = v.schema_id
+WHERE  s.name = 'sad';
+IF LEN(ISNULL(@sql, N'')) > 0 EXEC sp_executesql @sql;
+
+-- 3. The tables themselves.
+SET @sql = N'';
+SELECT @sql = @sql + N'DROP TABLE ' + QUOTENAME(s.name) + N'.' + QUOTENAME(t.name) + N';' + CHAR(10)
+FROM   sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE  s.name = 'sad';
+
+IF LEN(ISNULL(@sql, N'')) > 0
+BEGIN
+    EXEC sp_executesql @sql;
+END
+
+DECLARE @left INT = (SELECT COUNT(*) FROM sys.tables t
+                     JOIN sys.schemas s ON s.schema_id = t.schema_id WHERE s.name = 'sad');
+PRINT CONCAT('reset complete - tables remaining in [sad]: ', @left);
+
+-- Anything left is a bug in this script, not a transient condition, so it fails
+-- loudly here rather than surfacing as a confusing error inside schema.sql.
+IF @left > 0
+    RAISERROR('reset left tables behind in schema [sad]', 16, 1);
 GO

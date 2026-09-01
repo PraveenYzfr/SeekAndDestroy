@@ -64,3 +64,22 @@ Thumbs.db
 # --- logs ---------------------------------------------------------------------
 *.log
 logs/
+
+# Generated seed data.
+#
+# database/seed.sql is produced by scripts/generate_seed.py and grew from 43 MB to
+# 74.6 MB when the CMDB estate landed - 54,555 configuration items and 85,526
+# relationships on top of the ITSM corpus. GitHub warns past 50 MB and refuses past
+# 100, so the next substantial change to the corpus would have failed the push
+# rather than warned about it.
+#
+# It is also unreviewable: every regeneration is a ~400,000 line diff that no one
+# can read, which hides real changes inside noise.
+#
+# The generator is deterministic and uses only the standard library, so the VM
+# produces byte-identical output from the same commit. Deployment generates it
+# there instead of shipping the artifact:
+#
+#     python3 scripts/generate_seed.py
+#
+database/seed.sql
