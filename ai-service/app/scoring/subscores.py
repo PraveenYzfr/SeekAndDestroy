@@ -295,6 +295,16 @@ def change_risk_subscore(risk: dict | None) -> Decimal:
     is the weakest claim here: it means "nothing known against it", not "proven
     stable". Scoring it lower would penalise every cluster the change process
     has not touched, which is most of a healthy estate.
+
+    The churn penalty is then weighted by how much depends on this cluster - see
+    services.change_exposure. Queued changes on a cluster 29 applications rely on
+    are not the same risk as the same changes on one nothing touches, and until
+    that weighting existed the two scored identically.
+
+    The weighting applies to churn only. The failure rate is an observed outcome
+    and already reflects a cluster's importance, since busy clusters accumulate
+    more change history; scaling it by exposure as well would compound a
+    correlation into a penalty.
     """
     if not risk:
         return Decimal("100.00")
@@ -303,7 +313,15 @@ def change_risk_subscore(risk: dict | None) -> Decimal:
     recent = Decimal(str(risk.get("recent_changes") or 0))
     failures = Decimal(str(risk.get("recent_failures") or 0))
 
-    churn_penalty = min(upcoming * _UPCOMING_CHANGE_PENALTY, _MAX_UPCOMING_PENALTY)
+    # Exposure weighting is applied BEFORE the cap, so the cap remains the real
+    # ceiling on churn. Applying it after would let a hub cluster exceed a bound
+    # that exists to stop any single dimension dominating six others.
+    from app.services.change_exposure import exposure_multiplier
+
+    weighted = upcoming * _UPCOMING_CHANGE_PENALTY * exposure_multiplier(
+        risk.get("dependent_applications")
+    )
+    churn_penalty = min(weighted, _MAX_UPCOMING_PENALTY)
 
     # Recomputed here rather than trusting a failure_rate supplied by the query:
     # the smoothing is a scoring decision, and a raw rate arriving from the

@@ -282,6 +282,23 @@ def find_and_score_candidates(
     except Exception as exc:  # noqa: BLE001
         logger.warning("placement.change_risk_unavailable", error=str(exc))
 
+    # How much depends on each candidate, merged into the same dict the change
+    # score already reads. Merged rather than passed separately because the two
+    # answer one question together - how risky is change here - and a second
+    # parameter threaded through three call sites would invite them drifting
+    # apart.
+    #
+    # Best-effort like the rest: with no exposure data the multiplier is 1.0 and
+    # every score is exactly what it was before this existed.
+    try:
+        from app.services import change_exposure
+
+        exposure = change_exposure.exposure_for_clusters([c.ClusterId for c in clusters])
+        for cluster_id, values in exposure.items():
+            change_risk.setdefault(cluster_id, {}).update(values)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("placement.change_exposure_unavailable", error=str(exc))
+
     # The application's CMDB resiliency, fetched once. Unlike change risk this
     # does not vary per candidate - it describes the workload being placed, not
     # the cluster being considered - so one graph walk serves the whole run.
