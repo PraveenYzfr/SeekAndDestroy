@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import Depends, APIRouter
 from app.utils.json_utils import to_jsonable
 
 from app.agents.chains import explain_forecast
 from app.agents.llm_factory import get_chat_model_for_role
 from app.api import narration
+from app.api.rate_limit import enforce_llm_rate_limit
+from app.security.jwt_service import AuthenticatedEmployee
 from app.api.errors import ProblemDetailsError
 from app.api.schemas import ForecastRequest
 from app.forecasting.engine import forecast_cluster
@@ -15,7 +17,7 @@ router = APIRouter(tags=["forecast"])
 
 
 @router.post("/api/forecast")
-def forecast(payload: ForecastRequest):
+def forecast(payload: ForecastRequest, current: AuthenticatedEmployee = Depends(enforce_llm_rate_limit)):
     cluster = cluster_repository.get_by_code(payload.cluster_code)
     if cluster is None:
         raise ProblemDetailsError(404, "Cluster not found", f"No cluster with code {payload.cluster_code!r}.")

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import Depends, APIRouter
 from app.utils.json_utils import to_jsonable
 
 from app.agents.chains import explain_application_right_sizing
 from app.agents.llm_factory import get_chat_model_for_role
 from app.api import narration
+from app.api.rate_limit import enforce_llm_rate_limit
+from app.security.jwt_service import AuthenticatedEmployee
 from app.api.errors import ProblemDetailsError
 from app.api.schemas import ApplicationRightSizingRequest, ClusterRightSizingRequest, ConsolidationAnalysisRequest
 from app.repositories import application_repository, cluster_repository
@@ -15,7 +17,7 @@ router = APIRouter(tags=["right-sizing"])
 
 
 @router.post("/api/right-sizing/clusters")
-def right_size_clusters(payload: ClusterRightSizingRequest):
+def right_size_clusters(payload: ClusterRightSizingRequest, current: AuthenticatedEmployee = Depends(enforce_llm_rate_limit)):
     if payload.cluster_code:
         cluster = cluster_repository.get_by_code(payload.cluster_code)
         if cluster is None:
@@ -29,7 +31,7 @@ def right_size_clusters(payload: ClusterRightSizingRequest):
 
 
 @router.post("/api/right-sizing/applications")
-def right_size_applications(payload: ApplicationRightSizingRequest):
+def right_size_applications(payload: ApplicationRightSizingRequest, current: AuthenticatedEmployee = Depends(enforce_llm_rate_limit)):
     if payload.application_code:
         app = application_repository.get_by_code(payload.application_code)
         if app is None:
@@ -63,7 +65,7 @@ def right_size_applications(payload: ApplicationRightSizingRequest):
 
 
 @router.post("/api/consolidation/analyze")
-def analyze_consolidation(payload: ConsolidationAnalysisRequest):
+def analyze_consolidation(payload: ConsolidationAnalysisRequest, current: AuthenticatedEmployee = Depends(enforce_llm_rate_limit)):
     apps = application_repository.search(environment=payload.environment, limit=200) if payload.environment else application_repository.list_all(limit=200)
     results = consolidation.find_consolidation_candidates(apps)
     feasible = [r for r in results if r.feasible]

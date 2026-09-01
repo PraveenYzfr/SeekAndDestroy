@@ -8,6 +8,7 @@ from app.agents.chains import summarize_tradeoffs
 from app.agents.llm_factory import get_chat_model_for_role
 from app.api import narration
 from app.api.auth import get_current_employee, require_matching_employee_id
+from app.api.rate_limit import enforce_llm_rate_limit
 from app.api.errors import ProblemDetailsError
 from app.api.schemas import CapacityRecommendationRequest, HostingRecommendationRequest, QuickRecommendationRequest
 from app.config import get_settings
@@ -61,7 +62,7 @@ def _tradeoffs(title: str, candidates: list, payload) -> dict | None:
 
 
 @router.post("/api/hosting/recommendations")
-def hosting_recommendations(payload: HostingRecommendationRequest):
+def hosting_recommendations(payload: HostingRecommendationRequest, current: AuthenticatedEmployee = Depends(enforce_llm_rate_limit)):
     app = application_repository.get_by_code(payload.application_code)
     if app is None:
         raise ProblemDetailsError(404, "Application not found", f"No application with code {payload.application_code!r}.")
@@ -95,7 +96,7 @@ def capacity_recommendations(payload: CapacityRecommendationRequest, current: Au
 
 
 @router.post("/api/hosting/quick-recommendations")
-def quick_recommendations(payload: QuickRecommendationRequest):
+def quick_recommendations(payload: QuickRecommendationRequest, current: AuthenticatedEmployee = Depends(enforce_llm_rate_limit)):
     """Lightweight "best N clusters for this shape of workload" lookup - no
     CapacityRequest is created, unlike /api/capacity/recommendations. This is
     the fast path for "2 cores, 2 GB, general purpose" style questions.
