@@ -32,7 +32,19 @@ def test_seed_scenario_counts_match_specification():
 
     assert len(gs.CLUSTERS) == 256
     assert 2000 <= len(gs.NODES) <= 5000
-    assert len(gs.APPLICATIONS) == 40
+    # 40 hand-written applications, extended procedurally to 1,200. The 40 stay
+    # first and unchanged because they carry the SCENARIOS fixtures asserted
+    # below; everything after them is generated.
+    #
+    # The old number was not arbitrary but it was wrong: 40 applications across
+    # 256 clusters left 246 hosting nothing, so weight_capacity - the heaviest
+    # scoring dimension at 0.30 - was comparing empty boxes and could not tell
+    # two candidates apart.
+    assert len(gs.APPLICATIONS) == 1200
+    assert len(gs.HOSTING_ROWS) > len(gs.APPLICATIONS), (
+        "every application should have a primary plus lower environments; one row "
+        "each is the shape that made 96% of the estate unused"
+    )
     assert len(gs.EMPLOYEES) == 20
     assert len(gs.SUPPORT_GROUPS) == 15
 

@@ -62,6 +62,27 @@ TARGET_APPLICATIONS = 1200
 #: point: a real estate is not uniformly loaded. It has a stressed minority that
 #: causes most of the incidents, a broad healthy middle, and a genuine tail of
 #: waste - and right-sizing needs all three to exist or it has nothing to find.
+#: Clusters carrying one of these tags are hand-designed fixtures. Their
+#: util_profile is not decoration - it IS the property the tests and the demo
+#: assert. clt-13 is tagged FORECAST because it must be seen to run out of
+#: capacity inside a quarter; a cluster that no longer breaches is not a
+#: forecast cluster, it is just a cluster.
+#:
+#: Both places below consult this. Packing reads the designed profile instead of
+#: drawing a band, and derive_utilisation_profiles() then leaves the profile
+#: alone - so the estate stays self-consistent (allocated agrees with measured)
+#: without the generator overwriting the eight scenarios it was asked to build.
+DESIGNATED_TAGS = frozenset({
+    "OVERPROVISIONED", "NEAR_CPU", "NEAR_MEM", "HIGH_COST_LOW_UTIL",
+    "SUITABLE_NEW", "LOW_RESILIENCY", "COMPLIANCE_MISMATCH", "FORECAST",
+})
+
+
+def is_designated(cluster) -> bool:
+    """True for a cluster whose utilisation was designed, not drawn."""
+    return bool(DESIGNATED_TAGS.intersection(getattr(cluster, "tags", ()) or ()))
+
+
 UTILISATION_BANDS = (
     (0.15, 78.0, 92.0),   # stressed - the interesting ones
     (0.50, 42.0, 70.0),   # healthy
@@ -157,7 +178,15 @@ def assign_utilisation_targets(clusters, rng) -> dict:
         # Non-production infrastructure runs cooler: it is sized for the peak of
         # a test cycle, not for sustained load.
         scale = 1.0 if cluster.environment == "Production" else 0.75
-        targets[cluster.idx] = round(rng.uniform(low, high) * scale, 2)
+        drawn = round(rng.uniform(low, high) * scale, 2)
+        if is_designated(cluster):
+            # Draw anyway and discard, so adding or removing a tag never
+            # reshuffles the rng for the other 248 clusters and every incident
+            # downstream of them.
+            cpu_end, mem_end = cluster.util_profile[1], cluster.util_profile[3]
+            targets[cluster.idx] = round(max(cpu_end, mem_end), 2)
+        else:
+            targets[cluster.idx] = drawn
     return targets
 
 
@@ -402,6 +431,11 @@ def derive_utilisation_profiles(clusters, load_plans, rng):
     for c in clusters:
         plan = load_plans.get(c.idx)
         if plan is None:
+            continue
+        if is_designated(c):
+            # Its profile is the fixture. Packing already aimed at that level
+            # via assign_utilisation_targets(), so allocated and measured agree
+            # without rewriting the thing the tests assert.
             continue
         cpu_now = plan.achieved_cpu_pct
         mem_now = plan.achieved_mem_pct

@@ -196,20 +196,108 @@ _INCIDENT_TEMPLATES = {
 }
 
 # Work notes that carry real detail. These are what retrieval should find.
-_SUBSTANTIVE_NOTES = [
-    "Checked {node}: load average {load}, {mem}% memory used, {sto}% filesystem. Nothing unusual in dmesg.",
-    "Confirmed the ballooning driver is disabled on this host. That rules out the hypervisor reclaiming memory.",
-    "Correlated with the deployment at {time} - the error rate rises within four minutes of the rollout.",
-    "Thread dump shows {count} threads blocked on the same lock in the connection pool.",
-    "Compared against {other}, which runs the same version at half the load and shows none of this.",
-    "The {pct}% figure is measured at the ingress, not the application - the application's own metrics show less.",
-    "Rolled back {app} to the previous release on one node as a test. That node stopped erroring.",
-    "Vendor case {vendor} opened. They have asked for a core dump and the controller log.",
-    "This is the {nth} time this quarter on {cluster}. Raising a problem record rather than closing again.",
-    "Capacity is the underlying issue: {cluster} has been above 85% for {days} days and has no headroom left.",
-    "Failover to the standby completed in {mins} minutes, inside the {pct}-minute objective.",
-    "Query plan changed after statistics were updated - the optimiser is now choosing a scan.",
+#
+# WHY THESE ARE PARAGRAPHS AND NOT SENTENCES
+# ------------------------------------------
+# The first version was twelve one-line templates shared by every incident
+# regardless of cause. Measured against the generated corpus that produced work
+# notes averaging 71 characters, maximum 112 - and the contextual prefix that
+# documents.py prepends to every chunk is about 60 characters. Half of each
+# embedded vector was header.
+#
+# seekanddestroy-2d measured the consequence on real chunks (47% and 52% prefix)
+# and found something worse than the ratio: the prefix carries the incident
+# number, so the golden set's exact-identifier case matched every chunk of a
+# ticket through BM25 no matter what the note said. That case was testing that we
+# print the id into the text, not that retrieval works. Sparse won it by
+# construction and hybrid inherited the win.
+#
+# Three rules follow, each load-bearing:
+#
+#   1. A note NEVER contains its own incident number. Real notes do not - you are
+#      already inside the ticket. Leaving it out is what makes the identifier case
+#      measure retrieval instead of string-printing. The prefix still carries it.
+#   2. Notes DO reference other tickets. That is realistic, and it is legitimate
+#      work for BM25 that dense retrieval cannot do - the honest version of the
+#      win the prefix was faking.
+#   3. Notes are keyed by root cause. The risk is not length, it is homogeneity:
+#      if a Network note and a Capacity note are structurally identical with
+#      different numbers, dense retrieval cannot separate them and recall@k
+#      measures nothing. Each pool uses the symptoms, tools and subsystems of its
+#      own cause, and introduces vocabulary that does not appear in the ticket
+#      header - otherwise the note chunk adds nothing over the header chunk and
+#      multi-chunk retrieval is pure cost.
+_NOTES_BY_CAUSE = {
+    "Capacity": [
+        "Pulled the last 30 days from the capacity series for {cluster}. CPU has been above 85% for {days} consecutive days and the p99 scheduling delay on {node} is now {ms}ms, up from single digits in January. This is not a spike, it is the trend finally arriving. There is no headroom left to absorb the nightly batch window.",
+        "Ran the numbers on {node}: {mem}% memory committed, {sto}% filesystem, load average {load} against 16 vCPU. The balloon driver is disabled so the hypervisor is not reclaiming. Every guest on this host is sized for peak and running at peak simultaneously, which is the actual problem.",
+        "Checked whether this is real growth or a leak. RSS for the {app} workers climbs across the day and returns to baseline on restart, but the floor has risen {growth}% month over month, which is growth rather than a leak. Recommend sizing the next review against the floor, not the average.",
+        "Compared {cluster} against {other}, which runs the same {app} release at roughly half the allocation and shows none of this. The difference is density, not version. Same signature as {other_inc} on the peer cluster last quarter.",
+        "Filesystem on {node} hit {sto}% during the retention job. Reclaimed {pct}GB by expiring old archives, which buys about {days} days. Filing this as a workaround, not a fix - the growth rate has not changed and it will return.",
+        "Batch window overran by {mins} minutes again. The window is sized for a cluster at 60% and {cluster} is running well above that, so every job queues behind the one before it. This is capacity presenting as a scheduling problem.",
+    ],
+    "Network": [
+        "Packet capture on {node} shows retransmits climbing to {pct}% on the storage VLAN during the incident window. The application timeouts are downstream of that, not the cause. Handing to the network team with the capture attached.",
+        "Traced the path from {node} to the gateway: {ms}ms added at the second hop, consistently, in both directions. The switch on that hop was reloaded under {other_chg} nine days ago. Asking for the config diff before and after.",
+        "Confirmed this is not DNS. Resolution is answering in under 3ms from cache and the failures continue with hosts files pinned. Ruling it out here so nobody spends another bridge call on it.",
+        "Ingress is seeing {gbps}Gbps against a normal baseline of a tenth of that, sourced from a wide spread of addresses with no single offender. Rate limiting is holding but the connection table on the edge is close to full.",
+        "MTU mismatch on the {app} path. Large frames fragment between the host and the load balancer, which is why only the bulk transfers fail and the health checks stay green. Same shape as {other_inc}.",
+        "Failover to the standby completed in {mins} minutes, inside the objective, but the return path did not converge for another {hrs} hours and clients held stale connections through it. The failover worked, the failback is the gap.",
+    ],
+    "Software": [
+        "Thread dump from {node} shows {count} threads blocked on the same connection pool monitor. The pool is sized at 50 and the workload asks for more than that under load, so requests queue and the queue looks like slowness. Not a database problem.",
+        "Correlated the error rate against the rollout at {time}: it rises within four minutes of the deployment reaching the third node and does not recover. Rolled back {app} on one node as a test and that node stopped erroring immediately.",
+        "Heap dump taken. The retained set is dominated by cached response objects with no eviction policy, which explains why the collector runs more often but reclaims less. This is a regression from the change tracked under {other_chg}.",
+        "The stack points at a null dereference in the retry handler when the downstream returns a 503 with an empty body. Reproduced it in staging by returning an empty 503 deliberately, so this is not environmental.",
+        "Query plan changed after statistics were refreshed - the optimiser has switched from a seek to a scan on the largest table and the {ms}ms latency follows exactly. Plan hash attached. Same regression as {other_inc}.",
+        "Log shows the same exception {count} times in {mins} minutes, all from one worker. The other workers are clean, which points at state on that instance rather than the release itself.",
+    ],
+    "Configuration": [
+        "Diffed the running configuration on {node} against the two peers in {cluster}. The connection timeout is 30 seconds here and 5 everywhere else, so this host holds sockets long enough to exhaust the pool under load that the others absorb.",
+        "The change under {other_chg} updated the template but the running hosts were never restarted, so half of {cluster} is on the new configuration and half is on the old. That is why it reproduces on some requests and not others.",
+        "Found the ballooning driver enabled on this host and disabled on the rest of the cluster. That alone accounts for the memory the guest thinks it has lost. Correcting it and monitoring rather than closing.",
+        "TLS on the {app} listener is still pinned to the retired cipher suite after the platform upgrade. Modern clients negotiate down and older ones fail outright, which matches the pattern of who is complaining.",
+        "The {pct}% figure in the alert is measured at the ingress, not in the application - the application's own metrics show materially less. The threshold was set against the wrong series when the alert was written.",
+        "Feature flag for the new path is enabled in this environment and disabled in the peer, which was not intentional. Same divergence as {other_inc}, which suggests the promotion step does not carry flags.",
+    ],
+    "Hardware": [
+        "Controller log on {node} shows media errors on the disk in slot {slot}, {count} of them since the host was last booted, with no corresponding filesystem errors yet. Predictive failure rather than failure. Vendor case {vendor} opened.",
+        "Memory test flagged correctable ECC errors on one DIMM at a rate of roughly {count} an hour. The host is stable but this is the shape that precedes an uncorrectable event. Requesting a window to replace it.",
+        "The host lost a power supply at {time}. It is running on the remaining unit and is not redundant until that is replaced, so {cluster} is one fault away from losing this node entirely.",
+        "Firmware on the storage controller is two releases behind the fleet baseline. The release notes name exactly this timeout signature as fixed. Vendor case {vendor} opened with the controller log attached.",
+        "Disk latency on {node} is {ms}ms at the device layer, not the filesystem, which rules out the application and the volume manager. Same signature as {other_inc} on a host of the same generation.",
+        "Replaced the failed unit and the array is rebuilding. Rebuild is degrading throughput by roughly {pct}% and will take about {hrs} hours, so expect the latency complaints to continue until it completes.",
+    ],
+    "Dependency": [
+        "The upstream {app} service is returning 503 for roughly {pct}% of calls and our retry policy turns each one into three, which is why our error rate is a multiple of theirs. We are amplifying their incident, not having our own.",
+        "Confirmed the dependency chain: our failures follow theirs by about {mins} minutes, which is our circuit breaker window. Their incident is tracked under {other_inc}. Holding here rather than investigating our own stack.",
+        "The shared authentication service is slow rather than down, at {ms}ms against a normal baseline in the tens. Every request in our path waits on it, so we present as slow across every endpoint including the ones that do nothing.",
+        "Message queue depth on the shared broker is {count} and climbing. Consumers are healthy, the producers are simply outpacing them since the change under {other_chg} raised the publish rate.",
+        "Certificate for the downstream expired at {time}. Our calls fail closed, which is correct, but the error surfaces to users as our outage. Raising with their team.",
+        "Database connections are being refused because the shared instance is at its connection limit, and we are one of six consumers. Our pool is behaving; the ceiling is shared and someone else took it.",
+    ],
+    "Unknown": [
+        "Nothing conclusive yet. Metrics on {node} are unremarkable through the window, logs show no errors, and the only correlation is timing. Leaving it open rather than closing it as no-fault-found.",
+        "Could not reproduce. The symptoms stopped before we attached and have not returned in {hrs} hours. Documenting what we checked so the next occurrence starts further along than this one did.",
+        "Three plausible explanations and no evidence separating them: the deployment at {time}, the network maintenance under {other_chg}, or genuine load. Recording all three rather than picking one.",
+        "This is the {nth} occurrence this quarter on {cluster} with the same shape and no root cause identified. Raising a problem record rather than closing again.",
+    ],
+}
+
+#: Every substantive note, cause-agnostic. Changes have no RootCauseCategory, so
+#: they draw from the union rather than from one cause's pool.
+_ALL_CAUSE_NOTES = [n for pool in _NOTES_BY_CAUSE.values() for n in pool]
+
+# One note in roughly twenty-five is a pasted log excerpt, deliberately long
+# enough to exceed _MAX_CHUNK_CHARS in documents.py. Before this the longest text
+# anywhere in the corpus was 344 characters, so the chunk splitter and its
+# overlap handling had never executed once - untested code sitting in the
+# retrieval path. These make it run.
+_LONG_NOTES = [
+    "Pasting the relevant section of the log from {node} for the record. The pattern repeats every few seconds through the whole window. The sequence begins with the pool reporting saturation, then the health check timing out, then the supervisor restarting the worker, then the cycle beginning again on the new process. Note that the restart resets the counter, which is why the dashboards show a sawtooth rather than a climb, and why this looked like recovery for the first hour. Timings are from the host clock, which is in sync with the fleet to within a few milliseconds. connection pool exhausted, active {count}, idle 0, waiting {count}. health probe exceeded {ms}ms budget, marking instance unhealthy. supervisor received unhealthy verdict, initiating restart, grace period {mins}s. worker terminated after grace period expired, in-flight requests dropped. new worker starting, warm cache empty, first request latency will be elevated. connection pool exhausted, active {count}, idle 0, waiting {count}. The same three lines then repeat until the load subsides at the end of the window. Filing the full log with the vendor under case {vendor}.",
+    "Full output from the diagnostic run on {node}, attached here so it survives the ticket. Filesystem utilisation {sto}%, inodes at {pct}%, memory committed {mem}% with the balloon driver confirmed disabled, load average {load} sustained across all three intervals rather than spiking. Device queue depth is consistently above the point where latency stops being linear, and the service time at the device layer is {ms}ms, which is where the application latency is coming from. Nothing in dmesg, no ECC events, no media errors in the controller log, and the array is not rebuilding. Ruling out hardware on that basis. The workload profile changed when {app} was scaled out under {other_chg} and the storage was never resized to match, so this reads as capacity presenting as a storage fault. Recommend treating the resize as the fix and this ticket as the evidence, and cross-referencing {other_inc}, which showed the same shape on the peer cluster before it was resized.",
 ]
+
 
 # Boilerplate. Generated deliberately so the noise filter has something to filter.
 _ROUTINE_NOTES = [
@@ -314,14 +402,28 @@ MAJOR_EVENTS = [
 # =============================================================================
 # Generation
 # =============================================================================
-def _fill(template, rng, *, cluster="", node="", app="", other="", group=""):
+def _fill(template, rng, *, cluster="", node="", app="", other="", group="", exclude_inc=None):
     """Substitute the placeholder vocabulary in a template.
 
     Every value comes from the seeded rng, so one seed produces one corpus. That
     matters because the golden set asserts against specific retrieved documents
     and would otherwise drift on every regeneration.
+
+    ``exclude_inc`` is the number of the incident this note belongs to. Cross
+    references are drawn to point at OTHER tickets and never at the ticket the
+    note sits in - a note repeating its own number puts that number in the
+    embedded text of every chunk, which is the artefact that made the golden
+    set's identifier case unfalsifiable. The prefix carries the own-number; the
+    body carries references to elsewhere.
     """
+    other_inc = INCIDENT_NUMBER_BASE + rng.randint(1, TARGET_INCIDENTS)
+    if exclude_inc is not None and other_inc == exclude_inc:
+        # Re-draw once. Collision is a 1-in-10,000 event, so a single retry is
+        # enough and a loop would only add a way to hang.
+        other_inc = INCIDENT_NUMBER_BASE + ((other_inc - INCIDENT_NUMBER_BASE) % TARGET_INCIDENTS) + 1
     return template.format(
+        other_inc="INC%07d" % other_inc,
+        other_chg="CHG%07d" % (CHANGE_NUMBER_BASE + rng.randint(1, TARGET_CHANGES)),
         cluster=cluster or "the cluster", node=node or "the host", app=app or "the application",
         other=other or "the peer cluster", group=group or rng.choice(ASSIGNMENT_GROUPS),
         mins=rng.choice([4, 7, 12, 18, 25, 40, 55, 90]),
@@ -355,20 +457,48 @@ _IMPACT_URGENCY = {
 }
 
 
-def _comments_for(opened, cluster, node, app, rng):
+def _comments_for(opened, cluster, node, app, rng, root_cause="Unknown", own_number=None):
     """Six to twelve notes, roughly a third of them boilerplate.
 
     The boilerplate is deliberate. The chunking strategy filters short
     reassignment and acknowledgement notes rather than embedding them, and a
     filter that has never seen its input is untested. It is also honest: most of
     a real ticket's comment history says nothing.
+
+    The substantive notes are drawn from the pool for this incident's root cause,
+    not from one shared list. A Network note and a Capacity note that are
+    structurally identical with different numbers give dense retrieval nothing to
+    separate them by, and recall@k over such a corpus measures the template, not
+    the retriever.
     """
     notes = []
     at = opened
+    pool = _NOTES_BY_CAUSE.get(root_cause) or _NOTES_BY_CAUSE["Unknown"]
     for seq in range(1, rng.randint(6, 12) + 1):
         at = at + timedelta(minutes=rng.randint(3, 240))
-        pool = _ROUTINE_NOTES if rng.random() < 0.35 else _SUBSTANTIVE_NOTES
-        text = _fill(rng.choice(pool), rng, cluster=cluster, node=node, app=app)
+        if rng.random() < 0.35:
+            template = rng.choice(_ROUTINE_NOTES)
+        elif rng.random() < 0.04:
+            template = rng.choice(_LONG_NOTES)
+        else:
+            template = rng.choice(pool)
+            # Two observations in one note, most of the time.
+            #
+            # One templated sentence averages ~245 characters, which against the
+            # ~60-character contextual prefix leaves the prefix at 23% of the
+            # embedded chunk - better than the 50% it was, still well above the
+            # 15% that makes the prefix contextual rather than dominant.
+            #
+            # Pairing rather than writing longer templates because it is also
+            # more truthful: a real work note records an observation and then what
+            # the author concluded from it, and pairing two entries from the same
+            # cause pool produces exactly that shape without doubling the number
+            # of templates to maintain.
+            if rng.random() < 0.6 and len(pool) > 1:
+                second = rng.choice([t for t in pool if t != template])
+                template = template + " " + second
+        text = _fill(template, rng, cluster=cluster, node=node, app=app,
+                     exclude_inc=own_number)
         notes.append((seq, at, rng.choice(ASSIGNMENT_GROUPS),
                       "work_note" if rng.random() < 0.8 else "additional_comment", text))
     return notes
@@ -445,7 +575,7 @@ def build_changes(clusters, applications, load_plans, rng, anchor):
         ))
         for seq, text in enumerate([
             "Change raised for %s." % cluster.code,
-            _fill(rng.choice(_SUBSTANTIVE_NOTES), rng, cluster=cluster.code, app=app.code),
+            _fill(rng.choice(_ALL_CAUSE_NOTES), rng, cluster=cluster.code, app=app.code),
             "Backout tested in the lower environment." if rng.random() < 0.5 else "CAB approved.",
         ], start=1):
             comments.append((i, seq, start - timedelta(days=rng.randint(1, 10)),
@@ -492,7 +622,8 @@ def build_incidents(clusters, applications, nodes, load_plans, change_count, rng
             close if closed else None, group, impact, urgency, None, None,
         ])
         for c in _comments_for(opened, cluster.code, node_name(cluster.idx),
-                               app.code if app else "", rng):
+                               app.code if app else "", rng, root_cause,
+                               INCIDENT_NUMBER_BASE + idx):
             comments.append((idx,) + c)
         if event_key:
             event_incident_ids.setdefault(event_key, []).append(idx)
