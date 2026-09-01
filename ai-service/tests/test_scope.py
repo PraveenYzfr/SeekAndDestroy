@@ -1,0 +1,123 @@
+"""Out-of-scope questions must not reach the graph.
+
+"Who is the best actor in India?" produced an Investigation row, a real model
+call, a retrieval, and a report explaining at High confidence that
+dal-p056-NODE-01 contains no information about actors. The pipeline behaved
+correctly at every step; the question should have stopped before it.
+
+The bias throughout is one-directional: **a wrongly-refused real question is far
+worse than a wrongly-answered odd one.** A bad answer is visible and arguable. A
+refusal tells an engineer the tool does not work, and they stop using it. So the
+in-scope cases below far outnumber the out-of-scope ones, and the ones drawn
+from live CMDB codes are the ones that matter most.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.graph import scope
+
+
+class TestOutOfScope:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Who is the best actor in India?",
+            "What is the capital of France?",
+            "Write me a poem about the sea",
+            "who won the world cup",
+            "What is 2 + 2?",
+            "Tell me a joke",
+            "translate good morning into spanish",
+            "what do you think about the election",
+        ],
+    )
+    def test_a_question_with_nothing_from_the_estate_in_it_is_refused(self, query):
+        assert scope.out_of_scope_reply(query) is not None, query
+
+    def test_the_reply_says_what_it_is_and_what_it_does(self):
+        """Naming only what it refuses leaves the asker guessing, which is how
+        someone decides the tool is useless. Every investigation type the graph
+        routes to has to appear, with an example to copy."""
+        reply = scope.OUT_OF_SCOPE_REPLY.lower()
+        assert "infrastructure agent" in reply
+        for capability in ("hosting", "capacity", "right-sizing", "consolidation", "forecast"):
+            assert capability in reply, f"the reply never mentions {capability}"
+        assert "app-crm" in reply, "no copyable example"
+
+    def test_it_states_plainly_that_nothing_was_run(self):
+        """The user saw a full report with risks and next steps for a question
+        about actors. Silence about what happened invites the same confusion."""
+        assert "not run an investigation" in scope.OUT_OF_SCOPE_REPLY
+
+
+class TestInScope:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # identifiers
+            "why was atl-03 rejected for APP-ANALYTICS",
+            "status of cmh-p212",
+            "what happened on atl-03-NODE-07",
+            "tell me about INC1005432",
+            # quantities, with no domain word at all
+            "I need 64 cores and 512 GB",
+            "somewhere with 4 TB free",
+            # vocabulary
+            "which clusters are underutilized",
+            "where should this workload go",
+            "show me the incident history",
+            "what is the forecast for next quarter",
+            "anything that can be consolidated",
+            "how much headroom is left in production",
+        ],
+    )
+    def test_anything_estate_shaped_reaches_the_graph(self, query):
+        assert scope.out_of_scope_reply(query) is None, query
+
+    def test_every_real_cluster_application_and_node_code_is_recognised(self):
+        """Checked against the live CMDB, not against invented examples.
+
+        This is the test that matters. A pattern that looks right but misses the
+        naming convention would refuse real questions about real infrastructure,
+        and no amount of hand-written examples would reveal it - the previous
+        _CLUSTER_CODE_RE matched `CL-PROD-01` and zero of the 256 real clusters.
+        """
+        from app.repositories import application_repository, cluster_repository, node_repository
+
+        clusters = cluster_repository.list_all(limit=5000)
+        apps = application_repository.list_all(limit=5000)
+        assert clusters and apps, "no CMDB data - this test proves nothing without it"
+
+        unrecognised = [c.ClusterCode for c in clusters if not scope.has_estate_signal(f"why was {c.ClusterCode} rejected")]
+        assert not unrecognised, f"cluster codes not recognised: {unrecognised[:10]}"
+
+        unrecognised = [a.ApplicationCode for a in apps if not scope.has_estate_signal(f"where should {a.ApplicationCode} go")]
+        assert not unrecognised, f"application codes not recognised: {unrecognised[:10]}"
+
+        nodes = node_repository.get_by_cluster(clusters[0].ClusterId, limit=20)
+        unrecognised = [n.HostName for n in nodes if not scope.has_estate_signal(f"status of {n.HostName}")]
+        assert not unrecognised, f"node names not recognised: {unrecognised[:10]}"
+
+
+class TestMatchingIsNotAccidental:
+    def test_domain_words_match_whole_tokens_not_substrings(self):
+        """A substring check finds "app" inside "happening" and "node" inside
+        "anode", which would let almost anything through and quietly disable the
+        gate in a way no in-scope test would catch."""
+        assert scope.has_estate_signal("what is happening") is False
+        assert scope.has_estate_signal("explain an anode") is False
+        assert scope.has_estate_signal("is this a scam") is False
+
+    def test_hyphenated_domain_words_survive_tokenisation(self):
+        assert scope.has_estate_signal("can we right-size anything") is True
+        assert scope.has_estate_signal("bare-metal options") is True
+
+    def test_an_empty_query_is_not_treated_as_in_scope(self):
+        assert scope.has_estate_signal("") is False
+        assert scope.has_estate_signal("   ") is False
+
+    def test_case_does_not_matter(self):
+        assert scope.has_estate_signal("WHY WAS ATL-03 REJECTED") is True
+        assert scope.has_estate_signal("app-analytics") is True
