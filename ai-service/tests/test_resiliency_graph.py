@@ -115,21 +115,49 @@ class TestDirection:
 
 class TestGuards:
     def test_a_dependency_cycle_terminates(self):
-        """`Depends on::Used by` is genuinely cyclic - two applications calling
-        each other is a real topology and is deliberately seeded. Without the
-        visited-path guard this does not return."""
-        rows = fetch_all(
-            "SELECT TOP 1 a.ChildCiId AS Start FROM sad.CiRelationship a "
-            "JOIN sad.CiRelationship b ON b.ChildCiId = a.ParentCiId AND b.ParentCiId = a.ChildCiId "
-            "WHERE a.TypeId = 4 AND b.TypeId = 4",
-            max_rows=1,
-        )
-        if not rows:
-            pytest.skip("no dependency cycle in the current seed")
-        # The assertion is that this returns at all.
-        walk = graph.blast_radius(rows[0]["Start"])
-        assert walk.max_depth == graph.DEFAULT_MAX_DEPTH
-        assert walk.observed_depth <= walk.max_depth
+        """`Depends on::Used by` is genuinely cyclic and the seed plants a ring.
+
+        APP-IDENTITY -> APP-SSO -> APP-APIGATEWAY -> APP-IDENTITY.
+
+        Three-deep rather than a mutual pair, and that is the point: a guard that
+        only remembers the immediately preceding node terminates correctly on a
+        pair and loops forever on a triangle. A two-app cycle would have passed a
+        broken implementation and proved nothing. e7 measured a naive one-step
+        guard walking ten hops on this ring without terminating.
+
+        The assertion is that this returns at all, and returns bounded.
+        """
+        import generate_seed
+
+        ring = generate_seed.SCENARIOS.get("dependency_cycle_applications") or []
+        if not ring:
+            pytest.skip("seed has no dependency_cycle_applications fixture")
+        require_loaded_graph()
+
+        for name in ring:
+            ci = graph.ci_for_application(name)
+            assert ci is not None, f"{name} is in SCENARIOS but not in the CMDB"
+            walk = graph.blast_radius(ci.ci_id)
+            assert walk.observed_depth <= walk.max_depth
+            # Every CI appears once. Without the visited-path guard a cycle
+            # re-emits the same nodes at increasing depths until the ceiling.
+            assert len({n.ci_id for n in walk}) == len(walk.nodes)
+
+    def test_the_cycle_members_actually_reach_each_other(self):
+        """Guards the guard. If the ring were not really a ring - a broken seed,
+        or edges pointing the other way - the termination test above would pass
+        for the wrong reason, having walked a short acyclic path."""
+        import generate_seed
+
+        ring = generate_seed.SCENARIOS.get("dependency_cycle_applications") or []
+        if len(ring) < 3:
+            pytest.skip("no three-deep cycle fixture")
+        require_loaded_graph()
+
+        start = graph.ci_for_application(ring[0])
+        reached = {n.name for n in graph.blast_radius(start.ci_id)}
+        for other in ring[1:]:
+            assert other in reached, f"{ring[0]} does not reach {other} - the ring is not a ring"
 
     def test_hit_ceiling_fires_when_the_walk_is_cut(self, any_application):
         ci = graph.ci_for_application(any_application)
@@ -190,7 +218,7 @@ class TestAbsentIsNotZero:
                 "SELECT DISTINCT ClassName FROM sad.ConfigurationItem", max_rows=100
             )
         }
-        for label, class_name in R.DOMAINS:
+        for label, class_name, _scale in R.DOMAINS:
             if class_name not in seeded:
                 assert label in p.not_evaluated
                 assert label not in p.domains
@@ -229,7 +257,7 @@ class TestAbsentIsNotZero:
         ci = graph.ci_for_application(any_application)
         truncated = R.ResiliencyProfile(
             application_ci_id=ci.ci_id, application_name=any_application,
-            domains={"cluster": R.FailureDomain("cluster", graph.CLASS_CLUSTER, 1)},
+            domains={"cluster": R.FailureDomain(label="cluster", class_name=graph.CLASS_CLUSTER, count=1, scale=R.COMPONENT)},
             redundancy=1, weakest="cluster", truncated=True,
         )
         assert not truncated.is_single_point_of_failure
@@ -240,6 +268,87 @@ class TestAbsentIsNotZero:
 # The minimum, not the mean
 # =============================================================================
 
+class TestComponentAndSiteScale:
+    """The control fixture caught this design being wrong.
+
+    The first version took the minimum across EVERY domain, so applications
+    verified as well distributed - three hosts, three volumes, three arrays, two
+    switches - were reported as single points of failure because they sit in one
+    data centre. Most applications deliberately do. A rule that fires on the
+    control fires on everything.
+    """
+
+    def test_the_control_fixture_is_not_a_single_point_of_failure(self):
+        import generate_seed
+
+        controls = generate_seed.SCENARIOS.get("well_distributed_applications") or []
+        if not controls:
+            pytest.skip("no well_distributed_applications fixture")
+        require_loaded_graph()
+        for name in controls:
+            p = R.profile_for_application(name)
+            assert not p.is_single_point_of_failure, (
+                f"{name} is the CONTROL - it spans "
+                f"{ {k: v.count for k, v in p.domains.items()} }. A rule that fires "
+                f"here fires on everything and measures nothing."
+            )
+
+    def test_the_control_is_still_reported_as_single_site(self):
+        """Not folded into the headline, but not hidden either. Suppressing it
+        entirely would be the opposite error - the fact is true and worth saying,
+        it just is not the same finding as a single NAS head."""
+        import generate_seed
+
+        controls = generate_seed.SCENARIOS.get("well_distributed_applications") or []
+        if not controls:
+            pytest.skip("no well_distributed_applications fixture")
+        require_loaded_graph()
+        single_site = [n for n in controls if R.profile_for_application(n).is_single_site]
+        assert single_site, "expected the control applications to be single-site"
+
+    def test_site_domains_never_lower_the_component_figure(self):
+        p = R.ResiliencyProfile(
+            application_ci_id=1, application_name="APP-X",
+            domains={
+                "physical host": R.FailureDomain(label="physical host", class_name=graph.CLASS_SERVER, count=4, scale=R.COMPONENT),
+                "data centre": R.FailureDomain(label="data centre", class_name=graph.CLASS_DATACENTER, count=1, scale=R.SITE),
+            },
+            redundancy=4, weakest="physical host",
+            site_redundancy=1, weakest_site="data centre",
+        )
+        assert not p.is_single_point_of_failure
+        assert p.is_single_site
+
+    @pytest.mark.parametrize(
+        "fixture,expected_domain",
+        [
+            ("spof_single_host_applications", "physical host"),
+            ("spof_single_volume_applications", "storage volume"),
+            ("spof_single_array_applications", "storage array"),
+        ],
+    )
+    def test_each_spof_fixture_names_its_own_domain(self, fixture, expected_domain):
+        """Firing is not enough - it has to fire for the right reason.
+
+        The array case is the sharpest: two DISTINCT volumes on ONE array. A
+        traversal that stops at the volume level reports two-way redundancy and
+        is confidently wrong, so this asserts the walk went the extra level.
+        """
+        import generate_seed
+
+        apps = generate_seed.SCENARIOS.get(fixture) or []
+        if not apps:
+            pytest.skip(f"no {fixture} fixture")
+        require_loaded_graph()
+        for name in apps:
+            p = R.profile_for_application(name)
+            assert p.is_single_point_of_failure, f"{name} should be a single point of failure"
+            assert p.weakest == expected_domain, (
+                f"{name}: expected the weakest domain to be {expected_domain}, got "
+                f"{p.weakest} from { {k: v.count for k, v in p.domains.items()} }"
+            )
+
+
 class TestMinimumNotMean:
     def test_the_weakest_domain_is_the_answer(self):
         """Eight hosts, four switches, one volume is one-way redundant. The mean
@@ -248,9 +357,9 @@ class TestMinimumNotMean:
         p = R.ResiliencyProfile(
             application_ci_id=1, application_name="APP-X",
             domains={
-                "physical host": R.FailureDomain("physical host", graph.CLASS_SERVER, 8),
-                "network device": R.FailureDomain("network device", graph.CLASS_NETWORK, 4),
-                "storage volume": R.FailureDomain("storage volume", graph.CLASS_STORAGE_VOLUME, 1),
+                "physical host": R.FailureDomain(label="physical host", class_name=graph.CLASS_SERVER, count=8, scale=R.COMPONENT),
+                "network device": R.FailureDomain(label="network device", class_name=graph.CLASS_NETWORK, count=4, scale=R.COMPONENT),
+                "storage volume": R.FailureDomain(label="storage volume", class_name=graph.CLASS_STORAGE_VOLUME, count=1, scale=R.COMPONENT),
             },
             redundancy=1, weakest="storage volume",
         )
@@ -261,51 +370,48 @@ class TestMinimumNotMean:
         p = R.profile_for_application(any_application)
         if p.redundancy is None:
             pytest.skip("nothing evaluable")
-        assert p.redundancy == min(d.count for d in p.domains.values())
+        assert p.redundancy == min(
+            d.count for d in p.domains.values() if d.scale == R.COMPONENT
+        )
         assert p.domains[p.weakest].count == p.redundancy
 
-    def test_many_hosts_do_not_rescue_a_single_cluster(self):
-        """The disagreement with the old score, stated as a property.
+    def test_hardware_spread_does_not_rescue_a_single_storage_domain(self):
+        """The disagreement with the old score, as a property rather than a number.
 
-        The old formula caps its node bonus at four extra nodes, so any
-        application on four or more hosts scored maximum regardless of how those
-        hosts were distributed.
+        This previously looked for an application on many hosts inside one
+        CLUSTER. After the VM layer landed, applications no longer attach to
+        clusters directly and that query stopped matching anything - the test
+        skipped, which is the failure mode this whole suite exists to avoid.
+
+        The modern equivalent is sharper anyway: an application genuinely spread
+        across several physical hosts that still dies with one volume or one
+        array. The old formula caps its node bonus at four extra nodes, so it
+        cannot tell such an application apart from a fully redundant one, and
+        counting hosts - however carefully - never finds it.
         """
-        # Pick the single-cluster application with the MOST hosts behind it.
-        # Taking an arbitrary one skipped this test on a small application and
-        # quietly stopped exercising the disagreement it exists to demonstrate.
+        require_loaded_graph()
         rows = fetch_all(
-            "SELECT TOP 1 a.Name AS Name, COUNT(DISTINCT m.ChildCiId) AS Hosts "
-            "FROM sad.ConfigurationItem a "
-            "JOIN sad.CiRelationship r ON r.ChildCiId = a.CiId AND r.TypeId = 1 "
-            "JOIN sad.CiRelationship m ON m.ParentCiId = r.ParentCiId AND m.TypeId = 3 "
-            "WHERE a.ClassName = 'cmdb_ci_appl' "
-            "GROUP BY a.Name "
-            "HAVING COUNT(DISTINCT r.ParentCiId) = 1 "
-            "ORDER BY COUNT(DISTINCT m.ChildCiId) DESC",
-            max_rows=1,
+            "SELECT Name FROM sad.ConfigurationItem WHERE ClassName='cmdb_ci_appl' ORDER BY CiId",
+            max_rows=2000,
         )
-        if not rows:
-            pytest.skip("no single-cluster application in the current seed")
-        p = R.profile_for_application(rows[0]["Name"])
-
-        # The claim that survives migration 011. Physical servers were
-        # reclassified to cmdb_ci_cluster_node and the real cmdb_ci_server rows
-        # are not loaded yet, so the host domain may legitimately have no data.
-        # What must hold either way is that a single-cluster application is
-        # flagged, and that an absent host domain is absent rather than zero.
-        hosts = p.domains.get("physical host")
-        if hosts is None:
-            assert "physical host" in p.not_evaluated
-        else:
-            # 4 is where the old formula's node bonus saturates: base + 5 per
-            # extra node capped at 20, so from four extra nodes on it cannot
-            # tell any two applications apart.
-            assert hosts.count >= 4, (
-                f"{rows[0]['Name']} has {hosts.count} hosts - the old score maxed out here"
-            )
-        assert p.is_single_point_of_failure, "the new score sees the single cluster"
-        assert p.weakest == "cluster"
+        found = []
+        for row in rows:
+            p = R.profile_for_application(row["Name"])
+            if not p.is_single_point_of_failure:
+                continue
+            hosts = p.domains.get("physical host")
+            if hosts and hosts.count > 1 and p.weakest != "physical host":
+                found.append((row["Name"], hosts.count, p.weakest))
+            if len(found) >= 3:
+                break
+        assert found, (
+            "no application is spread across hosts yet single elsewhere - either the "
+            "estate genuinely has none, or the storage and network domains stopped "
+            "resolving and every finding collapsed onto the host count"
+        )
+        for name, host_count, weakest in found:
+            assert weakest in ("storage volume", "storage array", "network device", "cluster")
+            assert host_count > 1, f"{name} was supposed to be spread across hardware"
 
 
 # =============================================================================

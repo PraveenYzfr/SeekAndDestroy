@@ -12,6 +12,20 @@ identically to the first.
 The CI graph makes the real figure computable: walk UP from the application and
 count DISTINCT parents at each failure-domain class.
 
+COMPONENT SCALE AND SITE SCALE ARE NOT THE SAME QUESTION
+--------------------------------------------------------
+The first version took the minimum across every domain including zone and data
+centre, and the control fixture caught it. Applications verified as well
+distributed - three hosts, three volumes, three arrays, two switches - were
+reported as single points of failure because they sit in one data centre, which
+most applications deliberately do.
+
+Losing a NAS head is an operational incident redundancy should absorb. Losing a
+site is a disaster-recovery event. `redundancy` is now the minimum across
+COMPONENT domains only; site redundancy is reported beside it and never folded
+in, because folding it in buries every component finding under a fact that is
+true of most of the estate.
+
 THE MINIMUM, NOT THE MEAN
 -------------------------
 An application on eight hosts, four switches and one storage volume is ONE-way
@@ -49,26 +63,42 @@ from decimal import Decimal
 from app.repositories import ci_graph_repository as graph
 from app.scoring.subscores import clamp_d, round2
 
-#: Failure domains, in the order a human reads them - smallest blast radius
-#: first. Each is (label, CI class).
+#: Failure domains, each tagged with the SCALE it fails at.
 #:
-#: Storage array sits BELOW volume deliberately: two volumes on one array are
-#: distinct at the volume level and a single point one level up, and a traversal
+#: The scale split exists because the control fixture caught this design being
+#: wrong. well_distributed_applications - APP-CRM, APP-LEDGER, APP-CARDS - span
+#: three physical hosts, three volumes, three arrays and two switches, which is
+#: exactly what "well distributed" is supposed to mean. They also sit in a single
+#: data centre, and a flat minimum across every domain therefore called all six
+#: of them single points of failure.
+#:
+#: That is the failure the control exists to detect. A rule that fires on the
+#: control fires on everything and measures nothing.
+#:
+#: Losing a NAS head is an operational incident that redundancy is supposed to
+#: absorb. Losing a data centre is a disaster-recovery event, and the large
+#: majority of applications are single-site by deliberate design rather than by
+#: oversight. Scoring them identically buries the first finding under the second.
+COMPONENT = "component"
+SITE = "site"
+
+#: Storage array sits below volume deliberately: two volumes on ONE array are
+#: distinct at the volume level and a single point one level up, so a traversal
 #: that stops at volumes reports two-way redundancy for a single-array topology.
-#: Note what is NOT here: cmdb_ci_cluster_node. A node is a membership record,
-#: not a machine, and a failure domain has to be a thing that can fail. Today
-#: there is one server per node so counting either gives the same answer, which
-#: is exactly why this needs stating - the two diverge the moment hardware is
-#: shared, and the wrong version will not look wrong until then.
-DOMAINS: tuple[tuple[str, str], ...] = (
-    ("physical host", graph.CLASS_SERVER),
-    ("storage volume", graph.CLASS_STORAGE_VOLUME),
-    ("storage array", graph.CLASS_STORAGE_ARRAY),
-    ("network device", graph.CLASS_NETWORK),
-    ("cluster", graph.CLASS_CLUSTER),
-    ("zone", graph.CLASS_ZONE),
-    ("data centre", graph.CLASS_DATACENTER),
+#: Verified against spof_single_array_applications, which reports
+#: {volume: 2, array: 1} - the walk does go the extra level.
+DOMAINS: tuple[tuple[str, str, str], ...] = (
+    ("physical host", graph.CLASS_SERVER, COMPONENT),
+    ("storage volume", graph.CLASS_STORAGE_VOLUME, COMPONENT),
+    ("storage array", graph.CLASS_STORAGE_ARRAY, COMPONENT),
+    ("network device", graph.CLASS_NETWORK, COMPONENT),
+    ("cluster", graph.CLASS_CLUSTER, COMPONENT),
+    ("zone", graph.CLASS_ZONE, SITE),
+    ("data centre", graph.CLASS_DATACENTER, SITE),
 )
+
+#: Note what is NOT here: cmdb_ci_cluster_node. A node is a membership record,
+#: not a machine, and a failure domain has to be something that can fail.
 
 
 @dataclass(frozen=True)
@@ -77,6 +107,8 @@ class FailureDomain:
     class_name: str
     #: Distinct CIs of this class supporting the application.
     count: int
+    #: COMPONENT or SITE - see DOMAINS.
+    scale: str = COMPONENT
     members: tuple[str, ...] = ()
     #: How these CIs were reached. "upward" is the real answer; "cluster members"
     #: is the sibling fallback described in ci_graph_repository.cluster_members
@@ -91,10 +123,17 @@ class ResiliencyProfile:
     domains: dict[str, FailureDomain] = field(default_factory=dict)
     #: Domains with no data at all. Absent, not zero - see the module docstring.
     not_evaluated: tuple[str, ...] = ()
-    #: Minimum across evaluated domains, or None when nothing could be evaluated.
+    #: Minimum across evaluated COMPONENT domains, or None when none could be
+    #: evaluated. This is the headline figure and the one the SPOF rule acts on.
     redundancy: int | None = None
-    #: The domain that is the minimum. The actionable half of the answer.
+    #: The component domain that is the minimum. The actionable half of the answer.
     weakest: str | None = None
+    #: Minimum across evaluated SITE domains - zones and data centres. Reported
+    #: separately and never folded into `redundancy`, because a single-site
+    #: application is usually a deliberate design rather than a defect, and
+    #: mixing the two buries every component finding underneath it.
+    site_redundancy: int | None = None
+    weakest_site: str | None = None
     #: True when the application has no placement recorded at all.
     unplaced: bool = False
     #: True when the graph walk hit its depth ceiling, so the support set may be
@@ -106,8 +145,19 @@ class ResiliencyProfile:
     truncated: bool = False
 
     @property
+    def is_single_site(self) -> bool:
+        """Everything this application runs on is inside one zone or one site.
+
+        Reported, never rejected on. It is true of most of the estate and is
+        usually a deliberate choice; turning it into a hard rejection would make
+        almost every Critical placement ineligible, which is a policy decision
+        and not one this module gets to make on its own.
+        """
+        return self.site_redundancy == 1 and not self.truncated
+
+    @property
     def is_single_point_of_failure(self) -> bool:
-        """Exactly one CI in some evaluated failure domain.
+        """Exactly one CI in some evaluated COMPONENT failure domain.
 
         False when redundancy is unknown. An application we cannot evaluate is
         not thereby fragile, and saying so would be inventing a finding.
@@ -137,6 +187,9 @@ class ResiliencyProfile:
             "truncated": self.truncated,
             "unplaced": self.unplaced,
             "single_point_of_failure": self.is_single_point_of_failure,
+            "site_redundancy": self.site_redundancy,
+            "weakest_site": self.weakest_site,
+            "single_site": self.is_single_site,
             "domains": {k: v.count for k, v in self.domains.items()},
         }
 
@@ -148,6 +201,9 @@ class ResiliencyProfile:
         parts = ", ".join(
             f"{d.count} {d.label}{'s' if d.count != 1 else ''}" for d in self.domains.values()
         )
+        site_note = ""
+        if self.is_single_site and self.weakest_site:
+            site_note = f" It also sits in a single {self.weakest_site}."
         if self.truncated:
             return (
                 f"{self.application_name} has at least {self.redundancy}-way redundancy "
@@ -158,8 +214,11 @@ class ResiliencyProfile:
             return (
                 f"{self.application_name} depends on a single {self.weakest} "
                 f"({parts}). A single failure takes it down."
-            )
-        return f"{self.application_name} is {self.redundancy}-way redundant at its weakest point ({parts})."
+            ) + site_note
+        return (
+            f"{self.application_name} is {self.redundancy}-way redundant at its weakest "
+            f"component ({parts})." + site_note
+        )
 
 
 def profile_for_application(application_code: str) -> ResiliencyProfile:
@@ -195,7 +254,7 @@ def profile_for_application(application_code: str) -> ResiliencyProfile:
 
     domains: dict[str, FailureDomain] = {}
     not_evaluated: list[str] = []
-    for label, class_name in DOMAINS:
+    for label, class_name, scale in DOMAINS:
         nodes = by_class.get(class_name, [])
         if not nodes:
             not_evaluated.append(label)
@@ -203,6 +262,7 @@ def profile_for_application(application_code: str) -> ResiliencyProfile:
         domains[label] = FailureDomain(
             label=label,
             class_name=class_name,
+            scale=scale,
             count=len({n.ci_id for n in nodes}),
             members=tuple(sorted(n.name for n in nodes))[:20],
             derivation=host_derivation if class_name == graph.CLASS_SERVER else "upward",
@@ -216,14 +276,20 @@ def profile_for_application(application_code: str) -> ResiliencyProfile:
             unplaced=True,
         )
 
-    weakest_domain = min(domains.values(), key=lambda d: d.count)
+    component = [d for d in domains.values() if d.scale == COMPONENT]
+    site = [d for d in domains.values() if d.scale == SITE]
+    weakest_component = min(component, key=lambda d: d.count) if component else None
+    weakest_site = min(site, key=lambda d: d.count) if site else None
+
     return ResiliencyProfile(
         application_ci_id=ci.ci_id,
         application_name=application_code,
         domains=domains,
         not_evaluated=tuple(not_evaluated),
-        redundancy=weakest_domain.count,
-        weakest=weakest_domain.label,
+        redundancy=weakest_component.count if weakest_component else None,
+        weakest=weakest_component.label if weakest_component else None,
+        site_redundancy=weakest_site.count if weakest_site else None,
+        weakest_site=weakest_site.label if weakest_site else None,
         truncated=walk.hit_ceiling,
     )
 
