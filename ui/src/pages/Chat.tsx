@@ -40,13 +40,10 @@ function currentEmployeeId(): number {
  *  estate, so the suggestions change with the data and every one of them is a
  *  question about something that genuinely exists.
  */
-function buildExamples(appCode?: string, clusterCode?: string): string[] {
+function buildExamples(appCode?: string): string[] {
   return [
     appCode ? `Find the best clusters for hosting ${appCode}.` : "Find the best clusters for hosting my application.",
     "I need 64 cores, 512 GB RAM and 4 TB storage for a production Kubernetes workload.",
-    appCode && clusterCode
-      ? `Why was ${clusterCode} rejected for ${appCode}?`
-      : "Why was a cluster rejected for my application?",
     "Which clusters are underutilized and could be right-sized?",
   ];
 }
@@ -75,10 +72,17 @@ export default function Chat() {
   // couple of example prompts, not the chat.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.getApplications(), api.getClusters()])
-      .then(([apps, clusters]) => {
+    // Applications only. The cluster list used to be fetched alongside this to
+    // fill a "Why was <cluster> rejected for <app>?" suggestion, which paired
+    // the alphabetically-first cluster with the alphabetically-first
+    // application - two unrelated names - so the question it proposed often had
+    // no answer at all. With that example gone the second request is dead
+    // weight on every page load.
+    api
+      .getApplications()
+      .then((apps) => {
         if (cancelled) return;
-        setExamples(buildExamples(apps[0]?.applicationCode, clusters[0]?.clusterCode));
+        setExamples(buildExamples(apps[0]?.applicationCode));
       })
       .catch(() => undefined);
     return () => {
@@ -207,9 +211,7 @@ export default function Chat() {
     <div className="chat-page">
       <h2>Chat</h2>
       <p className="subtitle">
-        Ask for hosting recommendations, raw capacity, right-sizing, forecasts or trade-offs in plain
-        language. Every answer is backed by the same deterministic engine as the structured screens -
-        the AI narrates, it never invents the numbers.
+        Ask about hosting, capacity, right-sizing, forecasts or trade-offs in plain language.
       </p>
 
       {messages.length > 0 && (
