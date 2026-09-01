@@ -36,13 +36,22 @@ function currentEmployeeId(): number {
  *
  *  Hardcoding "Find the best clusters for hosting APP-PAYMENTS" made the thing
  *  look like a scripted demo - it implied the system knows about one blessed
- *  application. These read a real application and a real cluster from the
- *  estate, so the suggestions change with the data and every one of them is a
- *  question about something that genuinely exists.
+ *  application.
+ *
+ *  Reading a real application code from the estate was the fix for that and was
+ *  itself wrong: apps[0] is the same row on every load, so the suggestion was
+ *  "Find the best clusters for hosting APP-AML-API0044" every single time - one
+ *  blessed application again, just chosen by the database instead of by us.
+ *
+ *  Worse, it was the wrong SHAPE. An application that already has a code is
+ *  already hosted, so where it should go is a question nobody has. Somebody
+ *  asking where to place something is placing something new and describes it by
+ *  tier, platform and size. These examples do that, name nothing that has to
+ *  exist, and need no request to build.
  */
-function buildExamples(appCode?: string): string[] {
+function buildExamples(): string[] {
   return [
-    appCode ? `Find the best clusters for hosting ${appCode}.` : "Find the best clusters for hosting my application.",
+    "Where can I host a Tier-1 production Java app needing 32 cores and 128 GB?",
     "I need 64 cores, 512 GB RAM and 4 TB storage for a production Kubernetes workload.",
     "Which clusters are underutilized and could be right-sized?",
   ];
@@ -64,31 +73,9 @@ export default function Chat() {
    *  persisted across reloads - a reload starts a fresh conversation, which is
    *  honest, because the message history on screen is gone too. */
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [examples, setExamples] = useState<string[]>(() => buildExamples());
+  const examples = buildExamples();
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  // Draw the suggestions from the live estate. Failure is silent and harmless:
-  // buildExamples() already returns generic wording, so a CMDB hiccup costs a
-  // couple of example prompts, not the chat.
-  useEffect(() => {
-    let cancelled = false;
-    // Applications only. The cluster list used to be fetched alongside this to
-    // fill a "Why was <cluster> rejected for <app>?" suggestion, which paired
-    // the alphabetically-first cluster with the alphabetically-first
-    // application - two unrelated names - so the question it proposed often had
-    // no answer at all. With that example gone the second request is dead
-    // weight on every page load.
-    api
-      .getApplications()
-      .then((apps) => {
-        if (cancelled) return;
-        setExamples(buildExamples(apps[0]?.applicationCode));
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
