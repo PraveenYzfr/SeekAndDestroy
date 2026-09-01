@@ -142,6 +142,22 @@ def build_cases(limit_per_kind: int = 3) -> list[RetrievalCase]:
     # number in their notes. Those chunks contain the query term too, so the
     # retriever has to put the ticket itself above the tickets discussing it.
     # That is the thing that can go wrong, and now it can show up.
+    #
+    # DO NOT simplify this back to `ORDER BY IncidentId`. The selection looks
+    # arbitrary and the citation count looks like an optimisation; neither is.
+    #
+    # Worth understanding why, because there were TWO independent ways for this
+    # test to be unfalsifiable and they hid each other:
+    #
+    #   1. notes repeated their own ticket number, so the answer's body
+    #      contained the query term            -> fixed in the corpus, and
+    #                                             TestCorpusInvariant guards it
+    #   2. the tickets we selected were cited by nothing, so no other document
+    #      contained the query term either     -> fixed here
+    #
+    # Fixing (1) is what exposed (2). Reverting selection to id order restores
+    # (2) on its own, silently, while the corpus test keeps passing and the
+    # sparse score stays high - which is exactly what it looked like before.
     cited, leaks = _citation_counts()
     if leaks:
         # Loud on purpose. Notes repeating their own number is exactly the
