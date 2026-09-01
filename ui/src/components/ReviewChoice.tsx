@@ -148,6 +148,21 @@ export default function ReviewChoice({
           reader picks one and leaves. When it is not, a choice beats an
           explanation of every rule that failed. Each option carries what it
           would actually buy, computed from the candidates already evaluated. */}
+      {/* Nothing recommended AND nothing to offer. Without this the panel is
+          simply absent, which looks identical to a good result - and at demo
+          time "no suggestions because everything is fine" and "no suggestions
+          because the field never arrived" are the two things you most need to
+          tell apart. Says so rather than rendering nothing. */}
+      {eligible.length === 0 && (!steps || steps.choices.length === 0) && (
+        <div className="explain-box" style={{ marginBottom: 10 }}>
+          <strong>No options and nothing to relax.</strong>
+          <p style={{ fontSize: 13, margin: "6px 0 0" }}>
+            Every cluster considered was blocked by something a smaller request would not
+            change. Try a different environment, platform or location.
+          </p>
+        </div>
+      )}
+
       {steps && !steps.sufficient && steps.choices.length > 0 && (
         <div className="explain-box" style={{ marginBottom: 10 }}>
           <strong>What next?</strong>
