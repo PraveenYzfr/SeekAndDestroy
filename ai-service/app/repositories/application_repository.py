@@ -54,8 +54,13 @@ def search(
 
 
 def list_all(limit: int = 200) -> list[CmdbApplication]:
+    # max_rows must track limit. fetch_all caps at service.max_rows
+    # (500) by default, so a caller asking for 5,000 got a
+    # RowLimitExceeded rather than 5,000 rows - invisible until the
+    # estate grew past 500 applications.
     rows = fetch_all(
-        f"SELECT TOP (:limit) * FROM {T('CmdbApplication')} ORDER BY ApplicationCode", {"limit": limit}
+        f"SELECT TOP (:limit) * FROM {T('CmdbApplication')} ORDER BY ApplicationCode",
+        {"limit": limit}, max_rows=limit,
     )
     return [CmdbApplication(**r) for r in rows]
 

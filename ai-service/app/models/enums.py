@@ -291,6 +291,12 @@ class EntityKind(StrEnum):
     NODE = "node"
     HOSTING = "hosting"
     INCIDENT = "incident"
+    # Added with migration_007. Kept distinct from INCIDENT so a query can be
+    # filtered to change history alone - "what changed on this cluster" and
+    # "what broke on this cluster" are different questions with different
+    # answers, and merging them makes both harder to retrieve.
+    CHANGE = "change"
+    PROBLEM = "problem"
     DEPENDENCY = "dependency"
     STANDARD = "standard"
     RECOMMENDATION = "recommendation"

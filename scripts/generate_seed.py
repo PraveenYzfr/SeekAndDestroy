@@ -564,6 +564,9 @@ _A.append(('APP-PROCUREMENT', 'Procurement Portal', 'Low', 'Staging', 'Kubernete
 _A.append(('APP-VENDORPORTAL', 'Vendor Self-Service Portal', 'Low', 'Staging', 'Kubernetes', 'Linux/Ubuntu22', 2, 8, 200, 4, 'Tier-3', 'Internal', 'Atlanta-DC1', 9, 15, 'phx-05', 1.0, []))
 _A.append(('APP-LEGACYMF', 'Legacy Statement Archive', 'Low', 'Production', 'BareMetal', 'Linux/RHEL9', 4, 16, 3500, 2, 'Tier-3', 'Internal', 'Phoenix-DC1', 20, 1, 'msp-03', 1.0, ['POOR_FIT']))
 
+import seed_itsm  # noqa: E402  - sibling module, imported after the dataclasses it needs
+import seed_scale  # noqa: E402
+
 APPLICATIONS: list[AppDef] = []
 for i, row in enumerate(_A, start=1):
     (code, name, crit, env, platform, os_req, cpu, mem, storage, growth, tier,
@@ -578,6 +581,49 @@ for i, row in enumerate(_A, start=1):
 
 assert len(APPLICATIONS) == 40, len(APPLICATIONS)
 APP_BY_CODE = {a.code: a for a in APPLICATIONS}
+
+# =============================================================================
+# Scale: bring the estate up to a realistic application-to-cluster ratio.
+#
+# The hand-written applications above stay exactly as they are - they carry the
+# SCENARIOS fixtures the placement tests assert against, and regenerating them
+# would break those tests for nothing. Everything below is added on top.
+#
+# 40 applications on 256 clusters meant 246 clusters hosted nothing and the
+# capacity sub-score - the heaviest of the seven at 0.30 - was comparing empty
+# boxes. See scripts/seed_scale.py for why packing rather than sprinkling.
+# =============================================================================
+def _make_app(*, idx, code, name, criticality, environment, platform, os, cpu_req,
+              mem_req_gb, storage_req_gb, growth_pct, avail_tier, classification, hosted_since):
+    return AppDef(
+        idx, code, name, criticality, environment, platform, os, cpu_req, mem_req_gb,
+        storage_req_gb, growth_pct, avail_tier, classification,
+        None, rng.randint(1, len(EMPLOYEES)), rng.randint(1, len(SUPPORT_GROUPS)),
+        "", 1.0, "Active", hosted_since, [],
+    )
+
+
+APPLICATIONS.extend(
+    seed_scale.generate_applications(APPLICATIONS, rng, ANCHOR_DATE, _make_app)
+)
+
+# Draw a utilisation target per cluster, then pack applications in until each is
+# reached. The stress figure this produces drives incident density and change
+# failure rates downstream - if allocation were random those correlations would
+# be decoration.
+LOAD_PLANS = seed_scale.build_load_plans(CLUSTERS, rng)
+HOSTING_ROWS, PRIMARY_CLUSTER_BY_APP = seed_scale.pack_applications(
+    APPLICATIONS, CLUSTERS, LOAD_PLANS, rng, ANCHOR_DATE
+)
+for _a in APPLICATIONS:
+    _a.primary_cluster_idx = PRIMARY_CLUSTER_BY_APP.get(_a.idx)
+
+# Rewrite each cluster's utilisation trend so the measured series agrees with
+# what it now hosts. compute_cluster_capacity() takes the worse of allocated and
+# measured, so leaving the old trend would have clusters that are 88% allocated
+# reporting 12% measured - an estate that contradicts itself.
+seed_scale.derive_utilisation_profiles(CLUSTERS, LOAD_PLANS, rng)
+
 
 # Sanity-check the engineered-scenario counts promised by the specification.
 _poor_fit = [a for a in APPLICATIONS if "POOR_FIT" in a.tags]
@@ -721,18 +767,14 @@ def build_application_usage_rows() -> list[tuple]:
 
 
 def build_hosting_rows() -> list[tuple]:
-    rows = []
-    for a in APPLICATIONS:
-        cluster = CLUSTER_BY_CODE[a.host_cluster_code]
-        alloc_cpu = r2(a.cpu_req * a.alloc_factor)
-        alloc_mem = r2(a.mem_req_gb * a.alloc_factor)
-        alloc_storage = r2(a.storage_req_gb * a.alloc_factor)
-        hosted_since_dt = datetime.combine(a.hosted_since, datetime.min.time())
-        rows.append(
-            (a.idx, cluster.idx, None, a.environment, alloc_cpu, alloc_mem, alloc_storage,
-             a.hosting_status, 1, hosted_since_dt)
-        )
-    return rows
+    """Produced by the packer during module import - see seed_scale.
+
+    Previously one row per application, always Production, always IsPrimary=1.
+    Now each application has a primary, usually a smaller Staging copy, often a
+    Test or Development copy, and - when it is Critical or High - a DR standby:
+    a second Production row in a different data centre with IsPrimary = 0.
+    """
+    return HOSTING_ROWS
 
 
 # =============================================================================
@@ -927,6 +969,13 @@ def main() -> None:
     lines.append("     sqlcmd -S LAPTOP-R6U8H616 -d PraveenDB -E -C -i database\\seed.sql")
     lines.append("============================================================================= */")
     lines.append("SET NOCOUNT ON;")
+    # Required, not cosmetic. sad.Incident carries UQ_Incident_Number, a
+    # FILTERED unique index (migration_007), and SQL Server refuses any INSERT
+    # into a table with one unless QUOTED_IDENTIFIER is ON. sqlcmd does not
+    # guarantee it, so without this the very first incident INSERT fails with a
+    # message about SET options that names neither the index nor the table.
+    lines.append("SET QUOTED_IDENTIFIER ON;")
+    lines.append("SET ANSI_NULLS ON;")
     lines.append("GO")
     lines.append("")
 
@@ -1066,13 +1115,61 @@ def main() -> None:
         build_dependency_rows(),
     )
 
-    # --- Incident ---
-    lines.append("-- incidents")
+    # --- Change / Problem / Incident and their comments ---------------------
+    # Order is dictated by the foreign keys: Problem.PermanentFixChangeId and
+    # Incident.CausedByChangeId both point at Change, and Incident.ProblemId
+    # points at Problem. Identity values are implied by insertion order, the
+    # same convention the rest of this file uses.
+    anchor_dt = datetime.combine(ANCHOR_DATE, datetime.min.time())
+    change_rows, change_comment_rows, _freezes = seed_itsm.build_changes(
+        CLUSTERS, APPLICATIONS, LOAD_PLANS, rng, anchor_dt
+    )
+    lines.append(f"-- {len(change_rows)} change requests")
+    emit_inserts(
+        lines, "sad.Change",
+        ["Number", "ShortDescription", "Description", "Type", "State", "ClusterId", "NodeId",
+         "ApplicationId", "PlannedStart", "PlannedEnd", "ActualStart", "ActualEnd", "CloseCode",
+         "CloseNotes", "ImplementationPlan", "BackoutPlan", "RiskAssessment", "AssignmentGroup",
+         "FreezeUntil"],
+        change_rows,
+    )
+
+    incident_rows, incident_comment_rows, event_ids = seed_itsm.build_incidents(
+        CLUSTERS, APPLICATIONS, NODES, LOAD_PLANS, len(change_rows), rng, anchor_dt
+    )
+    problem_rows = seed_itsm.build_problems(
+        CLUSTERS, LOAD_PLANS, event_ids, len(change_rows), rng, anchor_dt
+    )
+    lines.append(f"-- {len(problem_rows)} problem records")
+    emit_inserts(
+        lines, "sad.Problem",
+        ["Number", "ShortDescription", "Description", "RootCause", "Workaround", "FixNotes",
+         "IsKnownError", "State", "PermanentFixChangeId", "ClusterId", "ApplicationId",
+         "OpenedAt", "ClosedAt"],
+        problem_rows,
+    )
+
+    lines.append(f"-- {len(incident_rows)} incidents")
     emit_inserts(
         lines, "sad.Incident",
         ["ApplicationId", "ClusterId", "NodeId", "Severity", "OpenedAt", "ClosedAt", "Status",
-         "RootCauseCategory"],
-        build_incident_rows(),
+         "RootCauseCategory", "Number", "ShortDescription", "Description", "CloseNotes",
+         "AssignmentGroup", "Impact", "Urgency"],
+        incident_rows,
+    )
+
+    lines.append(f"-- {len(incident_comment_rows)} incident work notes")
+    emit_inserts(
+        lines, "sad.IncidentComment",
+        ["IncidentId", "Sequence", "CreatedAt", "CreatedBy", "Type", "Text"],
+        incident_comment_rows,
+    )
+
+    lines.append(f"-- {len(change_comment_rows)} change work notes")
+    emit_inserts(
+        lines, "sad.ChangeComment",
+        ["ChangeId", "Sequence", "CreatedAt", "CreatedBy", "Type", "Text"],
+        change_comment_rows,
     )
 
     # --- CapacityRequest ---
@@ -1088,6 +1185,14 @@ def main() -> None:
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"Wrote {OUTPUT_PATH} ({len(lines)} lines)")
+    loaded = [p for p in LOAD_PLANS.values() if p.app_count]
+    print(f"  applications      : {len(APPLICATIONS)}")
+    print(f"  hosting rows      : {len(HOSTING_ROWS)}")
+    print(f"  clusters occupied : {len(loaded)} of {len(CLUSTERS)}")
+    if loaded:
+        stressed = [p for p in loaded if p.stress > 0.6]
+        print(f"  stressed (>70%)   : {len(stressed)}")
+        print(f"  mean allocation   : {sum(p.achieved_cpu_pct for p in loaded)/len(loaded):.1f}% CPU")
     print("Scenario map:")
     for k, v in SCENARIOS.items():
         print(f"  {k}: {v}")

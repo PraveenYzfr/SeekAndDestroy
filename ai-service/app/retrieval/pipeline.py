@@ -40,6 +40,7 @@ from app.repositories import (
     hosting_repository,
     incident_repository,
     index_watermark_repository,
+    itsm_repository,
     node_repository,
 )
 from app.retrieval import documents
@@ -53,8 +54,18 @@ logger = structlog.get_logger(__name__)
 #: rather than minutes, and the cursor moves often enough that resuming is cheap.
 BATCH_SIZE = 500
 
-#: How far back incident documents are indexed, matching index_all()'s window.
-INCIDENT_WINDOW_DAYS = 180
+#: How far back incident documents are indexed.
+#:
+#: Was 180 when the estate had 61 incidents, where the window was academic. With
+#: 10,000 incidents spanning 540 days it silently excluded two thirds of them -
+#: 6,700 tickets present in the database and absent from the index, so "has this
+#: happened before on this cluster" answered from the last six months only and
+#: gave no sign it was doing so.
+#:
+#: 540 matches the seed's history. Recency still matters for ranking, but that
+#: belongs in scoring, not in whether a document exists at all: an index that
+#: cannot see last year cannot tell you a problem is recurring.
+INCIDENT_WINDOW_DAYS = 540
 
 #: Every source this pipeline reads, in the order it reads them. Nodes precede
 #: clusters deliberately - see the fan-out note in iter_batches().
@@ -65,6 +76,8 @@ SOURCES = (
     "hosting",
     "incident_opened",
     "incident_closed",
+    "change",
+    "problem",
     "dependency",
 )
 
@@ -131,8 +144,10 @@ def iter_batches(batch_size: int = BATCH_SIZE) -> Iterator[Batch]:
     yield from _nodes(ctx, batch_size)
     yield from _clusters(ctx, batch_size)
     yield from _hosting(ctx, batch_size)
-    yield from _incidents_opened(ctx, batch_size)
+    yield from _incidents_itsm(ctx, batch_size)
     yield from _incidents_closed(ctx, batch_size)
+    yield from _changes(ctx, batch_size)
+    yield from _problems(ctx, batch_size)
     yield from _dependencies(ctx, batch_size)
 
 
@@ -408,3 +423,106 @@ def execute(mode: str, on_batch=None, *, should_stop=None) -> dict:
     logger.info("pipeline.completed", mode=mode, documents=written, batches=batches, **by_source)
     return {"documents_indexed": written, "batches": batches,
             "by_source": by_source, "stopped_early": False}
+
+
+def _incidents_itsm(ctx: _Context, size: int) -> Iterator[Batch]:
+    """Incidents as chunks: header, each substantive note, resolution.
+
+    Replaces the one-document-per-incident source. At 10,000 incidents carrying
+    89,912 work notes, a single document per ticket averages its vector over
+    everything in it - the one note that answers a question is diluted by the
+    ten that do not.
+
+    Comments are fetched once per PAGE, not once per incident. The per-incident
+    shape is 10,000 round trips returning nine rows each; this is 20 round trips
+    returning ~4,500 each, and it scales with what changed rather than with the
+    size of the corpus.
+    """
+    at, ident = _cursor("incident_opened")
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=INCIDENT_WINDOW_DAYS)
+    while True:
+        rows = incident_repository.changed_since(at, ident, limit=size)
+        if not rows:
+            return
+        in_window = [i for i in rows if i.OpenedAt >= cutoff]
+        comments = itsm_repository.incident_comments_for([i.IncidentId for i in in_window])
+        docs = []
+        for incident in in_window:
+            cluster = ctx.clusters.get(incident.ClusterId)
+            app = ctx.apps.get(incident.ApplicationId)
+            subject = (f"application {app.ApplicationCode}" if app
+                       else f"cluster {cluster.ClusterCode}" if cluster else "")
+            if not subject:
+                # index_all() only ever reached incidents through an application
+                # or a cluster; indexing a node-only one here would add a
+                # document a rebuild then removed.
+                continue
+            docs.extend(documents.incident_chunks(
+                incident, comments.get(incident.IncidentId, []),
+                cluster_code=cluster.ClusterCode if cluster else "",
+                app_code=app.ApplicationCode if app else "",
+                subject_description=subject,
+            ))
+        # The cursor advances over the whole page even when rows were filtered
+        # out of the window - it records how far the source was READ, not how
+        # many documents that produced. Otherwise a long run of out-of-window
+        # incidents is re-read on every refresh, forever.
+        yield Batch(source="incident_opened", documents=docs,
+                    cursor_at=rows[-1].OpenedAt, cursor_id=rows[-1].IncidentId)
+        at, ident = rows[-1].OpenedAt, rows[-1].IncidentId
+        if len(rows) < size:
+            return
+
+
+def _changes(ctx: _Context, size: int) -> Iterator[Batch]:
+    """Changes as chunks: header, plan, backout, risk, outcome.
+
+    The plan and the backout are separate documents on purpose. "What were we
+    going to do if this failed" is a different question from "what were we
+    doing", and someone looking at a failed change is asking the second.
+    """
+    at, ident = _cursor("change")
+    while True:
+        rows = itsm_repository.changes_changed_since(at, ident, limit=size)
+        if not rows:
+            return
+        comments = itsm_repository.change_comments_for([c.ChangeId for c in rows])
+        docs = []
+        for change in rows:
+            cluster = ctx.clusters.get(change.ClusterId)
+            app = ctx.apps.get(change.ApplicationId)
+            docs.extend(documents.change_chunks(
+                change, comments.get(change.ChangeId, []),
+                cluster_code=cluster.ClusterCode if cluster else "",
+                app_code=app.ApplicationCode if app else "",
+            ))
+        yield Batch(source="change", documents=docs,
+                    cursor_at=rows[-1].UpdatedAt, cursor_id=rows[-1].ChangeId)
+        at, ident = rows[-1].UpdatedAt, rows[-1].ChangeId
+        if len(rows) < size:
+            return
+
+
+def _problems(ctx: _Context, size: int) -> Iterator[Batch]:
+    """Problems as chunks: header, root cause, workaround, fix - separately.
+
+    The highest-value text in the corpus. A problem record is written to answer
+    "why did this keep happening", and the three sections answer different parts
+    of it: what was wrong, what we did about it meanwhile, and what actually
+    fixed it.
+    """
+    at, ident = _cursor("problem")
+    while True:
+        rows = itsm_repository.problems_changed_since(at, ident, limit=size)
+        if not rows:
+            return
+        docs = []
+        for problem in rows:
+            cluster = ctx.clusters.get(problem.ClusterId)
+            docs.extend(documents.problem_chunks(
+                problem, cluster_code=cluster.ClusterCode if cluster else ""))
+        yield Batch(source="problem", documents=docs,
+                    cursor_at=rows[-1].UpdatedAt, cursor_id=rows[-1].ProblemId)
+        at, ident = rows[-1].UpdatedAt, rows[-1].ProblemId
+        if len(rows) < size:
+            return

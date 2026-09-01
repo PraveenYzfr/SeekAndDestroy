@@ -66,10 +66,14 @@ def search(
     return [InfrastructureCluster(**r) for r in rows]
 
 
-def list_all(limit: int = 500) -> list[InfrastructureCluster]:
+def list_all(limit: int = 500) -> list:
+    # max_rows must track limit. fetch_all defaults its cap to
+    # service.max_rows (500), so a caller asking for 5,000 got a
+    # RowLimitExceeded instead of 5,000 rows - invisible until the
+    # estate grew past 500 applications.
     rows = fetch_all(
         f"SELECT TOP (:limit) * FROM {T('InfrastructureCluster')} ORDER BY ClusterCode",
-        {"limit": limit},
+        {"limit": limit}, max_rows=limit,
     )
     return [InfrastructureCluster(**r) for r in rows]
 

@@ -23,7 +23,16 @@ BEGIN
     IF OBJECT_ID('sad.Investigation', 'U') IS NOT NULL DROP TABLE sad.Investigation;
     IF OBJECT_ID('sad.Conversation', 'U') IS NOT NULL DROP TABLE sad.Conversation;
     IF OBJECT_ID('sad.CapacityRequest', 'U') IS NOT NULL DROP TABLE sad.CapacityRequest;
+    -- Comments before their parents, and Incident before Problem and Change:
+    -- Incident carries FKs to both, so dropping either first fails. Added with
+    -- migration_007 - a reset that does not know about a table leaves it behind
+    -- holding a foreign key, and the failure names the parent rather than the
+    -- child that is actually blocking it.
+    IF OBJECT_ID('sad.IncidentComment', 'U') IS NOT NULL DROP TABLE sad.IncidentComment;
+    IF OBJECT_ID('sad.ChangeComment', 'U') IS NOT NULL DROP TABLE sad.ChangeComment;
     IF OBJECT_ID('sad.Incident', 'U') IS NOT NULL DROP TABLE sad.Incident;
+    IF OBJECT_ID('sad.Problem', 'U') IS NOT NULL DROP TABLE sad.Problem;
+    IF OBJECT_ID('sad.Change', 'U') IS NOT NULL DROP TABLE sad.Change;
     IF OBJECT_ID('sad.ApplicationDependency', 'U') IS NOT NULL DROP TABLE sad.ApplicationDependency;
     IF OBJECT_ID('sad.ApplicationUsage', 'U') IS NOT NULL DROP TABLE sad.ApplicationUsage;
     IF OBJECT_ID('sad.NodeUtilization', 'U') IS NOT NULL DROP TABLE sad.NodeUtilization;

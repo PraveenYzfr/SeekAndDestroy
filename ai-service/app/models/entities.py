@@ -176,6 +176,89 @@ class Incident(_Entity):
     ClosedAt: Optional[datetime]
     Status: str
     RootCauseCategory: str
+    # Added with migration_007. All Optional: the rows that predate it have
+    # none of these, and requiring them would break construction on exactly the
+    # records the migration exists to bring forward.
+    Number: Optional[str] = None
+    ShortDescription: Optional[str] = None
+    Description: Optional[str] = None
+    CloseNotes: Optional[str] = None
+    AssignmentGroup: Optional[str] = None
+    Impact: Optional[str] = None
+    Urgency: Optional[str] = None
+    ProblemId: Optional[int] = None
+    CausedByChangeId: Optional[int] = None
+
+
+class Change(_Entity):
+    """A change request. Added with migration_007.
+
+    Every ITSM text column is Optional because the 61 incidents that predate the
+    migration have none of them, and a model that refuses to construct without
+    them would fail on exactly the rows that need migrating.
+    """
+
+    ChangeId: int
+    Number: str
+    ShortDescription: str
+    Description: Optional[str] = None
+    Type: str
+    State: str
+    ClusterId: Optional[int] = None
+    NodeId: Optional[int] = None
+    ApplicationId: Optional[int] = None
+    PlannedStart: Optional[datetime] = None
+    PlannedEnd: Optional[datetime] = None
+    ActualStart: Optional[datetime] = None
+    ActualEnd: Optional[datetime] = None
+    CloseCode: Optional[str] = None
+    CloseNotes: Optional[str] = None
+    ImplementationPlan: Optional[str] = None
+    BackoutPlan: Optional[str] = None
+    RiskAssessment: Optional[str] = None
+    AssignmentGroup: Optional[str] = None
+    FreezeUntil: Optional[datetime] = None
+    CreatedAt: Optional[datetime] = None
+    UpdatedAt: Optional[datetime] = None
+
+
+class Problem(_Entity):
+    ProblemId: int
+    Number: str
+    ShortDescription: str
+    Description: Optional[str] = None
+    RootCause: Optional[str] = None
+    Workaround: Optional[str] = None
+    FixNotes: Optional[str] = None
+    IsKnownError: bool = False
+    State: str
+    PermanentFixChangeId: Optional[int] = None
+    ClusterId: Optional[int] = None
+    ApplicationId: Optional[int] = None
+    OpenedAt: datetime
+    ClosedAt: Optional[datetime] = None
+    CreatedAt: Optional[datetime] = None
+    UpdatedAt: Optional[datetime] = None
+
+
+class IncidentComment(_Entity):
+    CommentId: int
+    IncidentId: int
+    Sequence: int
+    CreatedAt: datetime
+    CreatedBy: Optional[str] = None
+    Type: str
+    Text: str
+
+
+class ChangeComment(_Entity):
+    CommentId: int
+    ChangeId: int
+    Sequence: int
+    CreatedAt: datetime
+    CreatedBy: Optional[str] = None
+    Type: str
+    Text: str
 
 
 class CapacityRequest(_Entity):
