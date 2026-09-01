@@ -134,13 +134,23 @@ class TestRefreshAfterRebuild:
         recorded = {r["Source"] for r in wm.list_all()}
         assert recorded == set(SOURCES), f"missing: {set(SOURCES) - recorded}"
 
-    def test_a_refresh_straight_after_a_rebuild_indexes_nothing(self, clean_watermarks):
-        """The headline behaviour. Nothing has changed, so nothing is embedded."""
+    def test_a_refresh_straight_after_a_rebuild_reindexes_no_cmdb_documents(self, clean_watermarks):
+        """The headline behaviour: nothing from the database is re-embedded.
+
+        The four standards ARE rewritten every run, deliberately. They live in
+        Python with no watermark to advance, and making them rebuild-only meant
+        "never indexed at all" - the live collection held 0 of 4, so every
+        grounded question about a policy answered from node documents instead.
+        Four embeddings per run is the price of that not happening again.
+        """
         from app.retrieval.indexer import index_all, refresh_index
 
         index_all()
         result = refresh_index()
-        assert result["documents_indexed"] == 0, result["by_source"]
+        by_source = result["by_source"]
+        cmdb = {k: v for k, v in by_source.items() if k != "standard"}
+        assert all(v == 0 for v in cmdb.values()), cmdb
+        assert by_source.get("standard") == 4, by_source
 
     def test_a_first_refresh_with_no_watermarks_indexes_the_whole_corpus(self, clean_watermarks):
         """With no watermark a source cannot know what it missed, so it takes

@@ -1,0 +1,129 @@
+# Golden set - the answers this platform must keep getting right.
+#
+# HOW THIS IS DIFFERENT FROM THE TEST SUITE
+# -----------------------------------------
+# The tests assert deterministic behaviour: given this input, this function
+# returns that value. These cases assert behaviour that passes through a model,
+# where the output is not fixed and the question is whether it stayed within its
+# bounds. A test cannot say "the sentence must be grounded"; a graded run can.
+#
+# WHY SO MANY CASES EXPECT A REFUSAL
+# ----------------------------------
+# The failure this platform is built against is a confident answer with nothing
+# behind it. A model that answers everything scores well on any set made only of
+# answerable questions, which is precisely how that failure survives evaluation.
+# So roughly half of these have no good answer, and the correct behaviour is to
+# say so.
+#
+# GRADING
+# -------
+# Every case is graded twice, and the two are never blended:
+#
+#   deterministic  graders.number_fidelity / entity_fidelity - arithmetic over
+#                  (prose, evidence). Cannot hallucinate. This is the gate.
+#   judge          evaluation.judge - relevance, groundedness, actionability.
+#                  Evidence about quality, not a measurement, and excluded from
+#                  headline scores when the judge graded its own model.
+#
+# `must_refuse: true` is checked by the runner against must_not_contain, NOT by
+# the judge. Whether an answer refused is a property of the text, and asking a
+# model to decide it would put the thing under test in charge of its own mark.
+
+version: 1
+
+cases:
+  # --- answerable from the estate ------------------------------------------
+  - id: hosting-basic
+    query: "Find the best clusters for hosting APP-ANALYTICS."
+    kind: hosting
+    must_refuse: false
+    # Named entities the answer has to carry. Not a full-text match: the wording
+    # is the model's to choose, the subject is not.
+    must_contain: ["APP-ANALYTICS"]
+    notes: "The core path. A cluster code and an eligibility verdict must appear."
+
+  - id: rejection-reason
+    query: "Why was atl-03 rejected for APP-ANALYTICS?"
+    kind: question
+    must_refuse: false
+    must_contain: ["atl-03"]
+    # This is the case that was answered from the vector index until b4e9243.
+    # It now resolves through rules.eligibility, so the answer should name the
+    # rule that actually failed rather than describing the cluster in general.
+    must_not_contain: ["I don't have enough", "no information"]
+    notes: "Must answer from the eligibility rules, not from retrieved prose."
+
+  - id: rightsizing-overview
+    query: "Which clusters are overprovisioned?"
+    kind: right_sizing
+    must_refuse: false
+    must_contain: []
+    notes: "Deterministic underneath; the model only narrates the classification."
+
+  - id: capacity-request
+    query: "I need somewhere to run 32 cores and 128 GB RAM in production."
+    kind: capacity
+    must_refuse: false
+    must_contain: []
+    notes: "Exercises extraction. A misread requirement fails the whole run."
+
+  # --- must refuse: outside the estate --------------------------------------
+  - id: out-of-scope-actor
+    query: "Who is the best actor in India?"
+    kind: out_of_scope
+    must_refuse: true
+    # NOT ["cluster", "node", "APP-"]. The refusal deliberately introduces the
+    # agent and lists what it can do, which names clusters and an example
+    # application code - forbidding those tested the help text rather than the
+    # answer. What must be absent is an actual answer to the question asked.
+    must_not_contain: ["actor is", "best actor"]
+    notes: >
+      Was producing a full investigation with an Investigation row and a report
+      explaining that the estate contains no information about actors. Should
+      never reach the model at all.
+
+  - id: out-of-scope-weather
+    query: "What is the weather in Chennai tomorrow?"
+    kind: out_of_scope
+    must_refuse: true
+    must_not_contain: ["degrees", "forecast for chennai", "rain"]
+    notes: "Plausible-sounding and entirely outside the corpus."
+
+  # --- must refuse: inside the domain, outside the evidence -----------------
+  - id: unknown-application
+    query: "Find hosting for APP-DOESNOTEXIST."
+    kind: hosting
+    must_refuse: true
+    must_not_contain: ["Eligible", "recommended"]
+    notes: >
+      The hardest class. Estate-shaped, correctly routed, and the honest answer
+      is that the application is not in the CMDB. A model that invents a
+      plausible cluster here passes every naive relevance check.
+
+  - id: unknown-cluster-rejection
+    query: "Why was zzz-p999 rejected for APP-ANALYTICS?"
+    kind: question
+    must_refuse: true
+    must_not_contain: ["RULE-"]
+    notes: >
+      No such cluster. _rejection_rule_evidence declines and retrieval proceeds
+      normally, so the answer must not cite a rule verdict it never computed.
+
+  - id: unanswerable-detail
+    query: "What is the firmware version on cmh-p212-NODE-04?"
+    kind: question
+    must_refuse: true
+    must_not_contain: ["firmware version is", "running version"]
+    notes: >
+      The CMDB has no firmware column. A real host, a real-sounding question,
+      and no data - exactly where a fluent model invents a version string.
+
+  - id: future-speculation
+    query: "Will cmh-p212 run out of capacity next year?"
+    kind: forecast
+    must_refuse: false
+    must_not_contain: ["certainly", "guaranteed", "will definitely"]
+    notes: >
+      Answerable - there is a forecasting engine - but only with the hedging the
+      engine's own confidence interval implies. Certainty is the failure here,
+      not the answer.

@@ -16,7 +16,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.api import auth, routes_cmdb, routes_forecast, routes_hosting, routes_investigations, routes_recommendations, routes_rightsizing, routes_system
+from app.api import auth, routes_admin, routes_cmdb, routes_forecast, routes_hosting, routes_investigations, routes_recommendations, routes_rightsizing, routes_system
 from app.api.auth import get_current_employee
 from app.api.errors import register_exception_handlers
 from app.config import get_settings
@@ -100,3 +100,8 @@ app.include_router(routes_rightsizing.router, dependencies=_auth_dep)
 app.include_router(routes_forecast.router, dependencies=_auth_dep)
 app.include_router(routes_investigations.router, dependencies=_auth_dep)
 app.include_router(routes_recommendations.router, dependencies=_auth_dep)
+# Admin routes carry their own require_admin dependency per route rather than
+# relying on _auth_dep here - _auth_dep proves who you are, not what you may
+# change, and a route added to this router later must not inherit merely
+# being authenticated as sufficient.
+app.include_router(routes_admin.router)

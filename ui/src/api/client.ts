@@ -1,3 +1,4 @@
+import type { ModelProvider, ModelRole } from "../types";
 import type {
   CmdbApplication,
   InfrastructureCluster,
@@ -61,6 +62,26 @@ export const api = {
     setSession(result);
     return result;
   },
+
+  // ---- admin: model roles ------------------------------------------------
+  // 403 rather than a hidden route when the caller is not an administrator -
+  // the API decides, the screen only reports what it was told.
+  getModelRoles: () => request<{ roles: ModelRole[]; evaluation_note: string }>("/admin/model-roles"),
+
+  /** refresh=true re-asks every provider instead of using the 10-minute cache.
+   *  Worth offering explicitly: a model retired minutes ago is the case where
+   *  the cached list is exactly wrong. */
+  getModelProviders: (refresh = false) =>
+    request<{ providers: ModelProvider[] }>(`/admin/model-providers${refresh ? "?refresh=true" : ""}`),
+
+  setModelRole: (role: string, provider: string, model: string) =>
+    request<{ role: string; provider: string; model: string; unverified: boolean }>(
+      `/admin/model-roles/${role}`,
+      { method: "PUT", body: JSON.stringify({ provider, model }) },
+    ),
+
+  clearModelRole: (role: string) =>
+    request<{ role: string; removed: boolean }>(`/admin/model-roles/${role}`, { method: "DELETE" }),
 
   getApplications: (environment?: string) =>
     request<CmdbApplication[]>(`/cmdb/applications${environment ? `?environment=${environment}` : ""}`),

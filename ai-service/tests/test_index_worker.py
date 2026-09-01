@@ -213,8 +213,12 @@ class TestResumability:
         assert second["documents_indexed"] > 0
         assert second["documents_indexed"] < first["documents_indexed"] + second["documents_indexed"]
 
-        # And a third finds nothing left.
-        assert pipeline.execute("refresh")["documents_indexed"] == 0
+        # And a third finds nothing left from the database. The four standards
+        # are rewritten on every run by design - they have no watermark, and
+        # making them rebuild-only meant they were never indexed at all.
+        third = pipeline.execute("refresh")
+        cmdb = {k: v for k, v in third["by_source"].items() if k != "standard"}
+        assert all(v == 0 for v in cmdb.values()), cmdb
 
     def test_a_cursor_never_advances_past_an_unwritten_document(self, clean, monkeypatch):
         """The ordering guarantee, tested by breaking the write.

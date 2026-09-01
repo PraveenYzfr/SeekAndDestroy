@@ -5,7 +5,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends
 
 from app.agents.chains import summarize_tradeoffs
-from app.agents.llm_factory import get_chat_model
+from app.agents.llm_factory import get_chat_model_for_role
 from app.api import narration
 from app.api.auth import get_current_employee, require_matching_employee_id
 from app.api.errors import ProblemDetailsError
@@ -56,7 +56,7 @@ def _tradeoffs(title: str, candidates: list, payload) -> dict | None:
         return None
     return narration.safely(
         "summarize_tradeoffs",
-        lambda: summarize_tradeoffs(get_chat_model(), title, eligible),
+        lambda: summarize_tradeoffs(get_chat_model_for_role("summarization"), title, eligible),
     )
 
 

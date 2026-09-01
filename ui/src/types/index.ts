@@ -329,3 +329,27 @@ export interface RunInvestigationResult {
     human_action_required: string;
   };
 }
+
+/** One model role and the model currently serving it.
+ *  `source` is "config" (from the deployed settings) or "override" (chosen on
+ *  the admin screen). The distinction is what the Reset control acts on. */
+export interface ModelRole {
+  name: string;
+  title: string;
+  description: string;
+  chains: string[];
+  provider: string;
+  model: string;
+  source: "config" | "override";
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+/** What a provider will serve right now. `available: false` carries the reason
+ *  rather than showing an empty dropdown the reader cannot explain. */
+export interface ModelProvider {
+  provider: string;
+  available: boolean;
+  models: string[];
+  error: string | null;
+}

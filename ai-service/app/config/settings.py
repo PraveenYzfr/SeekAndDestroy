@@ -154,6 +154,36 @@ class LlmSettings(_Base):
     # value, since it costs nothing and calls nothing external.
     daily_call_budget: int = 0
 
+    # --- tiers -------------------------------------------------------------
+    # Roles map to tiers (app/agents/tiers.py); tiers map to the models below.
+    # Blank means "use provider/model above", so an estate that has never
+    # touched a tier behaves exactly as it did before tiers existed.
+    #
+    # The point of the slot is bulk movement: SAD_LLM__CHEAP_PROVIDER=groq moves
+    # every cheap role at once, and back again, without editing each one and
+    # remembering which were changed.
+    cheap_provider: str = ""
+    cheap_model: str = ""
+    costly_provider: str = ""
+    costly_model: str = ""
+
+    #: Move individual roles between tiers without a code change:
+    #: "narration=costly,grounded_qa=cheap". Generalises AutoCoder's
+    #: AUTOCODER_CODING_TIER to every role.
+    role_tiers: str = ""
+
+    #: Escape hatch. One provider for everything, ignoring tiers and per-role
+    #: overrides alike. For an incident - a provider is down and the estate has
+    #: to keep answering - not for configuration. It outranks the admin screen
+    #: deliberately, so recovery does not require finding who set what.
+    force_single: str = ""
+
+    @property
+    def role_tier_map(self) -> dict[str, str]:
+        from app.agents.tiers import parse_role_tiers
+
+        return parse_role_tiers(self.role_tiers)
+
     @property
     def fallback_provider_list(self) -> list[str]:
         return [p.strip() for p in self.fallback_providers.split(",") if p.strip()]

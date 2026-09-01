@@ -11,6 +11,7 @@ import ApplicationPlacement from "@/pages/ApplicationPlacement";
 import CapacityForecast from "@/pages/CapacityForecast";
 import InvestigationDetail from "@/pages/InvestigationDetail";
 import RecommendationApproval from "@/pages/RecommendationApproval";
+import ModelSettings from "@/pages/ModelSettings";
 
 const NAV = [
   { to: "/", label: "Chat", end: true },
@@ -22,6 +23,10 @@ const NAV = [
   { to: "/forecast", label: "Capacity Forecast" },
   { to: "/investigations", label: "Investigation Detail" },
   { to: "/approvals", label: "Recommendation Approval" },
+  // Administrators only. Hidden rather than disabled: a link that 403s is
+  // worse than no link. The server enforces it regardless - require_admin
+  // re-reads IsAdmin per request, so hiding this is a courtesy, not the gate.
+  { to: "/model-settings", label: "Model Settings", adminOnly: true },
 ];
 
 export default function App() {
@@ -41,7 +46,7 @@ export default function App() {
       <aside className="sidebar">
         <h1>SeekAndDestroy</h1>
         <nav>
-          {NAV.map((item) => (
+          {NAV.filter((item) => !item.adminOnly || identity.is_admin).map((item) => (
             <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => (isActive ? "active" : "")}>
               {item.label}
             </NavLink>
@@ -67,6 +72,7 @@ export default function App() {
           <Route path="/forecast" element={<CapacityForecast />} />
           <Route path="/investigations" element={<InvestigationDetail />} />
           <Route path="/approvals" element={<RecommendationApproval />} />
+          <Route path="/model-settings" element={<ModelSettings />} />
         </Routes>
       </main>
     </div>

@@ -27,7 +27,14 @@ from app.config import get_settings
 logger = structlog.get_logger(__name__)
 
 
-def build_chat_model_for_provider(provider: str) -> BaseChatModel:
+def build_chat_model_for_provider(provider: str, model_override: str | None = None) -> BaseChatModel:
+    """Build a client for ``provider``.
+
+    ``model_override`` names a specific model, for per-role selection. Without
+    it the configured SAD_LLM__MODEL is used, which is the behaviour every
+    existing caller gets - the parameter is additive, so a role with no override
+    resolves to exactly what this function returned before roles existed.
+    """
     settings = get_settings().llm
     # What metrics call this. Defaults to the provider name; SAD_LLM__PROVIDER_LABEL
     # distinguishes the OpenAI-compatible endpoints that all share provider="openai".
@@ -37,7 +44,7 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
     if provider == "openai":
         return HttpChatModel(
             base_url=settings.base_url or "https://api.openai.com/v1",
-            model=settings.model, api_key=settings.api_key,
+            model=model_override or settings.model, api_key=settings.api_key,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds, provider_name=label,
         )
@@ -48,7 +55,7 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             f"{settings.azure_endpoint.rstrip('/')}/openai/deployments/{settings.azure_deployment}"
         )
         return HttpChatModel(
-            base_url=base_url, model=settings.model, api_key=settings.api_key,
+            base_url=base_url, model=model_override or settings.model, api_key=settings.api_key,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds,
             extra_headers={"api-key": settings.api_key} if settings.api_key else {}, provider_name=label,
@@ -62,7 +69,7 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             # default, which names the mock. Pointing the Gemini endpoint at
             # "seek-and-destroy-mock" would 404 in a way that reads like an
             # auth problem.
-            model=settings.model if settings.model != "seek-and-destroy-mock" else GEMINI_DEFAULT_MODEL,
+            model=model_override or (settings.model if settings.model != "seek-and-destroy-mock" else GEMINI_DEFAULT_MODEL),
             base_url=settings.base_url or GEMINI_DEFAULT_BASE_URL,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds, provider_name=label,
@@ -84,14 +91,14 @@ def build_chat_model_for_provider(provider: str) -> BaseChatModel:
             base_url=settings.base_url or "https://api.deepseek.com/v1",
             # Verified against GET /models, not assumed - "deepseek-chat" was a
             # plausible-looking guess that this account does not serve at all.
-            model=settings.model if settings.model != "seek-and-destroy-mock" else "deepseek-v4-flash",
+            model=model_override or (settings.model if settings.model != "seek-and-destroy-mock" else "deepseek-v4-flash"),
             api_key=settings.api_key,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds, provider_name=label,
         )
     if provider == "ollama":
         return HttpChatModel(
-            base_url=settings.ollama_base_url.rstrip("/") + "/v1", model=settings.model,
+            base_url=settings.ollama_base_url.rstrip("/") + "/v1", model=model_override or settings.model,
             api_key="ollama", temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds, provider_name=label,
         )
@@ -182,3 +189,111 @@ def get_chat_model() -> BaseChatModel:
 
 def reset_chat_model_cache() -> None:
     get_chat_model.cache_clear()
+
+
+# =============================================================================
+# Per-role model selection
+# =============================================================================
+
+
+def resolve_role(role_name: str, overrides: dict | None = None) -> dict:
+    """Which provider and model a role runs on, and which layer decided.
+
+    Walks the four layers in app/agents/tiers.py, narrowest first: force-single,
+    then the per-role override, then the tier slot, then base config. The layer
+    that answered is returned as ``source`` - "which model" without "why" leaves
+    an operator unable to tell an override from a default that happens to match.
+
+    ``overrides`` lets several roles resolve against one snapshot of the table.
+    Querying per role could straddle an edit and give one investigation two
+    different configurations.
+    """
+    from app.agents import tiers
+    from app.repositories import llm_role_repository
+
+    settings = get_settings().llm
+    tier = tiers.tier_for(role_name, settings.role_tier_map)
+
+    # 1. Escape hatch. Outranks the admin screen on purpose: recovering from a
+    #    provider outage must not require discovering who overrode what.
+    if settings.force_single:
+        return tiers.Resolution(
+            role=role_name, tier=tier, provider=settings.force_single,
+            model=settings.model, source="force_single",
+        ).as_dict()
+
+    # 2. Per-role override, from the admin screen.
+    if overrides is None:
+        try:
+            overrides = llm_role_repository.as_map()
+        except Exception as exc:  # noqa: BLE001
+            # The overrides table being unreachable must not take narration
+            # offline. The tier or config answer is still a correct one.
+            logger.warning("llm_factory.role_overrides_unavailable", error=str(exc))
+            overrides = {}
+    row = overrides.get(role_name)
+    if row:
+        return tiers.Resolution(
+            role=role_name, tier=tier, provider=row["Provider"], model=row["Model"],
+            source="override", updated_by=row.get("UpdatedBy"), updated_at=row.get("UpdatedAt"),
+        ).as_dict()
+
+    # 3. Tier slot. Both halves must be set - a provider with no model would
+    #    silently pair a new provider with the previous provider's model name.
+    slot_provider = settings.cheap_provider if tier == tiers.CHEAP else settings.costly_provider
+    slot_model = settings.cheap_model if tier == tiers.CHEAP else settings.costly_model
+    if slot_provider and slot_model:
+        return tiers.Resolution(
+            role=role_name, tier=tier, provider=slot_provider, model=slot_model, source="tier",
+        ).as_dict()
+
+    # 4. Base configuration.
+    return tiers.Resolution(
+        role=role_name, tier=tier, provider=settings.provider, model=settings.model, source="config",
+    ).as_dict()
+
+
+def resolve_all_roles() -> list[dict]:
+    """Every role's effective model, from one snapshot."""
+    from app.agents.roles import ROLES
+    from app.repositories import llm_role_repository
+
+    try:
+        overrides = llm_role_repository.as_map()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("llm_factory.role_overrides_unavailable", error=str(exc))
+        overrides = {}
+    return [resolve_role(role.name, overrides) for role in ROLES]
+
+
+@lru_cache(maxsize=16)
+def _model_for(provider: str, model: str) -> BaseChatModel:
+    """Cached per (provider, model) rather than per role.
+
+    Two roles pointed at the same model share one client, which is what the
+    single-model default does today - so turning roles on costs nothing until
+    somebody actually differentiates them. Bounded at 16 because the cache key
+    is operator-controlled and an unbounded cache keyed on user input is a slow
+    leak.
+    """
+    return build_chat_model_for_provider(provider, model_override=model)
+
+
+def get_chat_model_for_role(role_name: str) -> BaseChatModel:
+    """The model configured for ``role_name``.
+
+    Falls back to the process-wide model whenever the role has no override, so
+    an unconfigured platform behaves exactly as it did before roles existed.
+    """
+    resolved = resolve_role(role_name)
+    if resolved["source"] == "config":
+        # The configured default keeps the fallback chain from
+        # SAD_LLM__FALLBACK_PROVIDERS. An overridden role deliberately does not:
+        # the operator named one model, and silently answering from a different
+        # provider would make the audit log disagree with the screen.
+        return get_chat_model()
+    return _model_for(resolved["provider"], resolved["model"])
+
+
+def reset_role_model_cache() -> None:
+    _model_for.cache_clear()

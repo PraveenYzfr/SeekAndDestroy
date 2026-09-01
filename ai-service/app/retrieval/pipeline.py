@@ -355,13 +355,27 @@ def execute(mode: str, on_batch=None, *, should_stop=None) -> dict:
         # documents that no watermark claims to have indexed.
         store.clear()
         index_watermark_repository.reset()
-        standards = standards_batch()
-        store.upsert(standards.documents)
-        written += len(standards.documents)
-        batches += 1
-        by_source[standards.source] = by_source.get(standards.source, 0) + len(standards.documents)
-        if on_batch:
-            on_batch(standards.source, written, batches)
+
+    # Standards on EVERY run, not only on a rebuild.
+    #
+    # They were rebuild-only, reasoning that they live in Python, change only
+    # when the code changes, and have no watermark to advance. That was wrong in
+    # the way that matters: a refresh is how the collection actually gets
+    # filled, so "no watermark" turned into "never indexed", and the live
+    # collection held 0 of the 4 policy documents. Every grounded question about
+    # why a policy exists was answered from node documents instead.
+    #
+    # Re-writing four documents on every run costs four embeddings and is
+    # idempotent - the document ids are stable, so this replaces rather than
+    # duplicates. That is a much smaller price than a policy corpus that is
+    # silently absent.
+    standards = standards_batch()
+    store.upsert(standards.documents)
+    written += len(standards.documents)
+    batches += 1
+    by_source[standards.source] = by_source.get(standards.source, 0) + len(standards.documents)
+    if on_batch:
+        on_batch(standards.source, written, batches)
 
     for batch in iter_batches():
         if batch.documents:

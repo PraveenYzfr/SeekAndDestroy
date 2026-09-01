@@ -17,6 +17,9 @@ const IDENTITY_KEY = "sad.identity";
 export interface Identity {
   employee_id: number;
   employee_number: string;
+  /** Display hint only - hides an administrator link in the nav. The API
+   *  enforces access independently on every admin request. */
+  is_admin: boolean;
   display_name: string;
 }
 
@@ -48,6 +51,7 @@ export function setSession(response: LoginResponse): void {
   const identity: Identity = {
     employee_id: response.employee_id,
     employee_number: response.employee_number,
+    is_admin: Boolean((response as { is_admin?: boolean }).is_admin),
     display_name: response.display_name,
   };
   sessionStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));

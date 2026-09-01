@@ -24,6 +24,11 @@ class Employee(_Entity):
     DisplayName: str
     Email: str
     IsActive: bool
+    #: Grants access to the model-configuration screen. Read from the database
+    #: on every request rather than carried in the token: a JWT claim would keep
+    #: working until the token expired after admin was revoked, and in oidc mode
+    #: this platform does not control the claims at all.
+    IsAdmin: bool = False
     # Deliberately excluded: PasswordHash. It exists on sad.Employee but is
     # never loaded into this model, so it cannot leak through any endpoint
     # that returns an Employee. The one code path that needs it reads the

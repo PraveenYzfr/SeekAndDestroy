@@ -60,8 +60,37 @@ def require_matching_employee_id(current: AuthenticatedEmployee, claimed: Option
     return current.employee_id
 
 
+def require_admin(
+    current: AuthenticatedEmployee = Depends(get_current_employee),
+) -> AuthenticatedEmployee:
+    """Admin-only. Re-reads IsAdmin from the database on every request.
+
+    Deliberately not a token claim. A claim is a snapshot taken at login: revoke
+    someone's admin and their existing token keeps working until it expires, and
+    under SAD_AUTH__MODE=oidc the claims come from an identity provider that
+    knows nothing about this flag. One indexed primary-key lookup per admin
+    request is a small price for revocation that takes effect immediately.
+
+    403 rather than 404: the caller is authenticated and the route exists, so
+    hiding it would only make a permission problem look like a broken link.
+    """
+    record = employee_repository.get_by_id(current.employee_id)
+    if record is None or not record.IsAdmin:
+        raise ProblemDetailsError(
+            403,
+            "Administrator access required",
+            "This action changes platform configuration and is restricted to administrators.",
+        )
+    return current
+
+
 def _token_response(employee, ttl_minutes: int) -> dict:
     return {
+        # A display hint so the UI can hide an administrator-only link. NOT the
+        # authorisation decision: require_admin re-reads IsAdmin from the
+        # database on every request, so forging this changes what a menu looks
+        # like and nothing else.
+        "is_admin": bool(getattr(employee, "IsAdmin", False)),
         "access_token": create_local_token(
             employee_id=employee.EmployeeId, employee_number=employee.EmployeeNumber,
             display_name=employee.DisplayName, email=employee.Email,

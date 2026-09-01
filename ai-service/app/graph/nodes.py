@@ -27,7 +27,7 @@ from app.agents.chains import (
     generate_final_report as generate_final_report_chain,
     parse_investigation_plan,
 )
-from app.agents.llm_factory import get_chat_model
+from app.agents.llm_factory import get_chat_model, get_chat_model_for_role
 from app.graph import scope
 from app.agents.mock_llm import MockChatModel
 from app.forecasting.engine import forecast_cluster
@@ -237,7 +237,7 @@ def parse_user_request(state: InfrastructureRecommendationState) -> dict:
     # serializer only round-trips plain str/int/etc without a deprecation
     # warning, so state never carries the enum instance itself.
     investigation_type = str(classify_investigation_type(resolved))
-    llm = get_chat_model()
+    llm = get_chat_model_for_role("planning")
     try:
         plan = parse_investigation_plan(llm, resolved)
         parsed_intent = plan.model_dump()
@@ -352,7 +352,7 @@ def _extract_capacity_requirement_via_llm(query: str):
     engages the LLM chain when a real provider (openai/azure-openai/ollama)
     is configured.
     """
-    llm = get_chat_model()
+    llm = get_chat_model_for_role("extraction")
     if isinstance(llm, MockChatModel):
         return None
     try:
@@ -728,10 +728,15 @@ def retrieve_related_context(state: InfrastructureRecommendationState) -> dict:
 
 def generate_recommendation_explanations(state: InfrastructureRecommendationState) -> dict:
     itype = state["investigation_type"]
-    llm = get_chat_model()
+    # Two roles in one node: the HOSTING/CAPACITY and RIGHT_SIZING branches
+    # narrate a decision Python already made, while the QUESTION branch answers
+    # from retrieved evidence. Those reward different models - one readable
+    # prose, the other a willingness to say "I do not know" - so resolving once
+    # at the top would collapse a real distinction the admin screen exposes.
     app_code = (state.get("application_requirements") or {}).get("application_code")
 
     if itype in (InvestigationType.HOSTING, InvestigationType.CAPACITY):
+        llm = get_chat_model_for_role("narration")
         top = [c for c in state.get("candidate_scores", []) if c.get("eligibility_status") == "Eligible"][:3]
         explanations = []
         for c in top:
@@ -745,6 +750,7 @@ def generate_recommendation_explanations(state: InfrastructureRecommendationStat
 
     if itype == InvestigationType.RIGHT_SIZING:
         results = state.get("capacity_calculations", {}).get("right_sizing", [])
+        llm = get_chat_model_for_role("narration")
         flagged = [r for r in results if r["classification"] != "Healthy"][:5]
         explanations = []
         for r in flagged:
@@ -759,7 +765,9 @@ def generate_recommendation_explanations(state: InfrastructureRecommendationStat
 
     if itype == InvestigationType.QUESTION:
         try:
-            answer = answer_grounded_question(llm, state["user_query"], state.get("retrieved_context", []))
+            answer = answer_grounded_question(
+                get_chat_model_for_role("grounded_qa"), state["user_query"], state.get("retrieved_context", [])
+            )
             return {"recommendation_explanations": [answer.model_dump()]}
         except Exception as exc:  # noqa: BLE001
             logger.warning("graph.grounded_qa_failed", error=str(exc))
@@ -920,7 +928,7 @@ def generate_final_report(state: InfrastructureRecommendationState) -> dict:
         }
         return {"final_report": report}
 
-    llm = get_chat_model()
+    llm = get_chat_model_for_role("reporting")
     evidence = {
         "top_candidates": state.get("candidate_scores", [])[:5],
         "explanations": state.get("recommendation_explanations", []),

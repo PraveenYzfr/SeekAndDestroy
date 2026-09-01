@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from app.utils.json_utils import to_jsonable
 
 from app.agents.chains import explain_application_right_sizing
-from app.agents.llm_factory import get_chat_model
+from app.agents.llm_factory import get_chat_model_for_role
 from app.api import narration
 from app.api.errors import ProblemDetailsError
 from app.api.schemas import ApplicationRightSizingRequest, ClusterRightSizingRequest, ConsolidationAnalysisRequest
@@ -49,7 +49,7 @@ def right_size_applications(payload: ApplicationRightSizingRequest):
         e for e in (
             narration.safely(
                 "explain_application_right_sizing",
-                lambda r=r: explain_application_right_sizing(get_chat_model(), r),
+                lambda r=r: explain_application_right_sizing(get_chat_model_for_role("narration"), r),
             )
             for r in flagged
         ) if e is not None

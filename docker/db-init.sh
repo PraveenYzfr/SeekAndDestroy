@@ -96,6 +96,10 @@ GRANT INSERT, UPDATE ON sad.IndexWatermark              TO [$APP_LOGIN];
 -- this same login, so INSERT and UPDATE cover both. No DELETE: run
 -- history is an audit trail of what was indexed and what it cost.
 GRANT INSERT, UPDATE ON sad.IndexRun                    TO [$APP_LOGIN];
+-- Per-role model selection (migration 006). The admin screen inserts a
+-- row the first time a role is overridden and updates it after; Reset
+-- deletes it, so DELETE is required here and nowhere else in this schema.
+GRANT INSERT, UPDATE, DELETE ON sad.LlmRoleOverride     TO [$APP_LOGIN];
   -- auth.login performs an opportunistic rehash when scrypt parameters change,
   -- which UPDATEs these two columns inside the login request. Without this the
   -- first login after a policy change fails on a *correct* password, and the

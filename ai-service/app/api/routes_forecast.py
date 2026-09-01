@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from app.utils.json_utils import to_jsonable
 
 from app.agents.chains import explain_forecast
-from app.agents.llm_factory import get_chat_model
+from app.agents.llm_factory import get_chat_model_for_role
 from app.api import narration
 from app.api.errors import ProblemDetailsError
 from app.api.schemas import ForecastRequest
@@ -28,7 +28,7 @@ def forecast(payload: ForecastRequest):
     resource_name, resource = narration.binding_resource(result)
     explanation = narration.safely(
         "explain_forecast",
-        lambda: explain_forecast(get_chat_model(), cluster.ClusterCode, resource),
+        lambda: explain_forecast(get_chat_model_for_role("narration"), cluster.ClusterCode, resource),
     )
     return to_jsonable({
         **result.model_dump(),
