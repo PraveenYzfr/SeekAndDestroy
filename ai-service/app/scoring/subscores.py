@@ -256,3 +256,59 @@ def operational_risk_score(
         risk += Decimal("15")
 
     return round2(clamp_d(risk))
+
+
+#: Pseudo-changes added to the denominator of the failure rate.
+#:
+#: A raw rate treats one failed change out of one as a 100% failure rate and
+#: ranks that cluster below one with four failures out of forty (10%). The first
+#: is one bad afternoon; the second is a pattern. Dividing by (recent + 5)
+#: shrinks thin evidence toward zero rather than toward certainty:
+#:
+#:      1 of 1   ->  1/6  = 0.17     one bad change, treated as weak evidence
+#:      4 of 5   ->  4/10 = 0.40     small sample, mostly bad - ranked badly
+#:      4 of 40  ->  4/45 = 0.09     a real rate, on real volume
+#:
+#: The alternative - shrinking toward the estate mean - would make a cluster with
+#: no change history score like an average cluster rather than an unproven one,
+#: and "we have never changed it" is not evidence of stability.
+_CHANGE_FAILURE_PRIOR = Decimal("5")
+
+#: Score lost per change scheduled in the eligibility window. Capped below so a
+#: cluster with fifteen planned changes and one with fifty are both simply
+#: "heavily churned" - past a point the difference stops informing the decision.
+_UPCOMING_CHANGE_PENALTY = Decimal("12")
+_MAX_UPCOMING_PENALTY = Decimal("60")
+
+
+def change_risk_subscore(risk: dict | None) -> Decimal:
+    """How safe this cluster looks from its change record. 100 is safest.
+
+    Two independent signals, because they fail differently:
+
+      upcoming changes   churn the workload would land in the middle of. A
+                         forward-looking fact, known with certainty.
+      failure rate       how often changes here go wrong. Backward-looking and
+                         statistical, so it is smoothed - see the prior above.
+
+    A cluster with no change record at all scores 100. That is deliberate and it
+    is the weakest claim here: it means "nothing known against it", not "proven
+    stable". Scoring it lower would penalise every cluster the change process
+    has not touched, which is most of a healthy estate.
+    """
+    if not risk:
+        return Decimal("100.00")
+
+    upcoming = Decimal(str(risk.get("upcoming_changes") or 0))
+    recent = Decimal(str(risk.get("recent_changes") or 0))
+    failures = Decimal(str(risk.get("recent_failures") or 0))
+
+    churn_penalty = min(upcoming * _UPCOMING_CHANGE_PENALTY, _MAX_UPCOMING_PENALTY)
+
+    # Recomputed here rather than trusting a failure_rate supplied by the query:
+    # the smoothing is a scoring decision, and a raw rate arriving from the
+    # database would silently bypass it.
+    smoothed_rate = failures / (recent + _CHANGE_FAILURE_PRIOR)
+    failure_penalty = smoothed_rate * Decimal("100")
+
+    return round2(clamp_d(Decimal("100") - churn_penalty - failure_penalty))

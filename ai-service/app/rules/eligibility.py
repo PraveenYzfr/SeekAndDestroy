@@ -53,6 +53,12 @@ class EligibilityContext:
     cluster: InfrastructureCluster
     projected: ProjectedUtilization
     active_node_count: int
+    #: Change record for this cluster, from itsm_repository.change_risk_for_clusters:
+    #: upcoming_changes, recent_changes, recent_failures, failure_rate, freeze_until.
+    #: Defaulted to None so every existing construction of this context keeps
+    #: working and RULE-011 passes when the data is simply absent - an estate
+    #: with no change management must not become entirely ineligible.
+    change_risk: dict | None = None
 
 
 def rule_001_environment(ctx: EligibilityContext) -> RuleResult:
@@ -267,6 +273,35 @@ def rule_010_resiliency(ctx: EligibilityContext) -> RuleResult:
     )
 
 
+def rule_011_change_freeze(ctx: EligibilityContext) -> RuleResult:
+    """A cluster under an active change freeze cannot take new work.
+
+    Hard, not weighted. A freeze is a decision somebody made about this cluster
+    for a stated period - a release window, an audit, a migration - and it is not
+    the kind of thing a high capacity score should be able to outvote. That is
+    the same reasoning as RULE-007 lifecycle: some facts disqualify rather than
+    discount.
+
+    Distinct from the change-risk sub-score, which is soft and reads the same
+    data. Scheduled churn and a poor failure rate make a cluster a worse choice;
+    an active freeze makes it not a choice at all.
+
+    Passes when there is no change record. An estate that does not do change
+    management should not find every cluster ineligible - absence of evidence is
+    not a freeze.
+    """
+    freeze_until = (ctx.change_risk or {}).get("freeze_until")
+    if not freeze_until:
+        return RuleResult(
+            "RULE-011", "Change freeze", True, "No active change freeze on this cluster.", {}
+        )
+    return RuleResult(
+        "RULE-011", "Change freeze", False,
+        f"Cluster is under a change freeze until {freeze_until}.",
+        {"freeze_until": str(freeze_until)},
+    )
+
+
 def evaluate_all(ctx: EligibilityContext, snapshot) -> list[RuleResult]:
     return [
         rule_001_environment(ctx),
@@ -279,6 +314,7 @@ def evaluate_all(ctx: EligibilityContext, snapshot) -> list[RuleResult]:
         rule_008_dependency(ctx),
         rule_009_headroom(ctx),
         rule_010_resiliency(ctx),
+        rule_011_change_freeze(ctx),
     ]
 
 

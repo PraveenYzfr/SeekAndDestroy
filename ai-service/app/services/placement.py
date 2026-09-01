@@ -34,6 +34,10 @@ from app.scoring.engine import compute_overall_score, rank_candidates
 from app.scoring.subscores import round2
 from app.services import capacity
 
+import structlog
+
+logger = structlog.get_logger(__name__)
+
 
 def resolve_dependency_checks(application_id: int) -> list[DependencyLocalityCheck]:
     outbound = dependency_repository.get_outbound(application_id)
@@ -121,8 +125,19 @@ def estimate_monthly_cost(cluster: InfrastructureCluster, requirement: HostingRe
 
 
 def build_eligibility_context(
-    requirement: HostingRequirement, cluster: InfrastructureCluster
+    requirement: HostingRequirement,
+    cluster: InfrastructureCluster,
+    change_risk: dict | None = None,
 ) -> tuple[eligibility.EligibilityContext, ClusterCapacitySnapshot]:
+    """``change_risk`` is this cluster's row from
+    itsm_repository.change_risk_for_clusters. Passed in rather than fetched here
+    because a placement run scores up to 256 clusters and that query is designed
+    to answer for all of them at once - fetching per cluster would turn one query
+    into 256 on the hot path.
+
+    Optional, and None is a valid answer: RULE-011 passes without it, so a caller
+    that has no change data still gets a complete evaluation.
+    """
     snapshot = capacity.compute_cluster_capacity(cluster)
     projected = capacity.compute_projected_utilization(
         snapshot, cluster,
@@ -131,15 +146,18 @@ def build_eligibility_context(
     )
     active_nodes = node_repository.count_active_by_cluster(cluster.ClusterId)
     ctx = eligibility.EligibilityContext(
-        requirement=requirement, cluster=cluster, projected=projected, active_node_count=active_nodes
+        requirement=requirement, cluster=cluster, projected=projected,
+        active_node_count=active_nodes, change_risk=change_risk,
     )
     return ctx, snapshot
 
 
 def evaluate_candidate(
-    requirement: HostingRequirement, cluster: InfrastructureCluster
+    requirement: HostingRequirement,
+    cluster: InfrastructureCluster,
+    change_risk: dict | None = None,
 ) -> tuple[CandidateScore, eligibility.EligibilityContext]:
-    ctx, snapshot = build_eligibility_context(requirement, cluster)
+    ctx, snapshot = build_eligibility_context(requirement, cluster, change_risk)
     rule_results = eligibility.evaluate_all(ctx, snapshot)
     eligible = eligibility.is_eligible(rule_results)
     cost = estimate_monthly_cost(cluster, requirement)
@@ -187,6 +205,12 @@ def score_candidate(
     incidents = incident_repository.get_recent_for_cluster(cluster.ClusterId, 90)
     hist_score = subscores.historical_performance_subscore(incidents)
 
+    # Reads ctx.change_risk rather than querying: the caller fetched it for
+    # every candidate in one query. A cluster with no change record scores 100,
+    # meaning "nothing known against it" - see the subscore's own note on why
+    # that is the weakest claim here.
+    change_score = subscores.change_risk_subscore(ctx.change_risk)
+
     series = utilization_repository.get_cluster_series(cluster.ClusterId, 30)
     cpu_series = [float(s.CpuUsedPercent) for s in series]
     mem_series = [float(s.MemoryUsedPercent) for s in series]
@@ -202,6 +226,7 @@ def score_candidate(
     sub = SubScores(
         capacity=cap_score, compatibility=compat_score, resiliency=resil_score,
         cost=cost_score, dependency=dep_score, historical=hist_score, risk=risk_score,
+        change_risk=change_score,
     )
     candidate.subscores = sub
     candidate.overall_score = compute_overall_score(sub)
@@ -210,6 +235,10 @@ def score_candidate(
         "min_required_nodes": min_nodes,
         "forecast_breach_within_90d": forecast_breach,
         "open_severe_incidents": len(open_severe),
+        # The change figures behind change_risk, so a ranking can be explained
+        # without re-running the query that produced it.
+        "upcoming_changes": (ctx.change_risk or {}).get("upcoming_changes", 0),
+        "recent_change_failures": (ctx.change_risk or {}).get("recent_failures", 0),
     }
     return candidate
 
@@ -224,9 +253,27 @@ def find_and_score_candidates(
     rejected" stays answerable regardless of top_n.
     """
     clusters = discover_candidate_clusters(requirement, exclude_cluster_id=exclude_cluster_id, data_center=data_center)
+
+    # One query for every candidate's change record, before the loop. Fetching
+    # inside evaluate_candidate would issue 256 queries on the hot path to
+    # answer a question designed to be answered once. RULE-011 and the
+    # change-risk sub-score both read from this.
+    #
+    # Best-effort: on an estate without the ITSM tables, or if the query fails,
+    # every cluster simply has no change record - RULE-011 passes and the
+    # sub-score returns 100. Placement must not stop working because change
+    # management data is missing.
+    change_risk: dict[int, dict] = {}
+    try:
+        from app.repositories import itsm_repository
+
+        change_risk = itsm_repository.change_risk_for_clusters([c.ClusterId for c in clusters])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("placement.change_risk_unavailable", error=str(exc))
+
     evaluated: list[tuple[CandidateScore, eligibility.EligibilityContext, InfrastructureCluster]] = []
     for cluster in clusters:
-        candidate, ctx = evaluate_candidate(requirement, cluster)
+        candidate, ctx = evaluate_candidate(requirement, cluster, change_risk.get(cluster.ClusterId))
         evaluated.append((candidate, ctx, cluster))
 
     eligible_triples = [t for t in evaluated if t[0].eligibility_status == "Eligible"]

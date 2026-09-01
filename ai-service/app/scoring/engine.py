@@ -26,6 +26,10 @@ def compute_overall_score(subscores: SubScores) -> Decimal:
         + w["cost"] * subscores.cost
         + w["dependency"] * subscores.dependency
         + w["historical"] * subscores.historical
+        # Not inverted, unlike risk. change_risk is already "higher is safer",
+        # so it reads the same way as capacity and compatibility. risk is the
+        # odd one out and stays inverted.
+        + w["change_risk"] * subscores.change_risk
         + w["risk"] * (Decimal("100") - subscores.risk)
     )
     return round2(total)

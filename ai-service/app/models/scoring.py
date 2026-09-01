@@ -16,6 +16,11 @@ class SubScores(BaseModel):
     dependency: Decimal
     historical: Decimal
     risk: Decimal
+    #: How safe the cluster looks from its change record - upcoming churn and
+    #: smoothed failure rate. Defaulted so every existing construction of this
+    #: model keeps working; a cluster with no change history scores 100, which
+    #: means "nothing known against it", not "proven stable".
+    change_risk: Decimal = Decimal("100")
 
 
 class CandidateScore(BaseModel):

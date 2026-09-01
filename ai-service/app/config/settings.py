@@ -303,8 +303,26 @@ class ScoringSettings(_Base):
     weight_resiliency: float = 0.15
     weight_cost: float = 0.15
     weight_dependency: float = 0.10
-    weight_historical: float = 0.10
+    # 0.10 -> 0.05, halved rather than zeroed. It was briefly set to 0.00 on the
+    # reasoning that 61 incidents across 256 clusters left 240 scoring
+    # identically - true of the old corpus and wrong within the hour. The ITSM
+    # seed carries 10,000 incidents deliberately concentrated on stressed
+    # clusters, 4.2x density between the stressed and quiet bands, which makes
+    # this the richest per-cluster signal in the estate rather than a constant.
+    weight_historical: float = 0.05
     weight_risk: float = 0.05
+    #: Upcoming change churn and demonstrated change failure rate.
+    #:
+    #: 0.05, not 0.10, for two reasons. It is new and unvalidated against any
+    #: golden set, and 0.10 is a lot of decision to hand an untested dimension on
+    #: its first day. And it is not independent of weight_historical: change
+    #: failures in the seed are generated as a function of the same cluster
+    #: stress that drives incidents, so the two corroborate each other rather
+    #: than measuring separate things. Taking historical's full weight would
+    #: have replaced a direct measurement with a correlated proxy.
+    #:
+    #: Move weight here once the golden set shows it earns it, not before.
+    weight_change_risk: float = 0.05
     min_confident_score: float = 55.0
 
     # Node-level weights. Deliberately a smaller set than the cluster weights:
@@ -337,6 +355,7 @@ class ScoringSettings(_Base):
             + self.weight_cost
             + self.weight_dependency
             + self.weight_historical
+            + self.weight_change_risk
             + self.weight_risk
         )
         if abs(total - 1.0) > 1e-9:
@@ -351,6 +370,7 @@ class ScoringSettings(_Base):
             "cost": self.weight_cost,
             "dependency": self.weight_dependency,
             "historical": self.weight_historical,
+            "change_risk": self.weight_change_risk,
             "risk": self.weight_risk,
         }
 
