@@ -567,6 +567,7 @@ def _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
 
     # ---- business services --------------------------------------------------
     app_codes = [a.code for a in applications]
+    service_apps: list[int] = []
     for i in range(1, BUSINESS_SERVICES + 1):
         code = f"BS{i:04d}"
         tier = _weighted(rng, _SERVICE_TIERS)
@@ -576,9 +577,28 @@ def _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
         e.services.append({"ci_id": ci.ci_id, "code": code, "name": f"Business Service {i}",
                            "criticality": tier,
                            "rto": rng.choice([15, 30, 60, 240]), "rpo": rng.choice([0, 5, 15, 60])})
-        for j in range(rng.randint(2, 6)):
-            app = app_codes[(i * 17 + j * 5) % len(app_codes)]
-            e.link(ci.ci_id, app_ci[app], 4)
+        service_apps.append(ci.ci_id)
+
+    # EVERY application belongs to a service, and some belong to two.
+    #
+    # The first version gave each service two to six applications chosen by an
+    # index stride, which left 821 of 1,200 applications in no service at all -
+    # so a service-level question could only see a third of the estate, and
+    # migration 015 could populate BusinessServiceCiId on only 3,222 of 10,000
+    # incidents. In a bank every application belongs to something somebody is
+    # accountable for; an application in no service is the exception worth
+    # noticing, not the norm.
+    #
+    # Round-robin rather than random so the distribution is even and
+    # deterministic. Roughly one application in twelve also joins a second
+    # service, because shared platforms genuinely serve several - and because
+    # that is what makes an incident count once per service, which is a real
+    # property the analytics layer has to handle rather than a bug it should
+    # smooth away.
+    for n, code in enumerate(app_codes):
+        e.link(service_apps[n % len(service_apps)], app_ci[code], 4)
+        if n % 12 == 5:
+            e.link(service_apps[(n + 7) % len(service_apps)], app_ci[code], 4)
 
     # ---- load balancers -----------------------------------------------------
     for i in range(1, LOAD_BALANCERS + 1):
