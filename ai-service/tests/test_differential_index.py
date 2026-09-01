@@ -122,19 +122,66 @@ class TestWatermarkStore:
         assert wm.get("dependency")["LastSeenId"] == 41
 
 
+@pytest.fixture
+def bounded_corpus(monkeypatch):
+    """Run the rebuild-then-refresh tests over a SMALL slice of the estate.
+
+    These assert refresh-after-rebuild SEMANTICS - that a rebuild leaves a
+    watermark per source, that an immediate refresh re-indexes nothing, that a
+    stale watermark picks up only what followed it. None of that needs the whole
+    corpus, and the whole corpus is now 54,555 configuration items, 30,105 VMs and
+    89,831 work notes.
+
+    Five full index_all() passes over that took the suite from minutes to
+    indefinite - it stalled at 23% for long enough that I killed it. A test nobody
+    can afford to run is a test that stops being run, and then the semantics it
+    protects go unchecked for the same reason they would if it had been deleted.
+
+    Two sources, not one: every assertion here is about watermarks being kept
+    SEPARATELY per source, and a single source cannot distinguish "per source"
+    from "one global mark". Two of the cheapest ones - clusters and applications
+    are hundreds of rows rather than tens of thousands - preserve the property
+    while removing the cost.
+    """
+    from app.retrieval import pipeline
+
+    allowed = ("cluster", "application")
+    real_iter = pipeline.iter_batches
+
+    def bounded(*args, **kwargs):
+        for batch in real_iter(*args, **kwargs):
+            if batch.source in allowed:
+                yield batch
+
+    # iter_batches, not SOURCES. Patching the SOURCES tuple looks like it should
+    # work and does nothing: execute() only uses it to seed the per-source tally
+    # dict, and the generators it actually drains are wired separately. My first
+    # attempt at this fixture patched SOURCES, the tests still walked the whole
+    # corpus, and the only symptom was that they were still slow - a fix that
+    # looked applied and was not.
+    monkeypatch.setattr(pipeline, "iter_batches", bounded)
+    monkeypatch.setattr(pipeline, "SOURCES", allowed)
+    return allowed
+
+
 class TestRefreshAfterRebuild:
     """The pairing that matters: a rebuild must leave the watermarks describing
     the corpus it produced, or the first refresh re-embeds everything it just
     embedded - the exact cost this feature exists to avoid."""
 
-    def test_index_all_leaves_a_watermark_for_every_source(self, clean_watermarks):
+    def test_index_all_leaves_a_watermark_for_every_source(self, clean_watermarks, bounded_corpus):
         from app.retrieval.indexer import index_all
 
         assert index_all() > 0
         recorded = {r["Source"] for r in wm.list_all()}
-        assert recorded == set(SOURCES), f"missing: {set(SOURCES) - recorded}"
+        # Equality against the bounded set, not containment: the property is that
+        # a rebuild marks EVERY source it read, so a subset check would pass a
+        # rebuild that quietly skipped one - which is the exact failure this test
+        # exists to catch.
+        assert recorded == set(bounded_corpus), (
+            f"missing: {set(bounded_corpus) - recorded}, extra: {recorded - set(bounded_corpus)}")
 
-    def test_a_refresh_straight_after_a_rebuild_reindexes_no_cmdb_documents(self, clean_watermarks):
+    def test_a_refresh_straight_after_a_rebuild_reindexes_no_cmdb_documents(self, clean_watermarks, bounded_corpus):
         """The headline behaviour: nothing from the database is re-embedded.
 
         The four standards ARE rewritten every run, deliberately. They live in
@@ -152,7 +199,7 @@ class TestRefreshAfterRebuild:
         assert all(v == 0 for v in cmdb.values()), cmdb
         assert by_source.get("standard") == 4, by_source
 
-    def test_a_first_refresh_with_no_watermarks_indexes_the_whole_corpus(self, clean_watermarks):
+    def test_a_first_refresh_with_no_watermarks_indexes_the_whole_corpus(self, clean_watermarks, bounded_corpus):
         """With no watermark a source cannot know what it missed, so it takes
         everything. Returning nothing would look identical to "up to date" and
         leave the index permanently empty."""
@@ -161,14 +208,17 @@ class TestRefreshAfterRebuild:
         result = refresh_index()
         assert result["documents_indexed"] > 0
 
-    def test_refresh_reports_per_source_not_just_a_total(self, clean_watermarks):
+    def test_refresh_reports_per_source_not_just_a_total(self, clean_watermarks, bounded_corpus):
         from app.retrieval.indexer import refresh_index
 
         result = refresh_index()
-        for source in SOURCES:
+        # bounded_corpus, not the module-level SOURCES: the fixture restricts what
+        # actually runs, and asserting against the full tuple would demand a
+        # watermark for sources this test never touched.
+        for source in bounded_corpus:
             assert source in result["by_source"], result["by_source"]
 
-    def test_a_stale_watermark_picks_up_only_what_followed_it(self, clean_watermarks):
+    def test_a_stale_watermark_picks_up_only_what_followed_it(self, clean_watermarks, bounded_corpus):
         """Rewind one source a long way and leave the others current: only that
         source should produce documents. This is what proves the sources really
         are independent rather than sharing one clock."""
@@ -185,5 +235,10 @@ class TestRefreshAfterRebuild:
 
         result = refresh_index()
         assert result["by_source"]["application"] > 0
-        assert result["by_source"]["node"] == 0
-        assert result["by_source"]["hosting"] == 0
+        # Every OTHER source in scope stayed still. Derived from the fixture
+        # rather than named, so this keeps proving independence if the bounded
+        # set changes - naming "node" tied the assertion to a source the test
+        # does not otherwise care about.
+        for source in bounded_corpus:
+            if source != "application":
+                assert result["by_source"][source] == 0, result["by_source"]
