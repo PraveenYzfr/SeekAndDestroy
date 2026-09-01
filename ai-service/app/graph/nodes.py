@@ -49,12 +49,21 @@ from app.repositories import (
     recommendation_repository,
 )
 from app.retrieval.vector_store import get_vector_store
-from app.services import consolidation, node_placement, placement, rightsizing
+from app.services import consolidation, node_placement, placement, refinement, rightsizing
 from app.utils.json_utils import to_jsonable
 
 logger = structlog.get_logger(__name__)
 
-_APP_CODE_RE = re.compile(r"\bAPP-[A-Z0-9]+\b")
+#: Application codes as the CMDB actually writes them. `APP-[A-Z0-9]+` stopped
+#: at the first hyphen, so APP-AML-API0044 was read as APP-AML - a code that
+#: does not exist - and the investigation answered "Application APP-AML not
+#: found in CMDB" for a perfectly valid request. 1,160 of the 1,200
+#: applications in the ITSM corpus carry two or more hyphens, so this hit 97%
+#: of them. It was invisible while the corpus had 40 single-hyphen codes.
+#:
+#: The trailing repeat is deliberate: APP-PAYMENTS-GW0012 must match whole,
+#: not as APP-PAYMENTS with a fragment left behind.
+_APP_CODE_RE = re.compile(r"\bAPP-[A-Z0-9]+(?:-[A-Z0-9]+)*\b")
 #: Cluster codes as they actually appear in the CMDB: `atl-03` and `cmh-p212`.
 #: This used to be `\bCL-[A-Z0-9-]+\b`, which matched 0 of the 256 clusters in
 #: the database - it had never fired once. Two things were quietly broken by
@@ -832,6 +841,16 @@ def build_review_payload(state: InfrastructureRecommendationState | dict) -> dic
         },
         "confidence": state.get("confidence"),
         "message": "Choose one cluster and host, then approve - or reject the shortlist.",
+        # What to offer when the shortlist is not good enough. This is a search:
+        # when the results are usable the engineer picks one and leaves, and
+        # next_steps reports sufficient=True so the UI stays quiet. When they
+        # are not, the useful move is a choice - see more, or ask for less -
+        # rather than an explanation of every rule that failed.
+        "next_steps": refinement.next_steps(
+            state.get("candidate_scores") or [],
+            state.get("requirement") or {},
+            shown=len(top),
+        ),
     }
 
 

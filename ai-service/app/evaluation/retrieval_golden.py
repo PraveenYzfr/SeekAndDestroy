@@ -172,6 +172,43 @@ def build_cases(limit_per_kind: int = 3) -> list[RetrievalCase]:
                 )
             )
 
+    # --- recurrence: a problem and its incidents ----------------------------
+    # EXACT, via sad.Incident.ProblemId. Labelled from the foreign key rather
+    # than by phrase, because the link is a fact and a LIKE is a guess.
+    #
+    # Skipped entirely when nothing is linked. The column existed with 0 of
+    # 10,000 rows populated for a while, and a case built on that would have
+    # scored every mode at zero and read as a retrieval failure rather than as
+    # missing ground truth.
+    rows = fetch_all(
+        f"SELECT TOP (:n) p.ProblemId, p.Number, p.ShortDescription, COUNT(i.IncidentId) AS Cnt "
+        f"FROM {T('Problem')} p JOIN {T('Incident')} i ON i.ProblemId = p.ProblemId "
+        f"GROUP BY p.ProblemId, p.Number, p.ShortDescription "
+        f"HAVING COUNT(i.IncidentId) >= 5 ORDER BY COUNT(i.IncidentId) DESC",
+        {"n": limit_per_kind},
+        max_rows=limit_per_kind,
+    )
+    for row in rows:
+        incidents = fetch_all(
+            f"SELECT IncidentId FROM {T('Incident')} WHERE ProblemId = :pid",
+            {"pid": row["ProblemId"]},
+            max_rows=1000,
+        )
+        relevant = _incident_chunk_ids([r["IncidentId"] for r in incidents])
+        # The problem record itself is part of the answer: "has this happened
+        # before" is answered by the problem AND its incidents co-retrieving.
+        relevant.add(f"problem:{row['ProblemId']}:")
+        cases.append(
+            RetrievalCase(
+                id=f"recurrence-{row['Number']}",
+                query=str(row["ShortDescription"] or row["Number"]),
+                kind="recurrence",
+                relevant=relevant,
+                exact=True,
+                notes=f"{row['Cnt']} incidents share this problem record.",
+            )
+        )
+
     return cases
 
 
