@@ -356,7 +356,7 @@ def _headline(prior: PriorInvestigation, shown: int = 3) -> str:
     lines = [
         f"Previous request in this conversation (investigation #{prior.investigation_id}, "
         f"type {prior.investigation_type}, status {prior.status}): \"{prior.user_query}\".",
-        f"It shortlisted {eligible} eligible and {rejected} rejected clusters.",
+        f"It shortlisted {eligible} recommended and {rejected} not-recommended clusters.",
     ]
     if presented:
         lines.append(
@@ -414,7 +414,7 @@ def recall_summary(prior: PriorInvestigation) -> str:
     eligible = [c for c in prior.candidate_scores if c.get("eligibility_status") == "Eligible"]
     subject = prior.application_code or f"\"{prior.user_query}\""
     head = (
-        f"These are the same {len(eligible)} eligible options from investigation "
+        f"These are the same {len(eligible)} recommended options from investigation "
         f"#{prior.investigation_id} for {subject}."
     )
     if prior.awaiting_review:

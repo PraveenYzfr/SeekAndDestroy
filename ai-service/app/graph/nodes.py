@@ -682,7 +682,7 @@ def _rejection_rule_evidence(state: InfrastructureRecommendationState) -> list[d
         # Nothing failed. Say so in one line rather than listing ten passes.
         docs = [
             {
-                "text": f"{cluster.ClusterCode} is eligible for {app.ApplicationCode}. No rule failed.",
+                "text": f"{cluster.ClusterCode} is recommended for {app.ApplicationCode}. No rule failed.",
                 "score": 1.0,
                 "entity_type": "eligibility_verdict",
             }
@@ -1009,6 +1009,32 @@ def _node_explanation(node: dict) -> str:
     )
 
 
+#: Statuses that represent a decision the reviewer actually made. "Superseded"
+#: is not here on purpose - see _record_decisions.
+_DECIDED_STATUSES = ("Approved", "Rejected")
+
+
+def _record_decisions(state, decided_ids: list[int]) -> None:
+    """Write the audit row for each recommendation the reviewer decided.
+
+    Skipped entirely when there is no reviewer id. DecidedBy is NOT NULL with a
+    foreign key to sad.Employee, so there is no honest value to substitute - an
+    audit trail that invents an approver is worse than one that is empty, because
+    the empty one is visibly missing.
+    """
+    reviewer = state.get("reviewer_employee_id")
+    decision = state.get("decision")
+    if not reviewer or decision not in ("Approve", "Reject", "RequestMoreAnalysis"):
+        return
+    for recommendation_id in decided_ids:
+        recommendation_repository.save_decision(
+            recommendation_id=recommendation_id,
+            decision=decision,
+            decision_reason=state.get("comments"),
+            decided_by=reviewer,
+        )
+
+
 def persist_recommendations(state: InfrastructureRecommendationState) -> dict:
     """Writes the shortlist a human will review: the top N clusters and, inside
     each, the top M hosts (``SAD_POLICY__TOP_CLUSTERS`` /
@@ -1057,9 +1083,11 @@ def persist_recommendations(state: InfrastructureRecommendationState) -> dict:
         return "Approved" if (selected_host is None or host_name == selected_host) else "Superseded"
 
     saved_ids = []
+    decided_ids: list[int] = []
     for c in state.get("candidate_scores", [])[: settings.policy.top_clusters]:
         explanation = explanations_by_cluster.get(c["cluster_code"])
         sub = c.get("subscores") or {}
+        cluster_status = status_for(c["cluster_code"], None)
         rec = {
             "InvestigationId": investigation_id, "CapacityRequestId": None, "ApplicationId": app_id,
             "RecommendationType": rec_type,
@@ -1075,15 +1103,18 @@ def persist_recommendations(state: InfrastructureRecommendationState) -> dict:
             "EstimatedMonthlyCost": c.get("estimated_monthly_cost"),
             "Explanation": explanation.get("summary") if explanation else None,
             "EvidenceJson": json.dumps(c, default=str),
-            "Status": status_for(c["cluster_code"], None),
+            "Status": cluster_status,
         }
-        saved_ids.append(recommendation_repository.save(rec))
+        cluster_rec_id = recommendation_repository.save(rec)
+        saved_ids.append(cluster_rec_id)
+        if cluster_status in _DECIDED_STATUSES:
+            decided_ids.append(cluster_rec_id)
 
         for n in (c.get("top_nodes") or [])[: settings.policy.top_nodes_per_cluster]:
             nsub = n.get("subscores") or {}
             nprojected = n.get("projected") or {}
-            saved_ids.append(
-                recommendation_repository.save(
+            node_status = status_for(c["cluster_code"], n["host_name"])
+            node_rec_id = recommendation_repository.save(
                     {
                         "InvestigationId": investigation_id, "CapacityRequestId": None, "ApplicationId": app_id,
                         "RecommendationType": rec_type,
@@ -1108,10 +1139,17 @@ def persist_recommendations(state: InfrastructureRecommendationState) -> dict:
                             },
                             default=str,
                         ),
-                        "Status": status_for(c["cluster_code"], n["host_name"]),
+                        "Status": node_status,
                     }
-                )
             )
+            saved_ids.append(node_rec_id)
+            if node_status in _DECIDED_STATUSES:
+                decided_ids.append(node_rec_id)
+
+    # After the rows exist: RecommendationDecision has a foreign key to
+    # RecommendationId, so the audit row cannot be written until its subject has
+    # been saved.
+    _record_decisions(state, decided_ids)
 
     return {"errors": [] if saved_ids else ["No candidates were persisted."]}
 
