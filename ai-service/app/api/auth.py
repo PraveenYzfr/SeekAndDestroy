@@ -60,6 +60,59 @@ def require_matching_employee_id(current: AuthenticatedEmployee, claimed: Option
     return current.employee_id
 
 
+#: Ordered, least to most. An Approver can do everything an Engineer can, so an
+#: endpoint says "Engineer or above" once instead of enumerating roles - which is
+#: the version that silently omits a role the next time one is added.
+ROLE_ORDER = ("Viewer", "Engineer", "Approver", "Administrator")
+
+
+def _rank(role: str | None) -> int:
+    """Unknown roles rank BELOW Viewer, deliberately.
+
+    A row whose Role is NULL or misspelled gets the fewest permissions rather than
+    the most. The alternative - treating unknown as "no restriction recorded,
+    allow" - is how a typo in a data fix grants somebody approval rights.
+    """
+    try:
+        return ROLE_ORDER.index(role or "")
+    except ValueError:
+        return -1
+
+
+def require_role(minimum: str):
+    """Dependency factory: this endpoint needs ``minimum`` or above.
+
+    Like require_admin, the role is re-read from the database on every request
+    rather than taken from the token. A token claim is a snapshot from login, so
+    demoting someone would leave their existing token working until it expired -
+    and under SAD_AUTH__MODE=oidc the claims come from a provider that knows
+    nothing about this column at all.
+
+    The cost is one indexed primary-key lookup per request, which is the right
+    price for revocation that takes effect now.
+    """
+    if minimum not in ROLE_ORDER:
+        raise ValueError(f"unknown role {minimum!r}; expected one of {ROLE_ORDER}")
+
+    def _dependency(
+        current: AuthenticatedEmployee = Depends(get_current_employee),
+    ) -> AuthenticatedEmployee:
+        record = employee_repository.get_by_id(current.employee_id)
+        held = getattr(record, "Role", None) if record is not None else None
+        if record is None or _rank(held) < _rank(minimum):
+            raise ProblemDetailsError(
+                403,
+                f"{minimum} access required",
+                # Names what the caller holds and what is needed. A bare "denied"
+                # sends somebody to the wrong person for the wrong permission.
+                f"This action requires the {minimum} role or above; "
+                f"your account holds {held or 'no role'}. Ask an administrator to grant it.",
+            )
+        return current
+
+    return _dependency
+
+
 def require_admin(
     current: AuthenticatedEmployee = Depends(get_current_employee),
 ) -> AuthenticatedEmployee:
