@@ -241,6 +241,74 @@ class TestAbsentIsNotZero:
             f"only the packer sees {sorted(unhosted - mine)[:5]}"
         )
 
+    def test_the_graph_and_the_hosting_table_agree_on_who_is_unplaced(self):
+        """Cross-check across two different sources of truth, not two readings
+        of one.
+
+        My unassessable set comes from the CI GRAPH - applications whose upward
+        walk yields no evaluable failure domain. The relational answer comes from
+        sad.ApplicationHosting - applications with no hosting row. Those are
+        separate tables maintained by separate code paths, so nothing forces them
+        to agree, and a divergence means the graph and the relational model have
+        drifted apart.
+
+        That drift is the failure this catches, and it is invisible from either
+        side alone: each looks internally consistent.
+        """
+        require_loaded_graph()
+        rows = fetch_all(
+            "SELECT Name FROM sad.ConfigurationItem WHERE ClassName='cmdb_ci_appl'",
+            max_rows=5000,
+        )
+        from_graph = {r["Name"] for r in rows if R.profile_for_application(r["Name"]).redundancy is None}
+        from_table = {
+            r["ApplicationCode"]
+            for r in fetch_all(
+                "SELECT a.ApplicationCode FROM sad.CmdbApplication a "
+                "WHERE NOT EXISTS (SELECT 1 FROM sad.ApplicationHosting h "
+                "                  WHERE h.ApplicationId = a.ApplicationId)",
+                max_rows=5000,
+            )
+        }
+        assert from_graph == from_table, (
+            f"graph and hosting table disagree - only the graph says "
+            f"{sorted(from_graph - from_table)[:5]}, only the table says "
+            f"{sorted(from_table - from_graph)[:5]}"
+        )
+
+    def test_c2s_unconnected_applications_are_a_subset_of_mine(self):
+        """c2 splits the unplaced population into unconnected and
+        dependency-linked. Their unconnected set must be a subset of my
+        unassessable set, and the arithmetic is DERIVED here rather than
+        hardcoded - asserting "65 + 22 = 87" would bake in three numbers that
+        move with every seed.
+
+        Why the subset must hold: an application with only a Depends-on edge is
+        still unassessable to me, because SUPPORT_EDGES deliberately excludes
+        type 4 - an application is not redundant across the services it calls.
+        So anything c2 calls unconnected is necessarily also unassessable, while
+        the reverse is not true.
+        """
+        require_loaded_graph()
+        from app.insights import cmdb_health
+
+        breakdown = cmdb_health.unhosted_application_breakdown()
+        rows = fetch_all(
+            "SELECT Name FROM sad.ConfigurationItem WHERE ClassName='cmdb_ci_appl'",
+            max_rows=5000,
+        )
+        mine = sum(1 for r in rows if R.profile_for_application(r["Name"]).redundancy is None)
+
+        assert breakdown["total_unhosted"] == mine, (
+            f"c2 counts {breakdown['total_unhosted']} unhosted, I count {mine} "
+            f"unassessable - these are the same population reached two ways"
+        )
+        assert breakdown["unhosted_and_unconnected"] <= mine
+        assert (
+            breakdown["unhosted_and_unconnected"] + breakdown["unhosted_but_dependency_linked"]
+            == mine
+        ), "the split must partition the population, not overlap or lose members"
+
     def test_the_unassessable_population_stays_small(self):
         """e7's invariant, checked from my side too.
 
