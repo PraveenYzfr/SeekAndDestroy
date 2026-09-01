@@ -143,7 +143,7 @@ export default function ReviewChoice({
               />
               <strong>{option.cluster_code}</strong>
               <span className={`badge ${isRejected ? "rejected" : "eligible"}`}>
-                {option.eligibility_status}
+                {isRejected ? "Not recommended" : "Recommended"}
               </span>
               <span className="stat-label">
                 score {option.overall_score ?? "—"} · {fmt(option.projected_headroom_percent, "%")} headroom after

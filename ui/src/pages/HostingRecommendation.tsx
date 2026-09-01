@@ -135,7 +135,13 @@ export default function HostingRecommendation() {
 
       {candidates && (
         <div className="card">
-          <strong>Ranked candidates ({candidates.filter((c) => c.eligibility_status === "Eligible").length} eligible of {candidates.length})</strong>
+          <strong>
+            {/* "3 recommended of 29 considered" - considered, not "of 29
+                candidates", because the other 26 are not candidates for
+                anything. They were looked at and ruled out. */}
+            Recommended clusters ({candidates.filter((c) => c.eligibility_status === "Eligible").length} of{" "}
+            {candidates.length} considered)
+          </strong>
           <div style={{ marginTop: 10 }}>
             <CandidateTable candidates={candidates} />
           </div>
