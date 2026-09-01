@@ -22,6 +22,8 @@ from app.repositories.base import fetch_all
 from app.scoring import subscores
 from app.services import change_exposure
 
+from ._cmdb_load_state import require_loaded_graph
+
 _RECORD = {"upcoming_changes": 3, "recent_changes": 20, "recent_failures": 2}
 
 
@@ -96,6 +98,7 @@ class TestExposureLookup:
         assert change_exposure.exposure_for_clusters([]) == {}
 
     def test_it_counts_dependents_for_real_clusters(self):
+        require_loaded_graph()
         rows = fetch_all(
             "SELECT TOP 5 ic.ClusterId FROM sad.InfrastructureCluster ic "
             "JOIN sad.ConfigurationItem ci ON ci.Name = ic.ClusterCode "
@@ -119,6 +122,7 @@ class TestExposureLookup:
     def test_the_count_matches_a_direct_walk(self):
         """Guards against the ClusterId-to-CiId bridge silently pairing the wrong
         rows - the two id spaces are different and the join is on the code."""
+        require_loaded_graph()
         rows = fetch_all(
             "SELECT TOP 1 ic.ClusterId, ci.CiId FROM sad.InfrastructureCluster ic "
             "JOIN sad.ConfigurationItem ci ON ci.Name = ic.ClusterCode "

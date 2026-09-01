@@ -23,6 +23,8 @@ from app.repositories.base import fetch_all
 from app.rules import eligibility
 from app.services import resiliency as R
 
+from ._cmdb_load_state import require_loaded_graph
+
 
 def _requirement(criticality: str) -> HostingRequirement:
     return HostingRequirement(
@@ -45,6 +47,10 @@ def _context(cluster, criticality="Critical", profile=None):
 
 @pytest.fixture(scope="module")
 def any_application() -> str:
+    # Skips on an empty CMDB, FAILS on a half-loaded one. See _cmdb_load_state:
+    # this suite once went from 22 passing to 14 skipped during a reload and
+    # reported success, which is a false negative wearing a friendly face.
+    require_loaded_graph()
     rows = fetch_all(
         "SELECT TOP 1 Name FROM sad.ConfigurationItem WHERE ClassName='cmdb_ci_appl' "
         "AND EXISTS (SELECT 1 FROM sad.CiRelationship r WHERE r.ChildCiId = CiId) "
@@ -52,7 +58,7 @@ def any_application() -> str:
         max_rows=1,
     )
     if not rows:
-        pytest.skip("no CI graph loaded")
+        pytest.skip("no application has any relationship")
     return rows[0]["Name"]
 
 
