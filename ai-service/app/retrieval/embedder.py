@@ -77,9 +77,11 @@ class HttpEmbedder(Embeddings):
         batch_size: int = 64,
         timeout_seconds: int = 30,
         batch_delay_seconds: float = 0.0,
+        max_attempts: int = 6,
         extra_headers: dict | None = None,
         transport: httpx.BaseTransport | None = None,
     ):
+        self._max_attempts = max_attempts
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
@@ -112,7 +114,10 @@ class HttpEmbedder(Embeddings):
         payload = {"model": self.model, "input": texts}
         try:
             with httpx.Client(timeout=self.timeout_seconds, transport=self._transport) as client:
-                response = request_with_retry(lambda: client.post(self._url(), headers=self._headers(), json=payload))
+                response = request_with_retry(
+                    lambda: client.post(self._url(), headers=self._headers(), json=payload),
+                    max_attempts=self._max_attempts,
+                )
             data = response.json()
             items = sorted(data["data"], key=lambda item: item.get("index", 0))
             result = [item["embedding"] for item in items]
@@ -170,6 +175,7 @@ def _build_embedder_and_fingerprint() -> tuple[Embeddings, str]:
             api_version=settings.embedding_api_version, batch_size=settings.embedding_batch_size,
             timeout_seconds=settings.embedding_timeout_seconds, extra_headers=extra_headers,
             batch_delay_seconds=settings.embedding_batch_delay_seconds,
+            max_attempts=settings.embedding_max_attempts,
         )
         return _probe_or_fallback(candidate, provider_label="api", dimensions=settings.embedding_dimensions, model=settings.embedding_model)
 
@@ -182,6 +188,7 @@ def _build_embedder_and_fingerprint() -> tuple[Embeddings, str]:
             base_url=base_url, batch_size=settings.embedding_batch_size,
             timeout_seconds=settings.embedding_timeout_seconds,
             batch_delay_seconds=settings.embedding_batch_delay_seconds,
+            max_attempts=settings.embedding_max_attempts,
         )
         return _probe_or_fallback(
             candidate, provider_label="gemini", dimensions=settings.embedding_dimensions,

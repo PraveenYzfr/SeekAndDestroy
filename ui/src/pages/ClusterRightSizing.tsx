@@ -21,7 +21,7 @@ export default function ClusterRightSizing() {
   return (
     <>
       <h2>Cluster Right-Sizing</h2>
-      <p className="subtitle">Current utilization, recommended allocation, savings and risks for every cluster.</p>
+      <p className="subtitle">Current utilization, recommended allocation and risks for every cluster.</p>
 
       <div className="card">
         <div className="form-row" style={{ maxWidth: 240 }}>
@@ -58,12 +58,14 @@ export default function ClusterRightSizing() {
               <div>{r.current_node_count} → {r.recommended_node_count}</div>
             </div>
             <div>
-              <div className="stat-label">Monthly savings</div>
-              <div>${r.estimated_monthly_savings.toLocaleString()}</div>
-            </div>
-            <div>
-              <div className="stat-label">Annual savings</div>
-              <div>${r.estimated_annual_savings.toLocaleString()}</div>
+              {/* Node change, not currency. The two savings figures that were
+                  here are still returned by the API and are still computed from
+                  sad.InfrastructureCluster.MonthlyCost - they are simply not
+                  shown, because cost is not a dimension this platform scores on
+                  and putting a dollar figure beside a capacity recommendation
+                  invites a comparison the scoring never made. */}
+              <div className="stat-label">Node change</div>
+              <div>{r.node_delta > 0 ? `+${r.node_delta}` : r.node_delta}</div>
             </div>
           </div>
           <p style={{ marginTop: 10, fontSize: 13 }}>{r.rationale}</p>

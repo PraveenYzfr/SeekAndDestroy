@@ -166,7 +166,7 @@ services:
       SAD_LLM__BASE_URL: "${SAD_LLM_BASE_URL:-}"
       SAD_LLM__PROVIDER_LABEL: "${SAD_LLM_PROVIDER_LABEL:-}"
       SAD_LLM__MAX_OUTPUT_TOKENS: "${SAD_LLM_MAX_OUTPUT_TOKENS:-8192}"
-      SAD_LLM__DAILY_CALL_BUDGET: "${SAD_LLM_DAILY_CALL_BUDGET:-100}"
+      SAD_LLM__DAILY_CALL_BUDGET: "${SAD_LLM_DAILY_CALL_BUDGET:-50000}"
       SAD_RETRIEVAL__BACKEND: "qdrant"
       SAD_RETRIEVAL__QDRANT_URL: "http://qdrant:6333"
       SAD_RETRIEVAL__QDRANT_API_KEY: "${SAD_QDRANT_API_KEY:-}"
@@ -255,6 +255,13 @@ services:
     environment:
       ConnectionStrings__PraveenDB: "Data Source=${SAD_DB_HOST:-sqlserver};Initial Catalog=${SAD_DB_NAME:-PraveenDB};Integrated Security=False;User ID=${SAD_DB_USERNAME:-sad_app};Password=${SAD_DB_PASSWORD:-};TrustServerCertificate=True;"
       AiService__BaseUrl: "http://ai-service:8088"
+      # Must not be shorter than the ui container's nginx proxy_read_timeout,
+      # or the gateway gives up first and the user sees "Internal server
+      # error" while the investigation is still running behind it. That is
+      # exactly what happened: nginx was raised to 300s when investigations
+      # started taking 44-60s, but this stayed at the 60s baked into
+      # appsettings.json and was not overridable from here at all.
+      AiService__TimeoutSeconds: "${SAD_AI_SERVICE_TIMEOUT_SECONDS:-300}"
       # Must match ai-service's SAD_AUTH__* above exactly - both validate the same tokens.
       Auth__Mode: "${SAD_AUTH_MODE:-local}"
       Auth__LocalSigningKey: "${SAD_AUTH_LOCAL_SIGNING_KEY:-dev-only-insecure-signing-key-change-me}"

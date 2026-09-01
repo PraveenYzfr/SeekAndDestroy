@@ -116,7 +116,7 @@ export default function InvestigationDetail() {
           <strong>Recommendations</strong>
           <table style={{ marginTop: 10 }}>
             <thead>
-              <tr><th>Rank</th><th>Candidate</th><th>Status</th><th>Score</th><th>Cost</th><th>Approval status</th></tr>
+              <tr><th>Rank</th><th>Candidate</th><th>Status</th><th>Score</th><th>Approval status</th></tr>
             </thead>
             <tbody>
               {recommendations.map((r) => (
@@ -128,7 +128,6 @@ export default function InvestigationDetail() {
                   </td>
                   <td><span className={`badge ${r.EligibilityStatus === "Eligible" ? "eligible" : "rejected"}`}>{r.EligibilityStatus}</span></td>
                   <td>{r.OverallScore ?? "—"}</td>
-                  <td>{r.EstimatedMonthlyCost != null ? `$${r.EstimatedMonthlyCost}` : "—"}</td>
                   <td>{r.Status}</td>
                 </tr>
               ))}

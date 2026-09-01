@@ -198,6 +198,22 @@ class RetrievalSettings(_Base):
     embedding_api_version: str = ""
     embedding_batch_size: int = 64
     embedding_timeout_seconds: int = 30
+    #: Attempts per embedding call before the run fails, backoff included.
+    #:
+    #: Higher than the shared default of 3 because of what the 429s here
+    #: actually are. The quota Google names when it refuses is
+    #: `global_embed_content_requests_per_minute_per_base_model` - a pool shared
+    #: across the base model, not this project's allowance. Measured 2026-09-01:
+    #: this project peaked at 1.79K of 3K RPM with unlimited requests per day,
+    #: and a batch of 64 was refused seconds before 100 texts went through
+    #: untouched. So a refusal says the pool was busy, not that we were greedy.
+    #:
+    #: Pacing cannot fix that - slowing down does not reduce the chance of
+    #: landing in someone else's burst, it just lengthens the window in which
+    #: one can happen. Surviving the refusal does. Six attempts against the
+    #: backoff in app.utils.http_retry, which honours Google's own retryDelay,
+    #: covers a burst comfortably; three did not, and cost a full index run.
+    embedding_max_attempts: int = 6
     # Same spend-control pattern as SAD_LLM__DAILY_CALL_BUDGET, for real (api/gemini)
     # embedding providers. Counts embed_documents/embed_query invocations, not texts -
     # a batched upsert of 200 documents is one call. 0 = unlimited (hash/sentence-

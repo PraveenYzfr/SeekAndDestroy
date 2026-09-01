@@ -23,7 +23,11 @@ export default function Dashboard() {
 
   const overprovisioned = rightSizing.filter((r) => r.classification === "Overprovisioned");
   const underprovisioned = rightSizing.filter((r) => r.classification === "Underprovisioned");
-  const totalMonthlySavings = overprovisioned.reduce((sum, r) => sum + r.estimated_monthly_savings, 0);
+  // Nodes, not currency. This platform answers capacity questions; a dollar
+  // figure invites the reader to compare options on cost, which is not what any
+  // of the scoring here optimises for. node_delta is the same finding expressed
+  // in the unit the recommendation is actually made in.
+  const reclaimableNodes = overprovisioned.reduce((sum, r) => sum + Math.max(0, -r.node_delta), 0);
   const avgCpu = rightSizing.length
     ? (rightSizing.reduce((s, r) => s + r.snapshot.current_cpu_utilization_percent, 0) / rightSizing.length).toFixed(1)
     : "—";
@@ -58,8 +62,8 @@ export default function Dashboard() {
           <div className="stat">{underprovisioned.length}</div>
         </div>
         <div className="card">
-          <div className="stat-label">Projected monthly savings</div>
-          <div className="stat">${totalMonthlySavings.toLocaleString()}</div>
+          <div className="stat-label">Reclaimable nodes</div>
+          <div className="stat">{reclaimableNodes}</div>
         </div>
       </div>
 
@@ -74,7 +78,7 @@ export default function Dashboard() {
               <th>Memory %</th>
               <th>Nodes</th>
               <th>Recommended</th>
-              <th>Monthly Savings</th>
+              <th>Node change</th>
             </tr>
           </thead>
           <tbody>
@@ -90,7 +94,7 @@ export default function Dashboard() {
                   <td>{r.snapshot.current_memory_utilization_percent}%</td>
                   <td>{r.current_node_count}</td>
                   <td>{r.recommended_node_count}</td>
-                  <td>${r.estimated_monthly_savings.toLocaleString()}</td>
+                  <td>{r.node_delta > 0 ? `+${r.node_delta}` : r.node_delta}</td>
                 </tr>
               ))}
           </tbody>

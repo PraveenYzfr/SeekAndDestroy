@@ -92,7 +92,6 @@ export default function RecommendationComparison() {
             <tbody>
               <tr><td>Eligibility</td>{rows.map((r) => <td key={r.cluster_code}><span className={`badge ${r.eligibility_status === "Eligible" ? "eligible" : "rejected"}`}>{r.eligibility_status}</span></td>)}</tr>
               <tr><td>Overall score</td>{rows.map((r) => <td key={r.cluster_code}>{r.overall_score ?? "—"}</td>)}</tr>
-              <tr><td>Est. monthly cost</td>{rows.map((r) => <td key={r.cluster_code}>{r.estimated_monthly_cost != null ? `$${r.estimated_monthly_cost}` : "—"}</td>)}</tr>
               <tr><td>Projected headroom %</td>{rows.map((r) => <td key={r.cluster_code}>{r.projected?.projected_headroom_percent ?? "—"}</td>)}</tr>
               <tr><td>Capacity score</td>{rows.map((r) => <td key={r.cluster_code}>{r.subscores?.capacity ?? "—"}</td>)}</tr>
               <tr><td>Compatibility score</td>{rows.map((r) => <td key={r.cluster_code}>{r.subscores?.compatibility ?? "—"}</td>)}</tr>

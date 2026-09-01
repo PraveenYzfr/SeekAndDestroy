@@ -41,9 +41,11 @@ class GeminiEmbedder(Embeddings):
         batch_size: int = 64,
         timeout_seconds: int = 30,
         batch_delay_seconds: float = 0.0,
+        max_attempts: int = 6,
         transport: Optional[httpx.BaseTransport] = None,
     ):
         self.api_key = api_key
+        self._max_attempts = max_attempts
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.batch_size = max(1, batch_size)
@@ -73,7 +75,10 @@ class GeminiEmbedder(Embeddings):
         }
         try:
             with httpx.Client(timeout=self.timeout_seconds, transport=self._transport) as client:
-                response = request_with_retry(lambda: client.post(self._url(), headers=self._headers(), json=payload))
+                response = request_with_retry(
+                    lambda: client.post(self._url(), headers=self._headers(), json=payload),
+                    max_attempts=self._max_attempts,
+                )
             data = response.json()
             result = [item["values"] for item in data["embeddings"]]
         except Exception:

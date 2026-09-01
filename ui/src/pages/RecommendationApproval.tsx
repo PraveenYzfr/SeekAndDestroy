@@ -82,7 +82,7 @@ export default function RecommendationApproval() {
             <span className="badge eligible">{r.Status}</span>
           </div>
           <p style={{ fontSize: 13 }}>{r.Explanation ?? "No explanation available."}</p>
-          <div className="stat-label">Score {r.OverallScore ?? "—"} · Cost {r.EstimatedMonthlyCost != null ? `$${r.EstimatedMonthlyCost}` : "—"} · Headroom {r.ProjectedHeadroomPercent ?? "—"}%</div>
+          <div className="stat-label">Score {r.OverallScore ?? "—"} · Headroom {r.ProjectedHeadroomPercent ?? "—"}%</div>
           <textarea
             placeholder="Comments (optional)"
             rows={2}
