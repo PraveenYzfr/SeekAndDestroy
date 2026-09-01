@@ -91,6 +91,14 @@ GRANT INSERT, UPDATE ON sad.AgentAuditLog                TO [$APP_LOGIN];
 -- how far it got last time and writes back how far it got this time, so it
 -- needs INSERT and UPDATE. SELECT already comes from the schema grant.
 GRANT INSERT, UPDATE ON sad.IndexWatermark              TO [$APP_LOGIN];
+-- DELETE too, for this table only. A rebuild clears every watermark so the
+-- run that follows behaves as a first index; without it the worker fails
+-- with "The DELETE permission was denied" the moment anyone triggers one.
+-- Invisible locally, where dev connects as a privileged login - the same
+-- way the missing UPDATE on AgentAuditLog hid. Watermarks are bookkeeping
+-- the indexer owns outright, not data, so DELETE here grants nothing the
+-- application could not already achieve by overwriting them.
+GRANT DELETE ON sad.IndexWatermark                      TO [$APP_LOGIN];
 -- Index run history (migration 005). The API inserts a Queued run; the
 -- worker updates its status, heartbeat and progress. Both processes use
 -- this same login, so INSERT and UPDATE cover both. No DELETE: run

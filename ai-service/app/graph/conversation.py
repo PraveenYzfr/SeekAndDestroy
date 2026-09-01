@@ -42,8 +42,22 @@ RECALL = "Recall"
 ABOUT_PREVIOUS = "AboutPrevious"
 INHERIT_SUBJECT = "InheritSubject"
 
-_APP_CODE_RE = re.compile(r"\bAPP-[A-Z0-9]+\b")
-_CLUSTER_CODE_RE = re.compile(r"\bCL-[A-Z0-9-]+\b")
+#: Multi-segment, not single. The first version stopped at the first hyphen, so
+#: APP-AML-API0044 read as APP-AML - a code that does not exist. 1,160 of the
+#: 1,200 applications carry two or more segments, so it was wrong for 97% of the
+#: estate: a valid request answered "APP-AML not found in CMDB", naming a code
+#: the user never typed.
+_APP_CODE_RE = re.compile(r"\bAPP-[A-Z0-9]+(?:-[A-Z0-9]+)*\b")
+
+#: Real cluster codes are atl-03 and cmh-p212. The previous pattern matched
+#: CL-PROD-01, which fits none of the 256 clusters in the CMDB and had therefore
+#: never once fired - so names_a_cluster() was always False and a follow-up that
+#: named a cluster was invisible to the recall logic.
+#:
+#: Both regexes on these lines described a corpus that was imagined rather than
+#: the one that exists, and both were found by the data changing rather than by
+#: a test, because the tests used hand-written examples in the same wrong shape.
+_CLUSTER_CODE_RE = re.compile(r"\b[a-z]{3}-p?\d{2,3}\b", re.IGNORECASE)
 
 #: Words that point back at something already said. Deliberately does not
 #: include bare "the clusters" or "hosts" - those appear in perfectly

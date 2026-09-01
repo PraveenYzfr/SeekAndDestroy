@@ -47,7 +47,11 @@ import re
 
 #: Identifiers that only exist in this estate. Any of them is conclusive.
 _IDENTIFIERS = (
-    re.compile(r"\bAPP-[A-Z0-9]+\b", re.IGNORECASE),           # APP-PAYMENTS
+    # Multi-segment: APP-AML-API0044, not just APP-AML. This gate happened to
+    # survive the shorter pattern - it only needs any match to decide a query is
+    # on-topic - but a pattern that is right for the wrong reason is one
+    # refactor away from being wrong.
+    re.compile(r"\bAPP-[A-Z0-9]+(?:-[A-Z0-9]+)*\b", re.IGNORECASE),
     # No CL-PROD-01 pattern here on purpose. nodes.py and conversation.py
     # both carry _CLUSTER_CODE_RE for that shape and it has never matched
     # anything: 0 of 256 clusters in the CMDB are named CL-%. The real
