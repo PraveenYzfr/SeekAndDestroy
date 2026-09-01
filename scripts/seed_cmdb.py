@@ -225,7 +225,8 @@ def _weighted(rng, pairs):
 # =============================================================================
 # Build
 # =============================================================================
-def build(clusters, applications, nodes, rng, anchor_date) -> Estate:
+def build(clusters, applications, nodes, rng, anchor_date,
+          neighborhood_index: dict) -> Estate:
     """Construct the whole CMDB layer.
 
     ``nodes`` are the existing cluster-member hosts. They stay in sad.ClusterNode
@@ -256,10 +257,17 @@ def build(clusters, applications, nodes, rng, anchor_date) -> Estate:
         ci = e.add_ci("zone", code, code, "cmdb_ci_zone", environment="Production",
                       discovery_source="Import", first_discovered=stamp, last_discovered=stamp)
         zone_ci[code] = ci.ci_id
-        e.zones.append({"ci_id": ci.ci_id, "code": code, "dc": dc, "type": "Compute"})
+        e.zones.append({"ci_id": ci.ci_id, "code": code, "dc": dc, "type": "Compute",
+                        "nid": neighborhood_index[code], "is_new": False})
         e.link(dc_ci[dc], ci.ci_id, 5)
 
+    # The typed zones do not exist in sad.Neighborhood yet. Ids are allocated
+    # here and emitted under IDENTITY_INSERT rather than left to insert order,
+    # because a foreign key that depends on the sequence of two separate
+    # INSERT blocks is a foreign key that breaks the first time one moves.
+    next_nid = max(neighborhood_index.values()) + 1
     typed_zone: dict[tuple, int] = {}
+    typed_zone_nid: dict[tuple, int] = {}
     for dc_name in sorted(dc_ci):
         prefix = dc_name.split("-")[0][:3].upper()
         for ztype, suffix in (("Storage", "STOR"), ("Core", "CORE"),
@@ -268,8 +276,13 @@ def build(clusters, applications, nodes, rng, anchor_date) -> Estate:
             ci = e.add_ci("zone", code, code, "cmdb_ci_zone", environment="Production",
                           discovery_source="Import", first_discovered=stamp, last_discovered=stamp)
             typed_zone[(dc_name, ztype)] = ci.ci_id
+            typed_zone_nid[(dc_name, ztype)] = next_nid
             zone_ci[code] = ci.ci_id
-            e.zones.append({"ci_id": ci.ci_id, "code": code, "dc": dc_name, "type": ztype})
+            e.zones.append({"ci_id": ci.ci_id, "code": code, "dc": dc_name, "type": ztype,
+                            "nid": next_nid, "is_new": True,
+                            "name": f"{ztype} zone, {dc_name}", "region":
+                            next(c.region for c in clusters if c.datacenter == dc_name)})
+            next_nid += 1
             e.link(dc_ci[dc_name], ci.ci_id, 5)
 
     # ---- clusters and their member hosts ------------------------------------
@@ -304,7 +317,8 @@ def build(clusters, applications, nodes, rng, anchor_date) -> Estate:
         server_ci[n.host_name] = sci.ci_id
         e.servers.append({
             "ci_id": sci.ci_id, "name": host, "role": "Hypervisor",
-            "zone_ci": None, "cluster_code": n.cluster.code,
+            "zone_ci": None, "zone_nid": neighborhood_index.get(n.cluster.neighborhood_code),
+            "cluster_code": n.cluster.code, "cluster_id": n.cluster.idx,
             "cpu": sockets * per_socket, "memory_gb": memory,
             "storage_gb": rng.choice([960, 1920, 3840]),
             "os": n.cluster.os, "sockets": sockets, "cores_per_socket": per_socket,
@@ -343,7 +357,8 @@ def build(clusters, applications, nodes, rng, anchor_date) -> Estate:
                 "usable_tb": round(raw * 0.72, 2),
                 "used_tb": round(raw * rng.uniform(0.35, 0.88), 2),
                 "controllers": rng.choice([2, 2, 2, 4]),
-                "zone_ci": typed_zone[(dc_name, "Storage")]})
+                "zone_ci": typed_zone[(dc_name, "Storage")],
+                "zone_nid": typed_zone_nid[(dc_name, "Storage")]})
             e.link(typed_zone[(dc_name, "Storage")], ci.ci_id, 5)
 
             for v in range(1, VOLUMES_PER_ARRAY + 1):
@@ -371,7 +386,8 @@ def build(clusters, applications, nodes, rng, anchor_date) -> Estate:
             e.switches.append({
                 "ci_id": ci.ci_id, "name": name, "role": role,
                 "vendor": rng.choice(_SWITCH_VENDORS), "ports": rng.choice([24, 48, 96]),
-                "zone_ci": typed_zone[(dc_name, "Network")]})
+                "zone_ci": typed_zone[(dc_name, "Network")],
+                "zone_nid": typed_zone_nid[(dc_name, "Network")]})
             e.link(typed_zone[(dc_name, "Network")], ci.ci_id, 5)
 
     switches_by_dc: dict[str, list] = {}
@@ -387,13 +403,15 @@ def build(clusters, applications, nodes, rng, anchor_date) -> Estate:
             e.link(pool[sum(ord(ch) for ch in n.host_name) % len(pool)], server_ci[n.host_name], 6)
 
     return _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
-                          app_ci, cluster_ci, typed_zone, dc_ci, rng, stamp, old)
+                          app_ci, cluster_ci, typed_zone, typed_zone_nid,
+                          dc_ci, rng, stamp, old)
 
 # =============================================================================
 # The virtual layer, the infrastructure estate, and the planted failure domains
 # =============================================================================
 def _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
-                   app_ci, cluster_ci, typed_zone, dc_ci, rng, stamp, old):
+                   app_ci, cluster_ci, typed_zone, typed_zone_nid,
+                   dc_ci, rng, stamp, old):
     """VMs on hosts, applications on VMs, and the shared dependencies that decide
     whether redundancy is real.
 
@@ -448,9 +466,18 @@ def _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
     # Previously an application was linked straight to its cluster, which is what
     # made resiliency equal node count. Now it runs on named VMs, and how those
     # VMs are placed is what decides whether it is really redundant.
+    # Placement comes from the PACKER, not from host_cluster_code.
+    #
+    # host_cluster_code is only set on the 40 hand-written applications; the other
+    # 1,160 are placed by pack_applications into primary_cluster_idx. Keying on the
+    # former put 1,073 of 1,200 applications on no VM at all - they kept only the
+    # cluster shortcut edge, so resiliency could not see them and the estate quietly
+    # contained more unplaced applications than placed ones.
+    by_idx = {c.idx: c.code for c in clusters}
     app_vms: dict[str, list[dict]] = {}
     for a in applications:
-        pool = vms_by_cluster.get(a.host_cluster_code) or []
+        code = a.host_cluster_code or by_idx.get(getattr(a, "primary_cluster_idx", None) or -1, "")
+        pool = vms_by_cluster.get(code) or []
         if not pool:
             continue
         want = 2 if a.criticality in ("Critical", "High") else 1
@@ -499,10 +526,13 @@ def _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
             # Ownership and classification are deliberately incomplete: a real CMDB
             # has gaps and a completeness check that finds none has not been tested.
             if ztype == "Compute":
-                pool_z = compute_zones.get(dc_name) or [typed_zone[(dc_name, "Core")]]
-                zone_for_role = pool_z[infra_seq % len(pool_z)]
+                pool_z = [z for z in e.zones if z["type"] == "Compute" and z["dc"] == dc_name]
+                pick = pool_z[infra_seq % len(pool_z)] if pool_z else None
+                zone_for_role = pick["ci_id"] if pick else typed_zone[(dc_name, "Core")]
+                nid_for_role = pick["nid"] if pick else typed_zone_nid[(dc_name, "Core")]
             else:
                 zone_for_role = typed_zone[(dc_name, ztype)]
+                nid_for_role = typed_zone_nid[(dc_name, ztype)]
             owned = rng.randint(1, 20) if rng.random() < 0.72 else None
             ci = e.add_ci("server", name, name, "cmdb_ci_server", environment="Production",
                           owned_by_id=owned,
@@ -514,7 +544,7 @@ def _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
                           last_discovered=stamp if rng.random() < 0.88 else old)
             e.infra_servers.append({
                 "ci_id": ci.ci_id, "name": name, "role": role,
-                "zone_ci": zone_for_role,
+                "zone_ci": zone_for_role, "zone_nid": nid_for_role,
                 "cpu": rng.choice([4, 8, 16, 32]), "memory_gb": rng.choice([16, 32, 64, 128]),
                 "storage_gb": rng.choice([200, 500, 1000, 2000]),
                 "os": rng.choice(["Linux/RHEL9", "Linux/Ubuntu22", "Windows/2022"]),
@@ -630,6 +660,24 @@ def _plant_failure_domains(e, applications, app_vms, app_ci, rng) -> None:
     e.scenarios["spof_single_volume_applications"] = volume_case
     e.scenarios["spof_single_host_applications"] = host_case
     e.scenarios["spof_single_array_applications"] = array_case
+    # A deliberate dependency cycle. Two applications that call each other is a
+    # real topology, not corrupt data - discovery tools produce them constantly -
+    # and it is the one input that proves a traversal's visited-path guard is
+    # doing its job. Without it the guard is untested code protecting against a
+    # condition the corpus never presents, which is how it stays broken.
+    #
+    # Deliberately three-deep rather than a mutual pair: A -> B -> C -> A. A guard
+    # that only checks the immediately preceding node terminates on a pair and
+    # loops forever on a triangle, so a pair would pass a broken implementation.
+    cycle = [c for c in picked[18:24]][:3]
+    if len(cycle) == 3:
+        ring = [app_ci[c] for c in cycle]
+        for i, parent in enumerate(ring):
+            child = ring[(i + 1) % 3]
+            if not any(p == parent and c == child and t == 4 for p, c, t in e.edges):
+                e.link(parent, child, 4)
+    e.scenarios["dependency_cycle_applications"] = cycle
+
     e.scenarios["spof_single_switch_applications"] = []
     e.scenarios["spof_single_zone_applications"] = []
     # The control is VERIFIED, not assumed. An application only qualifies if it
@@ -713,3 +761,165 @@ def _plant_defects(e, rng, old_stamp) -> None:
         "unowned_cis": unowned,
         "unclassified_cis": unclassified,
     })
+
+
+# =============================================================================
+# Emission
+# =============================================================================
+# CiId is written explicitly under IDENTITY_INSERT rather than letting the
+# database allocate it. The relationship rows reference ids the generator chose,
+# and a generator cannot read back an IDENTITY it has not inserted yet. It also
+# keeps the graph reproducible: the same seed puts the same CI at the same id, so
+# a golden set can name one and still be talking about the same thing next week.
+_BATCH = 500
+
+
+def _lit(v) -> str:
+    """SQL literal. Single quotes doubled - the note text in this corpus contains
+    apostrophes and one unescaped quote would truncate an INSERT mid-statement."""
+    if v is None:
+        return "NULL"
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    if isinstance(v, (int, float)):
+        return str(v)
+    return "'" + str(v).replace("'", "''") + "'"
+
+
+def _rows(lines: list[str], table: str, columns: list[str], rows: list[tuple]) -> None:
+    if not rows:
+        return
+    cols = ", ".join(columns)
+    for i in range(0, len(rows), _BATCH):
+        chunk = rows[i:i + _BATCH]
+        lines.append(f"INSERT INTO {table} ({cols}) VALUES")
+        lines.append(",\n".join("(" + ", ".join(_lit(v) for v in r) + ")" for r in chunk) + ";")
+    lines.append("GO")
+    lines.append("")
+
+
+def emit(lines: list[str], e: Estate) -> None:
+    """Append the whole CMDB layer to a seed script already holding the base tables.
+
+    Order matters and is not cosmetic: configuration items first because every
+    class table and every edge has a foreign key to them; then the class tables;
+    then the links back onto the pre-existing tables; then the relationships,
+    which reference two CIs and so must come last.
+    """
+    lines.append("-- =========================================================================")
+    lines.append("-- CMDB: configuration items, class tables, and the relationship graph")
+    lines.append(f"-- {len(e.cis):,} CIs, {len(e.edges):,} relationships")
+    lines.append("-- =========================================================================")
+
+    new_zones = [z for z in e.zones if z.get("is_new")]
+    if new_zones:
+        lines.append("-- typed zones: storage, core, network and management per site")
+        lines.append("SET IDENTITY_INSERT sad.Neighborhood ON;")
+        lines.append("GO")
+        _rows(lines, "sad.Neighborhood",
+              ["NeighborhoodId", "NeighborhoodCode", "NeighborhoodName", "DataCenter",
+               "Region", "LifecycleStatus", "ZoneType"],
+              [(z["nid"], z["code"], z["name"], z["dc"], z["region"], "Active", z["type"])
+               for z in new_zones])
+        lines.append("SET IDENTITY_INSERT sad.Neighborhood OFF;")
+        lines.append("GO")
+        lines.append("")
+
+    lines.append("SET IDENTITY_INSERT sad.ConfigurationItem ON;")
+    lines.append("GO")
+    _rows(lines, "sad.ConfigurationItem",
+          ["CiId", "SysId", "Name", "ClassName", "OperationalStatus", "InstallStatus",
+           "Environment", "SupportGroupId", "OwnedById", "ManagedById",
+           "DataClassification", "RegulatoryScope", "FirstDiscovered", "LastDiscovered",
+           "DiscoverySource"],
+          [(c.ci_id, c.sys_id, c.name, c.class_name, c.operational_status, c.install_status,
+            c.environment, c.support_group_id, c.owned_by_id, c.managed_by_id,
+            c.data_classification, c.regulatory_scope, c.first_discovered,
+            c.last_discovered, c.discovery_source) for c in e.cis])
+    lines.append("SET IDENTITY_INSERT sad.ConfigurationItem OFF;")
+    lines.append("GO")
+    lines.append("")
+
+    # ---- class tables -------------------------------------------------------
+    _rows(lines, "sad.CiDataCentre", ["CiId", "Code", "City", "Region"],
+          [(d["ci_id"], d["code"], d["city"], d["region"]) for d in e.data_centres])
+
+    _rows(lines, "sad.CiStorageArray",
+          ["CiId", "ArrayName", "Vendor", "ArrayType", "Protocol", "RawCapacityTb",
+           "UsableCapacityTb", "UsedTb", "ControllerCount", "NeighborhoodId"],
+          [(a["ci_id"], a["name"], a["vendor"], a["type"], a["protocol"], a["raw_tb"],
+            a["usable_tb"], a["used_tb"], a["controllers"], a["zone_nid"]) for a in e.arrays])
+
+    _rows(lines, "sad.CiStorageVolume",
+          ["CiId", "VolumeName", "ArrayCiId", "CapacityGb", "UsedGb", "Protocol",
+           "ExportPath", "PerformanceTier", "IsReplicated"],
+          [(v["ci_id"], v["name"], v["array_ci"], v["capacity_gb"], v["used_gb"],
+            v["protocol"], v["export"], v["tier"], v["replicated"]) for v in e.volumes])
+
+    _rows(lines, "sad.CiNetworkDevice",
+          ["CiId", "DeviceName", "DeviceRole", "Vendor", "PortCount", "NeighborhoodId"],
+          [(s["ci_id"], s["name"], s["role"], s["vendor"], s["ports"], s["zone_nid"])
+           for s in e.switches])
+
+    _rows(lines, "sad.CiServer",
+          ["CiId", "HostName", "ServerRole", "NeighborhoodId", "CpuCores", "MemoryGb",
+           "StorageGb", "OperatingSystem", "IsVirtual", "SocketCount", "CoresPerSocket",
+           "Manufacturer", "Model", "RackPosition", "ClusterId", "IsHypervisor"],
+          [(s["ci_id"], s["name"], s["role"], s["zone_nid"], s["cpu"], s["memory_gb"],
+            s["storage_gb"], s["os"], 0, s.get("sockets"), s.get("cores_per_socket"),
+            s.get("vendor"), s.get("model"), s.get("rack"), s.get("cluster_id"),
+            s.get("hypervisor", 0)) for s in (e.servers + e.infra_servers)])
+
+    _rows(lines, "sad.CiVmInstance",
+          ["CiId", "VmName", "VcpuCount", "MemoryGb", "DiskGb", "PowerState",
+           "HostCiId", "VolumeCiId", "OperatingSystem"],
+          [(v["ci_id"], v["name"], v["vcpu"], v["memory_gb"], v["disk_gb"], "On",
+            v["host_ci"], v["volume_ci"], v["os"]) for v in e.vms])
+
+    _rows(lines, "sad.CiDatabaseInstance",
+          ["CiId", "InstanceName", "Engine", "Version", "SizeGb", "IsClustered"],
+          [(d["ci_id"], d["name"], d["engine"], d["version"], d["size_gb"], d["clustered"])
+           for d in e.databases])
+
+    _rows(lines, "sad.CiBusinessService",
+          ["CiId", "ServiceCode", "ServiceName", "Criticality", "RtoMinutes", "RpoMinutes"],
+          [(s["ci_id"], s["code"], s["name"], s["criticality"], s["rto"], s["rpo"])
+           for s in e.services])
+
+    _rows(lines, "sad.CiLoadBalancer", ["CiId", "DeviceName", "Vendor", "VirtualIp", "IsHaPair"],
+          [(b["ci_id"], b["name"], b["vendor"], b["vip"], b["ha"]) for b in e.balancers])
+
+    # ---- link the pre-existing tables to their CIs --------------------------
+    # Matched on the natural key rather than on a predicted identity: these tables
+    # allocate their own IDENTITY values, and joining on a guessed row id would
+    # attach a cluster's configuration item to whichever cluster happened to land
+    # on that number.
+    lines.append("-- attach existing rows to their configuration items")
+    for table, key_col, class_name in (
+        ("sad.CmdbApplication", "ApplicationCode", "cmdb_ci_appl"),
+        ("sad.InfrastructureCluster", "ClusterCode", "cmdb_ci_cluster"),
+        ("sad.ClusterNode", "HostName", "cmdb_ci_cluster_node"),
+        ("sad.Neighborhood", "NeighborhoodCode", "cmdb_ci_zone"),
+    ):
+        lines.append(
+            f"UPDATE t SET t.CiId = c.CiId FROM {table} t "
+            f"JOIN sad.ConfigurationItem c ON c.Name = t.{key_col} "
+            f"AND c.ClassName = '{class_name}' WHERE t.CiId IS NULL;")
+    lines.append("GO")
+    lines.append("")
+
+    lines.append("-- zone types, and the node-to-server link")
+    for z in e.zones:
+        lines.append(f"UPDATE sad.Neighborhood SET ZoneType = {_lit(z['type'])} "
+                     f"WHERE NeighborhoodCode = {_lit(z['code'])};")
+    lines.append("GO")
+    lines.append("")
+    for s in e.servers:
+        lines.append(f"UPDATE sad.ClusterNode SET ServerCiId = {s['ci_id']} "
+                     f"WHERE HostName = {_lit(s['node_host'])};")
+    lines.append("GO")
+    lines.append("")
+
+    # ---- the graph ----------------------------------------------------------
+    _rows(lines, "sad.CiRelationship", ["ParentCiId", "ChildCiId", "TypeId"],
+          [(p, c, t) for p, c, t in e.edges])
