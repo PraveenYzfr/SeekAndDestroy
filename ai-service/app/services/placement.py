@@ -128,6 +128,7 @@ def build_eligibility_context(
     requirement: HostingRequirement,
     cluster: InfrastructureCluster,
     change_risk: dict | None = None,
+    resiliency_profile: dict | None = None,
 ) -> tuple[eligibility.EligibilityContext, ClusterCapacitySnapshot]:
     """``change_risk`` is this cluster's row from
     itsm_repository.change_risk_for_clusters. Passed in rather than fetched here
@@ -137,6 +138,12 @@ def build_eligibility_context(
 
     Optional, and None is a valid answer: RULE-011 passes without it, so a caller
     that has no change data still gets a complete evaluation.
+
+    ``resiliency_profile`` is the same arrangement for RULE-012, with one
+    difference worth noting: change risk is per CLUSTER and so is a dict keyed by
+    cluster id, whereas resiliency is a property of the APPLICATION being placed.
+    It is therefore the same object for every candidate in a run, fetched once,
+    and it does not vary as the loop walks the estate.
     """
     snapshot = capacity.compute_cluster_capacity(cluster)
     projected = capacity.compute_projected_utilization(
@@ -148,6 +155,7 @@ def build_eligibility_context(
     ctx = eligibility.EligibilityContext(
         requirement=requirement, cluster=cluster, projected=projected,
         active_node_count=active_nodes, change_risk=change_risk,
+        resiliency_profile=resiliency_profile,
     )
     return ctx, snapshot
 
@@ -156,8 +164,11 @@ def evaluate_candidate(
     requirement: HostingRequirement,
     cluster: InfrastructureCluster,
     change_risk: dict | None = None,
+    resiliency_profile: dict | None = None,
 ) -> tuple[CandidateScore, eligibility.EligibilityContext]:
-    ctx, snapshot = build_eligibility_context(requirement, cluster, change_risk)
+    ctx, snapshot = build_eligibility_context(
+        requirement, cluster, change_risk, resiliency_profile
+    )
     rule_results = eligibility.evaluate_all(ctx, snapshot)
     eligible = eligibility.is_eligible(rule_results)
     cost = estimate_monthly_cost(cluster, requirement)
@@ -271,9 +282,29 @@ def find_and_score_candidates(
     except Exception as exc:  # noqa: BLE001
         logger.warning("placement.change_risk_unavailable", error=str(exc))
 
+    # The application's CMDB resiliency, fetched once. Unlike change risk this
+    # does not vary per candidate - it describes the workload being placed, not
+    # the cluster being considered - so one graph walk serves the whole run.
+    #
+    # Best-effort for the same reason as change risk, and it matters more here:
+    # RULE-012 rejects Critical and High workloads, so a failure that produced a
+    # partial profile rather than none could reject the entire estate on bad
+    # data. None is unambiguous - the rule declines to assess and passes.
+    resiliency_profile: dict | None = None
+    app_code = requirement.source_application_code
+    if app_code:
+        try:
+            from app.services import resiliency as _resiliency
+
+            resiliency_profile = _resiliency.profile_for_application(app_code).to_rule_input()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("placement.resiliency_unavailable", application=app_code, error=str(exc))
+
     evaluated: list[tuple[CandidateScore, eligibility.EligibilityContext, InfrastructureCluster]] = []
     for cluster in clusters:
-        candidate, ctx = evaluate_candidate(requirement, cluster, change_risk.get(cluster.ClusterId))
+        candidate, ctx = evaluate_candidate(
+            requirement, cluster, change_risk.get(cluster.ClusterId), resiliency_profile
+        )
         evaluated.append((candidate, ctx, cluster))
 
     eligible_triples = [t for t in evaluated if t[0].eligibility_status == "Eligible"]

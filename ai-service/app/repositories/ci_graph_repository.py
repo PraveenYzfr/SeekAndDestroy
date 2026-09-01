@@ -112,6 +112,10 @@ class Walk:
     nodes: tuple[GraphNode, ...]
     #: True when any path reached the depth ceiling - the result may be partial.
     hit_ceiling: bool
+    #: The ceiling that was REQUESTED, not the depth actually reached. The name
+    #: reads like it could be either; it is the cap. For how deep the walk got,
+    #: use `observed_depth`. Flagged by seekanddestroy-c2, who had to work it out
+    #: from behaviour rather than read it.
     max_depth: int
 
     def __iter__(self):
@@ -119,6 +123,16 @@ class Walk:
 
     def __len__(self) -> int:
         return len(self.nodes)
+
+    @property
+    def observed_depth(self) -> int:
+        """How deep the walk actually reached. 0 for an empty walk.
+
+        Distinct from `max_depth`, which is the requested cap. Both callers of
+        this module computed it by hand before it existed, which is the usual
+        sign it belongs here.
+        """
+        return max((n.depth for n in self.nodes), default=0)
 
     def of_class(self, class_name: str) -> tuple[GraphNode, ...]:
         return tuple(n for n in self.nodes if n.class_name == class_name)

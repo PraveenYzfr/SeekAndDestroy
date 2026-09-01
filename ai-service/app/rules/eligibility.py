@@ -1,7 +1,7 @@
-"""RULE-001 .. RULE-010 - deterministic hard eligibility rules.
+"""RULE-001 .. RULE-012 - deterministic hard eligibility rules.
 
 Every function takes plain data (never touches the database or the LLM) and
-returns a :class:`RuleResult`. :func:`evaluate_all` always runs all ten rules
+returns a :class:`RuleResult`. :func:`evaluate_all` always runs every rule
 - even after the first failure - so a rejected candidate's explanation can
 list every reason, not just the first one encountered.
 
@@ -59,6 +59,12 @@ class EligibilityContext:
     #: working and RULE-011 passes when the data is simply absent - an estate
     #: with no change management must not become entirely ineligible.
     change_risk: dict | None = None
+    #: Graph-derived resiliency for the workload's application, from
+    #: services.resiliency.ResiliencyProfile.to_rule_input(). Defaulted to None
+    #: so every existing construction keeps working and RULE-012 passes when the
+    #: CMDB has nothing to say - an estate without a populated CI graph must not
+    #: become entirely ineligible.
+    resiliency_profile: dict | None = None
 
 
 def rule_001_environment(ctx: EligibilityContext) -> RuleResult:
@@ -302,6 +308,109 @@ def rule_011_change_freeze(ctx: EligibilityContext) -> RuleResult:
     )
 
 
+def rule_012_single_point_of_failure(ctx: EligibilityContext) -> RuleResult:
+    """A Critical or High workload may not be left on a single failure domain.
+
+    RULE-010 asks whether the CANDIDATE has enough nodes. This asks whether the
+    APPLICATION, after this placement, still collapses onto one physical host,
+    one storage volume, one array, one switch, one zone or one site. Those are
+    different questions and the first cannot answer the second: a cluster with
+    twelve healthy nodes is a fine candidate and still leaves an application
+    single-homed if that application is only ever on that one cluster.
+
+    Measured rather than assumed - 607 of 1,200 applications in this estate have
+    a single point of failure that the node-count score rates as fully redundant.
+    One runs on 38 physical hosts inside a single zone.
+
+    WHAT IT CAN AND CANNOT KNOW
+
+    It can tell that a candidate ADDS diversity, when the weakest domain is the
+    cluster and this candidate is not already one the application uses. Placing a
+    single-cluster application onto a second cluster fixes the thing the rule is
+    complaining about, so it passes.
+
+    It cannot tell that a candidate adds storage or network diversity, because
+    which volume or switch a workload lands on is not decided at cluster-choice
+    time. When the weakest domain is one of those, the rule states the finding
+    and does not pretend this placement resolves it.
+
+    PASSES ON SILENCE, IN THREE WAYS
+      no profile at all      CMDB not populated - absence of evidence
+      unplaced application   nothing recorded to assess
+      truncated walk         the count is a floor, and a floor cannot
+                             establish a single point of failure
+
+    All three are one principle: reject on a fact, never on a gap. A gap that
+    rejects is how an incomplete CMDB quietly makes an estate unusable.
+    """
+    profile = ctx.resiliency_profile
+    criticality = ctx.requirement.criticality
+
+    if criticality not in ("Critical", "High"):
+        return RuleResult(
+            "RULE-012", "Single point of failure", True,
+            f"'{criticality}' criticality has no failure-domain diversity requirement.", {},
+        )
+    if not profile:
+        return RuleResult(
+            "RULE-012", "Single point of failure", True,
+            "No CMDB resiliency data for this application - not assessed.", {},
+        )
+    if profile.get("unplaced"):
+        return RuleResult(
+            "RULE-012", "Single point of failure", True,
+            "Application has no recorded placement in the CMDB - not assessed.", {},
+        )
+    if profile.get("truncated"):
+        return RuleResult(
+            "RULE-012", "Single point of failure", True,
+            "CMDB graph walk was truncated; redundancy is a lower bound and cannot "
+            "establish a single point of failure.",
+            {"truncated": True},
+        )
+    if not profile.get("single_point_of_failure"):
+        return RuleResult(
+            "RULE-012", "Single point of failure", True,
+            f"Application is {profile.get('redundancy')}-way redundant at its weakest "
+            f"point ({profile.get('weakest')}).",
+            {"redundancy": profile.get("redundancy"), "weakest": profile.get("weakest")},
+        )
+
+    weakest = profile.get("weakest")
+    evidence = {
+        "criticality": criticality,
+        "weakest_domain": weakest,
+        "redundancy": profile.get("redundancy"),
+        "domains": profile.get("domains", {}),
+    }
+
+    # The one case where this placement demonstrably fixes the problem.
+    if weakest == "cluster":
+        members = set(profile.get("weakest_members") or [])
+        if ctx.cluster.ClusterCode not in members:
+            named = ", ".join(sorted(members)) or "an unnamed cluster"
+            return RuleResult(
+                "RULE-012", "Single point of failure", True,
+                f"Application currently depends on a single cluster ({named}); placing it "
+                f"on {ctx.cluster.ClusterCode} adds a second.",
+                {**evidence, "resolves": True},
+            )
+        return RuleResult(
+            "RULE-012", "Single point of failure", False,
+            f"{criticality} workload would remain on a single cluster - "
+            f"{ctx.cluster.ClusterCode} is already the only cluster this application "
+            f"depends on.",
+            evidence,
+        )
+
+    return RuleResult(
+        "RULE-012", "Single point of failure", False,
+        f"{criticality} workload depends on a single {weakest}. This placement does not "
+        f"change that - which {weakest} it lands on is not decided by the choice of cluster.",
+        evidence,
+    )
+
+
 def evaluate_all(ctx: EligibilityContext, snapshot) -> list[RuleResult]:
     return [
         rule_001_environment(ctx),
@@ -315,6 +424,7 @@ def evaluate_all(ctx: EligibilityContext, snapshot) -> list[RuleResult]:
         rule_009_headroom(ctx),
         rule_010_resiliency(ctx),
         rule_011_change_freeze(ctx),
+        rule_012_single_point_of_failure(ctx),
     ]
 
 

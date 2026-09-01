@@ -113,6 +113,28 @@ class ResiliencyProfile:
             return False
         return self.redundancy == 1
 
+    def to_rule_input(self) -> dict:
+        """Flatten to the plain dict the eligibility rules consume.
+
+        app.rules.eligibility is deliberately database-free - every rule takes
+        data and returns a verdict - so the graph work happens here and the rule
+        receives the conclusion. Same posture as change_risk.
+
+        weakest_members is included because RULE-012 has to answer a question
+        the count alone cannot: whether the candidate cluster is ALREADY the
+        single thing this application depends on, or would be a second one.
+        """
+        weakest = self.domains.get(self.weakest) if self.weakest else None
+        return {
+            "redundancy": self.redundancy,
+            "weakest": self.weakest,
+            "weakest_members": list(weakest.members) if weakest else [],
+            "truncated": self.truncated,
+            "unplaced": self.unplaced,
+            "single_point_of_failure": self.is_single_point_of_failure,
+            "domains": {k: v.count for k, v in self.domains.items()},
+        }
+
     def summary(self) -> str:
         if self.unplaced:
             return f"{self.application_name} has no recorded placement - resiliency cannot be assessed."
