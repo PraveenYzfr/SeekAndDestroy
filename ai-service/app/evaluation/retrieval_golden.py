@@ -29,13 +29,34 @@ Two case families are not exact and are labelled `approximate` in the output:
 An approximate ground truth still compares modes fairly - dense, sparse and
 hybrid all face the same labels - so the dense-vs-sparse-vs-hybrid question is
 answerable even where the absolute recall number is soft.
+
+THE CONTROL CASE
+----------------
+One case, kind `control_prefix_match`, is deliberately unfalsifiable. It is the
+same shape as an `exact_identifier` case with one difference: the ticket it names
+is cited by nothing, so the only chunks containing the query term are its own
+prefixes and exact matching cannot lose.
+
+The real identifier cases are chosen the opposite way - the most-cited tickets in
+the corpus - so competing chunks genuinely carry the query term. The gap between
+the two is the part of a sparse score that came from retrieval rather than from
+the id being printed into the text. It is a reference line, not a result, and it
+is excluded from the headline means.
 """
 
 from __future__ import annotations
 
+import functools
+import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 from app.repositories.base import T, fetch_all
+
+#: INC1234567. Matched against note text to find cross-references between
+#: tickets. The seed writes them in this form and nothing else in the corpus
+#: looks like it.
+_INC_REF_RE = re.compile(r"\bINC\d{7}\b")
 
 
 @dataclass
@@ -48,6 +69,45 @@ class RetrievalCase:
     #: False when relevance is a proxy rather than entity membership.
     exact: bool = True
     notes: str = ""
+
+
+@functools.lru_cache(maxsize=1)
+def _citation_counts() -> tuple[dict[str, int], dict[str, int]]:
+    """How many OTHER incidents cite each ticket number in their notes.
+
+    Returns (cited_by_others, own_number_leaks).
+
+    Done in Python over one bulk read rather than in SQL. The natural query -
+    joining Incident to IncidentComment on `Text LIKE '%' + Number + '%'` - is a
+    non-sargable predicate evaluated across 89,831 comments per candidate row,
+    and it ran past ten minutes without returning. One pass with a regex takes
+    seconds. Cached because the callers below both need it.
+
+    The leak count is kept because it is the corpus invariant this whole
+    evaluation rests on: if notes start repeating their own ticket number again,
+    every identifier case silently becomes unfalsifiable, and the number that
+    detects it is this one.
+    """
+    numbers = {
+        r["IncidentId"]: r["Number"]
+        for r in fetch_all(
+            f"SELECT IncidentId, Number FROM {T('Incident')} WHERE Number IS NOT NULL",
+            max_rows=500_000,
+        )
+    }
+    cited: Counter[str] = Counter()
+    leaks: Counter[str] = Counter()
+    for row in fetch_all(
+        f"SELECT IncidentId, Text FROM {T('IncidentComment')}", max_rows=500_000
+    ):
+        own = numbers.get(row["IncidentId"])
+        # set(): two mentions in one note is one citing ticket, not two.
+        for ref in set(_INC_REF_RE.findall(row["Text"] or "")):
+            if ref == own:
+                leaks[ref] += 1
+            else:
+                cited[ref] += 1
+    return dict(cited), dict(leaks)
 
 
 def _incident_chunk_ids(incident_ids: list[int]) -> set[str]:
@@ -70,24 +130,50 @@ def build_cases(limit_per_kind: int = 3) -> list[RetrievalCase]:
     cases: list[RetrievalCase] = []
 
     # --- exact identifier ---------------------------------------------------
-    # The case BM25 exists for, and the one that was untestable until the ITSM
-    # seed landed: before it there were zero INC-numbers in the entire index, so
-    # the sparse half had nothing to match and every hybrid win came from dense.
-    rows = fetch_all(
-        f"SELECT TOP (:n) IncidentId, Number FROM {T('Incident')} "
-        f"WHERE Number IS NOT NULL ORDER BY IncidentId",
-        {"n": limit_per_kind},
-        max_rows=limit_per_kind,
-    )
-    for row in rows:
+    # BM25's case. Chosen by COMPETITION, not by id order.
+    #
+    # This used to take the three lowest IncidentIds, and all three turned out to
+    # be among the 2,117 incidents no other ticket references. Nothing competed
+    # with them, so retrieval could not rank anything above the right answer and
+    # the case could not fail. It was measuring that we print the ticket number
+    # into every chunk's prefix.
+    #
+    # A query for INC1008825 is a real test because nine OTHER incidents cite that
+    # number in their notes. Those chunks contain the query term too, so the
+    # retriever has to put the ticket itself above the tickets discussing it.
+    # That is the thing that can go wrong, and now it can show up.
+    cited, leaks = _citation_counts()
+    if leaks:
+        # Loud on purpose. Notes repeating their own number is exactly the
+        # condition that made these cases unfalsifiable before.
+        print(
+            f"  WARNING: {len(leaks)} ticket(s) cite their own number in their own "
+            f"notes - identifier cases for those cannot fail."
+        )
+    by_number = {
+        r["Number"]: r["IncidentId"]
+        for r in fetch_all(
+            f"SELECT IncidentId, Number FROM {T('Incident')} WHERE Number IS NOT NULL",
+            max_rows=500_000,
+        )
+    }
+    contested = sorted(
+        ((n, c) for n, c in cited.items() if c >= 5 and n in by_number),
+        key=lambda pair: (-pair[1], pair[0]),
+    )[:limit_per_kind]
+    for number, citations in contested:
         cases.append(
             RetrievalCase(
-                id=f"exact-{row['Number']}",
-                query=str(row["Number"]),
+                id=f"exact-{number}",
+                query=str(number),
                 kind="exact_identifier",
-                relevant=_incident_chunk_ids([row["IncidentId"]]),
+                relevant=_incident_chunk_ids([by_number[number]]),
                 exact=True,
-                notes="Dense embeddings treat an opaque identifier as noise; this is BM25's case.",
+                notes=(
+                    f"{citations} other incidents cite this number in their notes, so "
+                    "those chunks carry the query term and compete. Falsifiable: the "
+                    "retriever can rank a citing ticket above the ticket itself."
+                ),
             )
         )
 
@@ -171,6 +257,37 @@ def build_cases(limit_per_kind: int = 3) -> list[RetrievalCase]:
                     notes=f"{len(rows)} incidents, spanning clusters regardless of load.",
                 )
             )
+
+    # --- CONTROL: deliberately unfalsifiable ---------------------------------
+    # Same query shape as exact_identifier, one difference: this ticket is cited
+    # by NOTHING. No other chunk in the corpus contains its number, so the only
+    # documents carrying the query term are its own - via the prefix we print on
+    # every chunk. Exact matching wins by construction and cannot not win.
+    #
+    # It is a reference line, not a result. The gap between it and the real
+    # identifier cases is the part of the score that came from retrieval rather
+    # than from string matching. On its own, a sparse score of 0.95 reads as
+    # evidence; beside a control that also scores 0.95, it reads correctly.
+    #
+    # Kept rather than deleted, on seekanddestroy-e7's suggestion. Deleting the
+    # rigged case would have removed the evidence that the problem existed.
+    uncited = sorted(n for n in by_number if n not in cited)
+    if uncited:
+        number = uncited[0]
+        cases.append(
+            RetrievalCase(
+                id=f"control-uncited-{number}",
+                query=str(number),
+                kind="control_prefix_match",
+                relevant=_incident_chunk_ids([by_number[number]]),
+                exact=True,
+                notes=(
+                    f"CONTROL - cannot fail. None of the {len(by_number):,} tickets cite "
+                    "this one, so the only chunks carrying the query term are its own "
+                    "prefixes. Measures string matching, not retrieval. The ceiling."
+                ),
+            )
+        )
 
     # --- recurrence: a problem and its incidents ----------------------------
     # EXACT, via sad.Incident.ProblemId. Labelled from the foreign key rather

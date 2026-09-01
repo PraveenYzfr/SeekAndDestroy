@@ -113,6 +113,9 @@ def main() -> int:
     modes = [args.mode] if args.mode else list(MODES)
     results = {m: run_mode(m, cases, args.k, args.top_k) for m in modes}
 
+    # Headline means exclude the control for the same reason.
+    scored = {m: [s for s in lst if s.query not in {c.query for c in cases if c.kind == "control_prefix_match"}]
+              for m, lst in results.items()}
     summary = {
         m: {
             "recall_at_k": retrieval_metrics.mean(s, "recall_at_k"),
@@ -120,7 +123,7 @@ def main() -> int:
             "ndcg_at_k": retrieval_metrics.mean(s, "ndcg_at_k"),
             "cases": len(s),
         }
-        for m, s in results.items()
+        for m, s in scored.items()
     }
 
     if args.json or args.baseline:
@@ -174,6 +177,27 @@ def main() -> int:
                     f"   MRR {retrieval_metrics.mean(relevant_scores, 'mrr'):.3f}"
                     f"   NDCG {retrieval_metrics.mean(relevant_scores, 'ndcg_at_k'):.3f}"
                 )
+    # The control, reported apart from everything else. Averaging a case that
+    # cannot fail into the headline would raise every mode's score by the same
+    # amount and hide the one comparison it exists to enable.
+    control_ids = {c.query for c in cases if c.kind == "control_prefix_match"}
+    real_id_ids = {c.query for c in cases if c.kind == "exact_identifier"}
+    if control_ids and real_id_ids:
+        print()
+        print("  identifier retrieval vs the rigged control:")
+        for m in modes:
+            ctrl = [s for s in results[m] if s.query in control_ids]
+            real = [s for s in results[m] if s.query in real_id_ids]
+            if ctrl and real:
+                c = retrieval_metrics.mean(ctrl, "mrr")
+                r = retrieval_metrics.mean(real, "mrr")
+                print(
+                    f"      {m:<8} control MRR {c:.3f}   real MRR {r:.3f}"
+                    f"   gap {c - r:+.3f}"
+                )
+        print("    the control cannot fail - the ticket number is in every chunk's prefix.")
+        print("    a real score near the control is string matching; well below it is retrieval.")
+
     approximate = [c.id for c in cases if not c.exact]
     if approximate:
         print()
