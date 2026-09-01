@@ -98,6 +98,10 @@ export default function ReviewChoice({
   // Collapsed-set rather than a single expanded id: the figures are the
   // point of this panel, so every option shows them unless folded away.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [showRejected, setShowRejected] = useState(false);
+  const notRecommended = options.filter((o) => o.eligibility_status !== "Eligible");
+  const visible = showRejected ? options : eligible;
+  const steps = payload.next_steps;
 
   function choose(option: ReviewOption, hostName?: string) {
     setCluster(option.cluster_code);
@@ -111,7 +115,19 @@ export default function ReviewChoice({
       <div>
         <p>{payload.message}</p>
         <p>{payload.top_candidates.join(", ")}</p>
-        <div className="chat-review-actions">
+        {notRecommended.length > 0 && (
+        <button
+          className="secondary"
+          style={{ marginBottom: 10 }}
+          onClick={() => setShowRejected(!showRejected)}
+        >
+          {showRejected
+            ? `Hide ${notRecommended.length} not recommended`
+            : `Show ${notRecommended.length} cluster(s) that were not recommended`}
+        </button>
+      )}
+
+      <div className="chat-review-actions">
           <button disabled={busy || decided} onClick={() => onDecide(investigationId, "Approve")}>
             Approve
           </button>
@@ -125,9 +141,34 @@ export default function ReviewChoice({
 
   return (
     <div>
-      <p>{payload.message}</p>
+      <p>{eligible.length === 0 && steps ? "Nothing here can take this workload." : payload.message}</p>
 
-      {options.map((option) => {
+      {/* The next move, when there is one worth offering. This is a search: with
+          a usable shortlist `sufficient` is true and none of this renders - the
+          reader picks one and leaves. When it is not, a choice beats an
+          explanation of every rule that failed. Each option carries what it
+          would actually buy, computed from the candidates already evaluated. */}
+      {steps && !steps.sufficient && steps.choices.length > 0 && (
+        <div className="explain-box" style={{ marginBottom: 10 }}>
+          <strong>What next?</strong>
+          <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+            {steps.choices.map((choice, i) => (
+              <li key={i}>
+                {choice.label}
+                {choice.detail ? <span className="stat-label"> — {choice.detail}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Not-recommended clusters are folded away by default. The chat used to
+          render every one of them with a full capacity table and the line
+          "cluster rejected - hosts are only ranked inside eligible clusters",
+          so a search that found nothing produced three screens of tables for
+          options the reader cannot choose. They stay reachable, because "why
+          not that one" is fair, but they are not the answer. */}
+      {visible.map((option) => {
         const isChosen = option.cluster_code === cluster;
         const isRejected = option.eligibility_status !== "Eligible";
         const isOpen = !collapsed.has(option.cluster_code);

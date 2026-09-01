@@ -319,6 +319,20 @@ export interface RunInvestigationResult {
      *  hosts" - hosts are only ranked inside eligible clusters. */
     cluster_eligibility?: Record<string, string>;
     message: string;
+    /** What to offer when the shortlist is not good enough - see
+     *  app/services/refinement.py. `sufficient` is true on a normal result and
+     *  the UI shows none of this: the reader picks one and leaves. */
+    next_steps?: {
+      eligible_total: number;
+      shown: number;
+      more_available: number;
+      sufficient: boolean;
+      choices: {
+        action: "show_more" | "refine_requirement" | "change_constraints";
+        label: string;
+        detail: string;
+      }[];
+    };
   };
   final_report?: {
     title: string;
