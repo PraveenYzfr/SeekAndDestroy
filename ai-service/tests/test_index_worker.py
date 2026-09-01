@@ -28,6 +28,41 @@ def _now():
 
 
 @pytest.fixture(autouse=True)
+def bounded_corpus(monkeypatch):
+    """Every test here drives the real pipeline, so bound what it walks.
+
+    These assert JOB semantics - a stale run is reclaimed, a failed run resumes
+    rather than restarting, a cursor never advances past an unwritten document.
+    None of that depends on corpus size, and the corpus is now 54,555
+    configuration items, 30,105 VMs and 89,831 work notes. Unbounded, this file
+    stalled a full suite run twice: the progress line simply stopped, with no
+    failure and no output, which reads as a hang rather than as slow work.
+
+    Bounded at iter_batches rather than at pipeline.SOURCES. Patching SOURCES
+    looks correct and does nothing - execute() uses that tuple only to seed the
+    per-source tally, and the generators it drains are wired separately. I made
+    exactly that mistake in test_differential_index.py an hour ago and the only
+    symptom was that the tests were still slow.
+
+    Two sources, not one: resumability is about a cursor advancing per source,
+    and a single source cannot distinguish "per source" from "one global clock".
+    """
+    from app.retrieval import pipeline
+
+    allowed = ("cluster", "application")
+    real_iter = pipeline.iter_batches
+
+    def bounded(*args, **kwargs):
+        for batch in real_iter(*args, **kwargs):
+            if batch.source in allowed:
+                yield batch
+
+    monkeypatch.setattr(pipeline, "iter_batches", bounded)
+    monkeypatch.setattr(pipeline, "SOURCES", allowed)
+    return allowed
+
+
+@pytest.fixture(autouse=True)
 def offline_embedder(monkeypatch):
     """Hash embedder and in-memory store. autouse, because a test that forgets
     it would not fail - it would bill Gemini for the whole corpus."""
