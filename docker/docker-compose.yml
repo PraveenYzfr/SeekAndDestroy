@@ -316,6 +316,10 @@ services:
       - api-gateway
 
   prometheus:
+    networks:
+      default:
+      hub:
+        aliases: ["prometheus"]
     profiles: ["observability"]
     image: prom/prometheus:latest
     # Loopback only - Prometheus has no auth and its /api/v1/query endpoint
@@ -332,6 +336,10 @@ services:
     # up as "down" in Prometheus, which is normal, not an error.
 
   grafana:
+    networks:
+      default:
+      hub:
+        aliases: ["grafana"]
     profiles: ["observability"]
     image: grafana/grafana:latest
     ports:
