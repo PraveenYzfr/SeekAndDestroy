@@ -375,6 +375,20 @@ export interface RunInvestigationResult {
 /** One model role and the model currently serving it.
  *  `source` is "config" (from the deployed settings) or "override" (chosen on
  *  the admin screen). The distinction is what the Reset control acts on. */
+/** What answers for a role when its primary provider fails. Sent alongside
+ *  the role rather than as a separate list - see app/api/routes_admin.py's
+ *  `_fallback_for`. `configured: false` means nobody has chosen one; the
+ *  provider/model are then null rather than a guessed default, because a
+ *  fallback nobody selected is a model nobody evaluated. */
+export interface ModelRoleFallback {
+  /** The role name this fallback is stored under - "<role>.fallback" -
+   *  which is also what PUT/DELETE /admin/model-roles/{role} expects. */
+  role: string;
+  provider: string | null;
+  model: string | null;
+  configured: boolean;
+}
+
 export interface ModelRole {
   name: string;
   title: string;
@@ -385,6 +399,7 @@ export interface ModelRole {
   source: "config" | "override";
   updated_by: string | null;
   updated_at: string | null;
+  fallback: ModelRoleFallback;
 }
 
 /** What a provider will serve right now. `available: false` carries the reason

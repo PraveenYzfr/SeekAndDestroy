@@ -2,6 +2,101 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { EvaluationModel, EvaluationResult, ModelProvider, ModelRole } from "../types";
 
+/** One provider+model choice, wired to assign/reset. Used twice per role card -
+ *  once for the primary model, once for its fallback - so the two behave
+ *  identically instead of drifting into two slightly different controls.
+ *
+ *  `roleKey` is what gets sent to the API: the role's own name for the
+ *  primary, "<role>.fallback" for the backup - see ModelRoleFallback.role.
+ *  Passing an empty `provider`/`model` (the unconfigured-fallback case) is
+ *  valid: PENDING then has nothing to prefill, so both selects start on
+ *  "choose one" rather than showing a pairing that does not exist. */
+function RoleModelPicker({
+  roleKey,
+  provider,
+  model,
+  providers,
+  pending,
+  setPending,
+  busy,
+  assign,
+}: {
+  roleKey: string;
+  provider: string;
+  model: string;
+  providers: ModelProvider[];
+  pending: Record<string, { provider: string; model: string }>;
+  setPending: React.Dispatch<React.SetStateAction<Record<string, { provider: string; model: string }>>>;
+  busy: string | null;
+  assign: (role: string, value: string) => void;
+}) {
+  const pendingHere = pending[roleKey];
+  return (
+    <div style={{ display: "flex", gap: 8 }}>
+      <select
+        aria-label="Provider"
+        disabled={busy === roleKey}
+        value={pendingHere?.provider ?? provider}
+        onChange={(e) =>
+          setPending((prev) => ({
+            ...prev,
+            // Model deliberately cleared: the previous model belongs to the
+            // previous provider, and carrying it across would offer a
+            // pairing that does not exist.
+            [roleKey]: { provider: e.target.value, model: "" },
+          }))
+        }
+        style={{ flex: "0 0 40%" }}
+      >
+        {/* No provider chosen at all yet (an unconfigured fallback) - an empty
+            option so the select does not silently default to the first
+            provider in the list without the operator having picked it. */}
+        {!provider && !pendingHere && <option value="">not set</option>}
+        {/* The configured provider may not be reachable right now - a key
+            removed, an outage. It stays selectable so the screen shows what
+            IS configured rather than quietly implying something else. */}
+        {provider && !providers.some((p) => p.provider === provider && p.available) && (
+          <option value={provider}>{provider} (unavailable)</option>
+        )}
+        {providers
+          .filter((p) => p.available)
+          .map((p) => (
+            <option key={p.provider} value={p.provider}>
+              {p.provider}
+            </option>
+          ))}
+      </select>
+
+      <select
+        aria-label="Model"
+        disabled={busy === roleKey}
+        value={pendingHere?.model ?? model}
+        onChange={(e) => {
+          const chosenProvider = pendingHere?.provider ?? provider;
+          if (e.target.value) void assign(roleKey, `${chosenProvider}::${e.target.value}`);
+        }}
+        style={{ flex: 1 }}
+      >
+        {/* Prompt shown only while a provider change is pending, so the select
+            never sits on a blank that looks like a cleared setting. */}
+        {pendingHere && !pendingHere.model && <option value="">select a model...</option>}
+        {!pendingHere && !model && <option value="">not set</option>}
+        {/* The model in effect may have been retired since it was chosen.
+            Showing it keeps the control honest about what is actually
+            running rather than displaying a neighbour. */}
+        {!pendingHere && model && !providers.some((p) => p.provider === provider && p.models.includes(model)) && (
+          <option value={model}>{model} (not in the current list)</option>
+        )}
+        {(providers.find((p) => p.provider === (pendingHere?.provider ?? provider))?.models ?? []).map((m) => (
+          <option key={m} value={m}>
+            {m}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 /** Administrator screen: which model runs each role.
  *
  *  Three things this screen deliberately does:
@@ -166,72 +261,16 @@ export default function ModelSettings() {
                 money on the next investigation and an accidental keystroke
                 should not be able to do that. Nothing is written until a model
                 is chosen. */}
-            <div style={{ display: "flex", gap: 8 }}>
-              <select
-                aria-label="Provider"
-                disabled={busy === role.name}
-                value={pending[role.name]?.provider ?? role.provider}
-                onChange={(e) =>
-                  setPending((prev) => ({
-                    ...prev,
-                    // Model deliberately cleared: the previous model belongs to
-                    // the previous provider, and carrying it across would offer
-                    // a pairing that does not exist.
-                    [role.name]: { provider: e.target.value, model: "" },
-                  }))
-                }
-                style={{ flex: "0 0 40%" }}
-              >
-                {/* The configured provider may not be reachable right now - a
-                    key removed, an outage. It stays selectable so the screen
-                    shows what IS configured rather than quietly implying
-                    something else. */}
-                {!providers.some((p) => p.provider === role.provider && p.available) && (
-                  <option value={role.provider}>{role.provider} (unavailable)</option>
-                )}
-                {providers
-                  .filter((p) => p.available)
-                  .map((p) => (
-                    <option key={p.provider} value={p.provider}>
-                      {p.provider}
-                    </option>
-                  ))}
-              </select>
-
-              <select
-                aria-label="Model"
-                disabled={busy === role.name}
-                value={pending[role.name]?.model ?? role.model}
-                onChange={(e) => {
-                  const provider = pending[role.name]?.provider ?? role.provider;
-                  if (e.target.value) void assign(role.name, `${provider}::${e.target.value}`);
-                }}
-                style={{ flex: 1 }}
-              >
-                {/* Prompt shown only while a provider change is pending, so the
-                    select never sits on a blank that looks like a cleared
-                    setting. */}
-                {pending[role.name] && !pending[role.name].model && (
-                  <option value="">select a model...</option>
-                )}
-                {/* The model in effect may have been retired since it was
-                    chosen. Showing it keeps the control honest about what is
-                    actually running rather than displaying a neighbour. */}
-                {!pending[role.name] &&
-                  !providers.some(
-                    (p) => p.provider === role.provider && p.models.includes(role.model),
-                  ) && <option value={role.model}>{role.model} (not in the current list)</option>}
-                {(
-                  providers.find(
-                    (p) => p.provider === (pending[role.name]?.provider ?? role.provider),
-                  )?.models ?? []
-                ).map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <RoleModelPicker
+              roleKey={role.name}
+              provider={role.provider}
+              model={role.model}
+              providers={providers}
+              pending={pending}
+              setPending={setPending}
+              busy={busy}
+              assign={assign}
+            />
           </div>
 
           {role.source === "override" && (
@@ -242,6 +281,43 @@ export default function ModelSettings() {
               style={{ marginTop: 8 }}
             >
               Reset to configured default
+            </button>
+          )}
+
+          {/* WHAT ANSWERS WHEN THE PRIMARY FAILS - never chosen automatically.
+              Per role rather than one estate-wide spare: extraction wants
+              strict schema adherence, reporting wants readable prose, and a
+              single substitute is right for at most one of them. Being wrong
+              for the others is a quiet drop in output quality, not an error -
+              exactly the failure nobody investigates. Unconfigured is a
+              legitimate, common state, not an incomplete one: the role simply
+              answers alone if its primary fails, same as before fallbacks
+              existed. */}
+          <div className="form-row" style={{ maxWidth: 520, marginTop: 14 }}>
+            <label>
+              Fallback, if {role.provider} / {role.model} fails:{" "}
+              {role.fallback.configured ? `${role.fallback.provider} / ${role.fallback.model}` : "not set"}
+            </label>
+            <RoleModelPicker
+              roleKey={role.fallback.role}
+              provider={role.fallback.provider ?? ""}
+              model={role.fallback.model ?? ""}
+              providers={providers}
+              pending={pending}
+              setPending={setPending}
+              busy={busy}
+              assign={assign}
+            />
+          </div>
+
+          {role.fallback.configured && (
+            <button
+              className="secondary"
+              disabled={busy === role.fallback.role}
+              onClick={() => void reset(role.fallback.role)}
+              style={{ marginTop: 8 }}
+            >
+              Clear fallback
             </button>
           )}
         </div>

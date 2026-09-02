@@ -221,12 +221,12 @@ def issue_dev_token(payload: DevTokenRequest):
         raise ProblemDetailsError(404, "Employee not found", f"No employee with number {payload.employee_number!r}.")
     if not employee.IsActive:
         raise ProblemDetailsError(403, "Employee inactive", "This employee is not active.")
-    token = create_local_token(
-        employee_id=employee.EmployeeId, employee_number=employee.EmployeeNumber,
-        display_name=employee.DisplayName, email=employee.Email,
-    )
-    return {
-        "access_token": token, "token_type": "bearer",
-        "expires_in_minutes": settings.local_token_ttl_minutes,
-        "employee_id": employee.EmployeeId, "display_name": employee.DisplayName,
-    }
+    # Same shape the real login path returns - see _token_response. This used
+    # to build its own dict by hand and left out is_admin and employee_number,
+    # so every dev-token session looked like a non-admin regardless of the
+    # employee's actual IsAdmin flag: the Model Settings link stayed hidden
+    # and the admin API 403'd, for real administrators, testing locally,
+    # every time - discovered testing the Model Settings fallback UI, where a
+    # dev-token login for E1001 (IsAdmin=1 in the database) reported
+    # is_admin=false.
+    return _token_response(employee, settings.local_token_ttl_minutes)
