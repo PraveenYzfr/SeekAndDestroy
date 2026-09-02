@@ -11,7 +11,7 @@ from __future__ import annotations
 from app.services import refinement
 
 
-def _candidate(status, failed_rules=(), free=None):
+def _candidate(status, failed_rules=(), free=None, data_center=None):
     """A candidate score as placement.evaluate_candidate produces it."""
     rules = [{"rule_id": "RULE-001", "name": "Environment compatibility", "passed": True}]
     for rule_id, name in failed_rules:
@@ -21,6 +21,7 @@ def _candidate(status, failed_rules=(), free=None):
         "eligibility_status": status,
         "rule_results": rules,
         "snapshot": free or {},
+        "data_center": data_center,
     }
 
 
@@ -132,3 +133,53 @@ class TestNextSteps:
         steps = refinement.next_steps(candidates, {"cpu_cores": 20}, shown=3)
         refine = [c for c in steps["choices"] if c["action"] == "refine_requirement"]
         assert refine and all("would make" in c["detail"] for c in refine)
+
+
+# =============================================================================
+# data_center_choice: "give me from a different DC" must answer with real
+# availability, not a guess and not the same shortlist repeated
+# =============================================================================
+class TestDataCenterChoice:
+    def test_groups_eligible_candidates_by_data_center(self):
+        candidates = [
+            _candidate("Eligible", data_center="atl"),
+            _candidate("Eligible", data_center="atl"),
+            _candidate("Eligible", data_center="cmh"),
+            _candidate("Rejected", data_center="phx"),
+        ]
+        result = refinement.data_center_choice(candidates, excluded=["phx"])
+        assert result["excluded_data_centers"] == ["phx"]
+        assert result["has_genuine_alternative"] is True
+        by_dc = {row["data_center"]: row["eligible_count"] for row in result["available_data_centers"]}
+        assert by_dc == {"atl": 2, "cmh": 1}
+        # A rejected candidate must never inflate a count the engineer would
+        # act on - phx has zero ELIGIBLE candidates even though it appears
+        # in the input, and it is excluded anyway so it must not appear at all.
+        assert "phx" not in by_dc
+
+    def test_most_available_data_center_is_listed_first(self):
+        candidates = [_candidate("Eligible", data_center="cmh")] + [
+            _candidate("Eligible", data_center="atl") for _ in range(3)
+        ]
+        result = refinement.data_center_choice(candidates)
+        assert result["available_data_centers"][0]["data_center"] == "atl"
+
+    def test_no_genuine_alternative_when_nothing_eligible_survives(self):
+        """The control: excluding the only DC with capacity must say so
+        plainly, not offer an empty choice as if it were a real one."""
+        candidates = [_candidate("Rejected", [CAPACITY], data_center="atl")]
+        result = refinement.data_center_choice(candidates, excluded=["cmh"])
+        assert result["has_genuine_alternative"] is False
+        assert result["available_data_centers"] == []
+
+    def test_candidate_with_no_data_center_is_silently_skipped_not_counted_as_unknown(self):
+        """A candidate scored before this field existed (or from a code path
+        that never sets it) must not corrupt the grouping with a None/blank
+        bucket - it is simply absent from a breakdown it cannot inform."""
+        candidates = [_candidate("Eligible", data_center=None), _candidate("Eligible", data_center="atl")]
+        result = refinement.data_center_choice(candidates)
+        assert result["available_data_centers"] == [{"data_center": "atl", "eligible_count": 1}]
+
+    def test_excluded_defaults_to_empty_list_not_none(self):
+        result = refinement.data_center_choice([_candidate("Eligible", data_center="atl")])
+        assert result["excluded_data_centers"] == []

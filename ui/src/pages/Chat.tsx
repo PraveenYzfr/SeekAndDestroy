@@ -77,7 +77,14 @@ function refineFromRejection(
   rejectedCluster?: string | null,
 ): string {
   const c = option.constraint;
-  if (c.exclude_data_center) return `Show other options, but not in ${c.exclude_data_center}.`;
+  // "data center", spelled out - not folded into "in {name}". Real DC names
+  // look like "Denver-DC1", where the trailing digit means \bdc\b (the
+  // location-word regex app.graph.conversation relies on to know THIS
+  // re-scope is about a site, not some other dimension) does not match: "C"
+  // and "1" share no word boundary. Spelling it out is what makes this
+  // button's click reliably trigger the exclusion the rest of the feature
+  // was built for, regardless of what any given DC happens to be named.
+  if (c.exclude_data_center) return `Show other options, but not in the ${c.exclude_data_center} data center.`;
   if (c.min_headroom_percent) return `Show options with at least ${c.min_headroom_percent}% headroom after the move.`;
   if (c.min_resiliency) return "Show options with better failure-domain separation.";
   if (c.min_change_risk) return "Show options on clusters with less change activity.";

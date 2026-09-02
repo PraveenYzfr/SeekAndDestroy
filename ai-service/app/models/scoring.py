@@ -26,6 +26,13 @@ class SubScores(BaseModel):
 class CandidateScore(BaseModel):
     cluster_id: int
     cluster_code: str
+    #: Carried here, not just on InfrastructureCluster, because a follow-up
+    #: ("give me from a different DC") needs to know which data centers a
+    #: PRIOR investigation's shortlist already covered - and by then all that
+    #: survives is the persisted candidate_scores, not the cluster rows. See
+    #: app.services.refinement.rejection_reasons, which already reads this
+    #: field (candidate.get("data_center")) and, until now, always got None.
+    data_center: Optional[str] = None
     eligibility_status: str  # Eligible | Rejected
     rule_results: list[dict]
     snapshot: Optional[ClusterCapacitySnapshot] = None

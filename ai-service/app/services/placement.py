@@ -79,7 +79,7 @@ def requirement_for_application(app: CmdbApplication) -> HostingRequirement:
 
 def discover_candidate_clusters(
     requirement: HostingRequirement, *, exclude_cluster_id: int | None = None,
-    data_center: str | None = None, limit: int = 400,
+    data_center: str | None = None, exclude_data_centers: list[str] | None = None, limit: int = 400,
 ) -> list[InfrastructureCluster]:
     """Narrows the estate with a cheap SQL-level environment filter before any
     per-candidate work happens - at 256 clusters, evaluating every one of
@@ -93,12 +93,21 @@ def discover_candidate_clusters(
     (dict lookups are effectively free; the repository's single-value
     ``platform=`` filter can't express "any compatible platform" in one
     query).
+
+    ``exclude_data_centers`` is how "give me from a different DC" becomes a
+    real re-run instead of a silent repeat of the same shortlist: the caller
+    (a follow-up re-scope) passes the data center(s) the engineer already saw
+    and rejected. Independent of ``data_center`` (a positive "only this DC"
+    filter, used for an explicit location request) - the two are never both
+    meaningful in the same call, but nothing here assumes that; SQL just
+    applies whatever combination it is given.
     """
     from app.models.enums import PLATFORM_COMPATIBILITY, PRODUCTION_ENVIRONMENTS
 
     environment = requirement.environment if requirement.environment not in PRODUCTION_ENVIRONMENTS else "Production"
     candidates = cluster_repository.search(
-        environment=environment, exclude_ineligible_lifecycle=True, data_center=data_center, limit=limit,
+        environment=environment, exclude_ineligible_lifecycle=True, data_center=data_center,
+        exclude_data_centers=exclude_data_centers, limit=limit,
     )
     compatible_platforms = PLATFORM_COMPATIBILITY.get(requirement.platform)
     if compatible_platforms:
@@ -175,6 +184,7 @@ def evaluate_candidate(
     candidate = CandidateScore(
         cluster_id=cluster.ClusterId,
         cluster_code=cluster.ClusterCode,
+        data_center=cluster.DataCenter,
         eligibility_status="Eligible" if eligible else "Rejected",
         rule_results=[asdict(r) for r in rule_results],
         snapshot=snapshot,
@@ -256,14 +266,17 @@ def score_candidate(
 
 def find_and_score_candidates(
     requirement: HostingRequirement, *, exclude_cluster_id: int | None = None,
-    data_center: str | None = None, top_n: int | None = None,
+    data_center: str | None = None, exclude_data_centers: list[str] | None = None, top_n: int | None = None,
 ) -> list[CandidateScore]:
     """``top_n``, when set, caps how many *eligible* candidates are returned
     (an infra engineer asking "top 5 best clusters" shouldn't have to scroll
     past all 15). Rejected candidates are never truncated - "why was X
     rejected" stays answerable regardless of top_n.
     """
-    clusters = discover_candidate_clusters(requirement, exclude_cluster_id=exclude_cluster_id, data_center=data_center)
+    clusters = discover_candidate_clusters(
+        requirement, exclude_cluster_id=exclude_cluster_id, data_center=data_center,
+        exclude_data_centers=exclude_data_centers,
+    )
 
     # One query for every candidate's change record, before the loop. Fetching
     # inside evaluate_candidate would issue 256 queries on the hot path to

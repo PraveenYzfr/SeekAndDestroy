@@ -28,6 +28,7 @@ def search(
     availability_tier: str | None = None,
     region: str | None = None,
     data_center: str | None = None,
+    exclude_data_centers: list[str] | None = None,
     exclude_ineligible_lifecycle: bool = True,
     limit: int = 100,
 ) -> list[InfrastructureCluster]:
@@ -51,6 +52,17 @@ def search(
     if data_center:
         clauses.append("DataCenter = :data_center")
         params["data_center"] = data_center
+    if exclude_data_centers:
+        # A caller with nothing to exclude passes None or [], never a list
+        # that happens to be empty for a different reason - "no preference
+        # stated" and "exclude everything" must stay distinguishable at the
+        # call site, not collapse into the same falsy check here.
+        placeholders = []
+        for i, dc in enumerate(exclude_data_centers):
+            key = f"excl_dc_{i}"
+            placeholders.append(f":{key}")
+            params[key] = dc
+        clauses.append(f"DataCenter NOT IN ({', '.join(placeholders)})")
     if exclude_ineligible_lifecycle:
         placeholders = []
         for i, status in enumerate(sorted(INELIGIBLE_LIFECYCLE_STATES)):

@@ -326,6 +326,41 @@ def rejection_follow_ups(failed_rule_ids: list[str]) -> list[str]:
 # do not decide on their behalf what "no" meant.
 
 
+def data_center_choice(candidates: list[dict], excluded: list[str] | None = None) -> dict:
+    """Which data centers actually have eligible capacity for this run, so a
+    re-scope ("give me from a different DC") can hand back a genuine choice
+    instead of either the same shortlist or a silent, unexplained swap.
+
+    Praveen, on being handed a report built from an unrelated incident
+    search instead of an answer: "should have given me the genuine next set
+    or asked me which DC you prefer and told me these are the DCs best
+    choice." Both halves: this groups the ALREADY-EVALUATED candidates from
+    this run (nothing here re-queries or re-scores - same rule as
+    next_steps above) by data_center, so the caller can present real
+    availability rather than a guess.
+
+    ``excluded`` is echoed back rather than re-derived, so a reader can see
+    what was ruled out without cross-referencing the request that produced
+    this result.
+    """
+    eligible = [c for c in candidates if c.get("eligibility_status") == "Eligible"]
+    by_dc: dict[str, int] = {}
+    for c in eligible:
+        dc = c.get("data_center")
+        if dc:
+            by_dc[dc] = by_dc.get(dc, 0) + 1
+    return {
+        "excluded_data_centers": list(excluded or []),
+        "available_data_centers": [
+            {"data_center": dc, "eligible_count": n}
+            for dc, n in sorted(by_dc.items(), key=lambda kv: -kv[1])
+        ],
+        # False when excluding left nothing real to offer - the caller's cue
+        # to say so plainly rather than present an empty "which DC?" choice.
+        "has_genuine_alternative": bool(by_dc),
+    }
+
+
 def rejection_reasons(candidate: dict | None, requirement: dict | None) -> list[dict]:
     """Concrete objections, phrased with this candidate's own figures.
 
