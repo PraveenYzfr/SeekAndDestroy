@@ -41,6 +41,26 @@ set -a; . "$HOME/infra/.env"; set +a
 SQL='/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$P" -C -I -b'
 run() { sudo docker exec -e P="$MSSQL_SA_PASSWORD" hub-sqlserver bash -c "$SQL $*"; }
 
+# ad-hoc SQL, passed on STDIN rather than as an argument.
+#
+# run() interpolates its arguments into a string that the container's shell then
+# re-parses, which is fine for `-i /database/file.sql` and breaks the moment the
+# SQL contains a parenthesis:
+#
+#     bash: -c: line 2: syntax error near unexpected token '('
+#
+# That is exactly what step 6 did on two consecutive production deploys. The
+# verification died, `run` was the last command in the step, and the script
+# carried on and reported success - having verified nothing. A script whose own
+# header argues that an exit code is not evidence spent two deploys proving it.
+#
+# stdin has no quoting layer to get wrong, so this cannot recur by adding a
+# parenthesis.
+runq() {
+    sudo docker exec -i -e P="$MSSQL_SA_PASSWORD" hub-sqlserver \
+        bash -c '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$P" -C -I -b -d SeekandDestroy -h -1 -W -i /dev/stdin'
+}
+
 echo "==> 1. pull"
 git pull --ff-only
 echo "    now at $(git rev-parse --short HEAD): $(git log -1 --format=%s)"
@@ -59,6 +79,33 @@ for f in database/migration_0*.sql; do
     b=$(basename "$f")
     run -d SeekandDestroy -i "/database/$b" >/dev/null && echo "    $b ok"
 done
+
+echo "==> 3b. GRANTS - a created table is not a writable one"
+# Added after migrations 020 and 021 shipped, both tables were created, and both
+# were UNWRITABLE. The service logs a warning and swallows the failure by design,
+# because grading must never break a delivered answer - so the platform computed
+# verdicts, stored none, and reported itself healthy.
+#
+# db-init.sh in this repository grants SELECT on the whole sad schema and INSERT
+# PER TABLE, so every new writable table needs an explicit line. This script had
+# no grant step at all, which meant it created tables and never made them
+# writable, silently, for every migration.
+#
+# THE FILE THIS RUNS IS NOT docker/db-init.sh. Production executes
+# ~/infra/provision-databases.sh via the db-provision service, and the two have
+# DIVERGED - grants added to one are absent from the other, and which grants a
+# table gets has depended on which session edited which file. deploy-prod.sh
+# already calls db-provision, so this calls the same thing rather than inventing
+# a third path.
+#
+# The divergence itself is not fixable from this repository: provision-databases.sh
+# lives on the VM and is not version controlled here. Naming it is the most this
+# script can do about it.
+( cd "$HOME/infra" && sudo docker compose up db-provision ) || {
+    echo "    WARNING: db-provision failed. Tables created by the migrations above"
+    echo "    may exist and be UNWRITABLE, and the service will not report it -"
+    echo "    it logs a warning and continues. Verify with the write test below."
+}
 
 echo "==> 4. build and restart the application containers"
 # --no-deps so restarting ai-service does not take sqlserver, qdrant or redis
@@ -81,20 +128,41 @@ else
 fi
 
 echo "==> 6. VERIFY BY QUERY - an exit code is not evidence"
-# The estate counts are here to prove this script did NOT reseed. If they read
-# zero, something ran a reset that should not have.
-run -d SeekandDestroy -h -1 -W -Q "SET NOCOUNT ON;
-SELECT CONCAT('    apps=',      (SELECT COUNT(*) FROM sad.CmdbApplication),
-              ' incidents=',    (SELECT COUNT(*) FROM sad.Incident),
-              ' cis=',          (SELECT COUNT(*) FROM sad.ConfigurationItem),
-              ' investigations=',(SELECT COUNT(*) FROM sad.Investigation));
+# The estate counts prove this script did NOT reseed. If they read zero,
+# something ran a reset that should not have.
+runq <<'VERIFY'
+SET NOCOUNT ON;
+SELECT CONCAT('    apps=',       (SELECT COUNT(*) FROM sad.CmdbApplication),
+              ' clusters=',      (SELECT COUNT(*) FROM sad.InfrastructureCluster),
+              ' incidents=',     (SELECT COUNT(*) FROM sad.Incident),
+              ' cis=',           (SELECT COUNT(*) FROM sad.ConfigurationItem));
 SELECT CONCAT('    credentials=',(SELECT COUNT(*) FROM sad.Employee WHERE PasswordHash IS NOT NULL));
-SELECT CONCAT('    answer evaluations=', (SELECT COUNT(*) FROM sad.AnswerEvaluation));"
+VERIFY
 
-echo
-echo "    Estate counts should match what was there BEFORE this ran."
-echo "    If apps/incidents/cis read 0, a reset ran and you want deploy-prod.sh's"
-echo "    credential restore - stop and check before logging in."
-echo
-echo "    Health:  curl -fsS https://sad.praveenyzfr.com/health"
-echo "    Metrics: sudo docker exec docker-ai-service-1 curl -fsS localhost:8088/metrics | grep sad_"
+echo "==> 7. WRITE TEST - existence is not writability"
+# The check that caught migrations 020 and 021 shipping unwritable. A table can
+# be created, present, queryable and still reject every INSERT, and the one
+# component that would notice swallows the error on purpose.
+#
+# Rolled back, so this proves the permission without leaving a row behind.
+runq <<'WRITETEST' || echo "    WRITE TEST FAILED - see the grant note in step 3b"
+SET NOCOUNT ON;
+BEGIN TRAN;
+BEGIN TRY
+    -- Column lists and values are taken from the migrations, not from memory.
+    -- Site and Source are NOT NULL with no default, and Source is CHECK-
+    -- constrained to ('python','judge') - an INSERT missing either fails on the
+    -- constraint rather than on the permission, which would report a grant
+    -- problem that does not exist and hide one that does.
+    INSERT INTO sad.EvalRun (Suite, Status)
+        VALUES ('_writetest', 'Running');
+    INSERT INTO sad.RemediationTask (Site, Source, Status)
+        VALUES ('_writetest', 'python', 'Queued');
+    PRINT '    writable: EvalRun, RemediationTask';
+END TRY
+BEGIN CATCH
+    PRINT CONCAT('    NOT WRITABLE: ', ERROR_MESSAGE());
+END CATCH;
+ROLLBACK;
+WRITETEST
+
