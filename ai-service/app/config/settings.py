@@ -125,7 +125,17 @@ class LlmSettings(_Base):
     provider: Literal["mock", "openai", "azure-openai", "ollama", "gemini", "deepseek"] = "mock"
     model: str = "seek-and-destroy-mock"
     temperature: float = 0.0
-    max_output_tokens: int = 2048
+    #: Ceiling on generated tokens, NOT a reservation - billing is per token
+    #: actually produced, so raising this costs nothing for any call that already
+    #: fits. Only calls that were being truncated generate more.
+    #:
+    #: 2048 was silently breaking every report on the cost-first provider.
+    #: Reasoning models - DeepSeek, OpenAI's o-series - spend their thinking
+    #: against this same budget, and deepseek spends roughly 2,100 tokens on it.
+    #: So the cap was consumed mid-thought, content came back empty, and the
+    #: reasoning tokens were billed anyway: about $0.00225 a call to receive
+    #: nothing. The fix converts waste into output rather than adding spend.
+    max_output_tokens: int = 8192
     timeout_seconds: int = 60
     base_url: str = ""
     api_key: str = ""
