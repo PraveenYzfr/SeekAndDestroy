@@ -41,7 +41,44 @@ _NUMBER_RE = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
 
 #: Cluster codes in this estate look like nyc-p006, atl-03, dal-p056; the CMDB
 #: also uses APP-CRM style application codes.
-_ENTITY_RE = re.compile(r"\b(?:APP-[A-Z0-9]+|[a-z]{3}-[a-z]?\d{2,4})\b")
+#: Entity codes, matched CASE-INSENSITIVELY.
+#:
+#: It was case-sensitive, and the first real scorecard is what exposed it. A model
+#: wrote "Den-p096 is recommended for this new capacity request" - the cluster is
+#: den-p096, capitalised because it started a sentence. The pattern did not match,
+#: the tokenizer reached the bare digits, and "096" was reported as an ungrounded
+#: number. The model had quoted the code CORRECTLY and was marked down for
+#: capitalising a sentence.
+#:
+#: That put number_fidelity at 0.9764 over 719 observations when the failures were
+#: the grader's own blind spot rather than anything a model got wrong.
+_ENTITY_RE = re.compile(
+    r"\b(?:APP-[A-Z0-9]+(?:-[A-Z0-9]+)*|[a-z]{3}-[a-z]?\d{2,4}(?:-NODE-\d+)?)\b",
+    re.IGNORECASE,
+)
+
+#: Rule identifiers. RULE-011 tokenised as "-011" - a NEGATIVE number, which no
+#: evidence can ever ground, so every sentence citing the rule that blocked a
+#: placement was marked as containing an invented figure.
+#:
+#: A rule id names a rule. It is not a measurement of anything, and it is already
+#: checked where it matters: the rejection-evidence path asserts every claim
+#: traces to a rule the engine actually evaluated.
+_RULE_ID_RE = re.compile(r"\bRULE-\d+\b", re.IGNORECASE)
+
+#: Classification labels whose digit is a NAME, not a quantity. "Tier-1"
+#: tokenised as -1, "Sev2" as 2, "P1" as 1 - and a negative number can never be
+#: grounded by anything, so a sentence naming an availability tier was reported as
+#: containing an invented figure.
+#:
+#: The distinction that matters: Tier-1 is not one of anything. It is the label of
+#: a tier, exactly as RULE-012 is the name of a rule and den-p096 is the name of a
+#: cluster. All three were being read as arithmetic, and all three produced
+#: failures that looked like a model inventing numbers.
+#:
+#: Separator optional because all three spellings occur in real prose: "Tier-1",
+#: "Tier 1", "Tier1".
+_LABEL_RE = re.compile(r"\b(?:Tier[- ]?\d|Sev[- ]?\d|P[1-4])\b", re.IGNORECASE)
 
 #: Dates and quarters, removed before numbers are extracted for the same reason
 #: entity codes are: they identify a window, they do not measure one.
@@ -94,7 +131,9 @@ def _numbers_in(text: str) -> list[str]:
     it was, since those "numbers" always matched the evidence they came from.
     Entity codes are graded by entity_fidelity; their digits are not metrics.
     """
-    return _NUMBER_RE.findall(_DATE_RE.sub(" ", _ENTITY_RE.sub(" ", text or "")))
+    stripped = _LABEL_RE.sub(" ", _RULE_ID_RE.sub(" ", text or ""))
+    stripped = _ENTITY_RE.sub(" ", stripped)
+    return _NUMBER_RE.findall(_DATE_RE.sub(" ", stripped))
 
 
 def _as_float(token: str) -> float | None:
