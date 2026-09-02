@@ -150,3 +150,72 @@ def test_defaults_for_unstated_dimensions_are_declared_not_hidden(monkeypatch):
     # exploding - _coerce_enum already accepted None, which is why the contract
     # was the only thing standing in the way.
     assert result["requirement"]["data_classification"] == "Internal"
+
+
+# ---------------------------------------------------------------------------
+# Confidence must not outrun the evidence
+# ---------------------------------------------------------------------------
+# Praveen was shown a report asserting, in consecutive sentences, that it had
+# "no top candidates, no forecast results, and no capacity calculations" and
+# that "overall evidence confidence is High". assess_risk_and_confidence
+# returned "High" unconditionally for Question and Forecast investigations.
+
+
+def _confidence(state: dict) -> str:
+    return nodes.assess_risk_and_confidence(state)["confidence"]
+
+
+def test_a_question_with_no_evidence_is_not_confident():
+    state = {
+        "investigation_type": InvestigationType.QUESTION,
+        "user_query": "give me from a different DC",
+        "retrieved_context": [],
+        "forecast_results": {},
+        "candidate_scores": [],
+    }
+    assert _confidence(state) == "Low"
+
+
+def test_a_grounded_question_is_capped_at_medium():
+    """High is reserved for a scored candidate above the threshold.
+
+    Retrieval returning documents says the answer was grounded in something. It
+    does not say the something answers the question, and spending the word
+    "High" on both makes it mean two things in one report.
+    """
+    state = {
+        "investigation_type": InvestigationType.QUESTION,
+        "user_query": "what changed on nyc-05 last quarter?",
+        "retrieved_context": [{"text": "CHG0030638 nyc-05 BackedOut"}],
+        "forecast_results": {},
+        "candidate_scores": [],
+    }
+    assert _confidence(state) == "Medium"
+
+
+def test_an_informational_answer_still_needs_no_approval():
+    """Confidence changed; the review flag deliberately did not. There is no
+    recommendation being proposed, so there is nothing to approve."""
+    state = {
+        "investigation_type": InvestigationType.FORECAST,
+        "user_query": "forecast cmh-03",
+        "retrieved_context": [],
+        "forecast_results": {"cmh-03": {"projected": 78}},
+        "candidate_scores": [],
+    }
+    out = nodes.assess_risk_and_confidence(state)
+    assert out["confidence"] == "Medium"
+    assert out["human_review_required"] is False
+
+
+def test_a_scored_recommendation_can_still_be_high():
+    """The measured path is untouched: High means the top eligible candidate
+    scored at or above scoring.min_confident_score."""
+    state = {
+        "investigation_type": InvestigationType.HOSTING,
+        "user_query": "find hosting for APP-CRM",
+        "candidate_scores": [{"eligibility_status": "Eligible", "overall_score": 91.0}],
+    }
+    out = nodes.assess_risk_and_confidence(state)
+    assert out["confidence"] == "High"
+    assert out["human_review_required"] is True

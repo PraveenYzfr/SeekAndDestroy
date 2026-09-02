@@ -911,8 +911,39 @@ def assess_risk_and_confidence(state: InfrastructureRecommendationState) -> dict
 
     itype = state["investigation_type"]
     if itype in (InvestigationType.QUESTION, InvestigationType.FORECAST):
-        # Informational only - no recommendation is being proposed for approval.
-        return {"confidence": "High", "human_review_required": False}
+        # Informational only - no recommendation is being proposed for approval,
+        # so human_review_required stays False. Confidence is a different claim
+        # and used to be hard-coded "High" here regardless of what was found.
+        #
+        # Praveen was shown a report that said, in consecutive sentences, that it
+        # had "no top candidates, no forecast results, and no capacity
+        # calculations, so no infrastructure recommendation can be produced" and
+        # that "overall evidence confidence is High". The platform asserting
+        # certainty about a non-answer is the exact failure this system exists to
+        # prevent, surfacing in the confidence field instead of in the prose.
+        #
+        # HIGH IS A MEASURED CLAIM AND MUST STAY ONE. Below, it means the top
+        # eligible candidate scored at or above scoring.min_confident_score - a
+        # number the engine computed. Spending the same word on "some documents
+        # came back from a search" makes the vocabulary mean two different things
+        # in one report, and the weaker meaning is the one a reader will not
+        # notice.
+        #
+        # So an informational answer is capped at Medium: it was grounded in
+        # something, and nothing has verified that the something answers the
+        # question. With no evidence at all it is Low. Neither is derived from
+        # the model's own opinion - GroundedAnswer carries a confidence field and
+        # it is deliberately not read here, because a score the model assigns
+        # itself is not evidence.
+        has_evidence = bool(
+            state.get("retrieved_context")
+            or state.get("forecast_results")
+            or state.get("candidate_scores")
+        )
+        return {
+            "confidence": "Medium" if has_evidence else "Low",
+            "human_review_required": False,
+        }
 
     eligible = [c for c in state.get("candidate_scores", []) if c.get("eligibility_status") == "Eligible"]
     if not eligible:

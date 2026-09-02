@@ -37,6 +37,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel
 
 from app.agents.gemini_chat_model import GeminiChatModel
+from app.agents.http_chat_model import EmptyCompletionError
 from app.agents.mock_llm import MockChatModel
 from app.cache.store import get_cache_store
 from app.config import get_settings
@@ -210,6 +211,59 @@ def run_structured(llm: BaseChatModel, system_prompt: str, human_prompt: str, ou
     return parsed
 
 
+#: Appended to the SYSTEM prompt on a length retry, not the human one. The human
+#: prompt already carries the schema and the evidence; what overran is the model's
+#: own reasoning, which is a system-level instruction about how to behave rather
+#: than a change to what was asked.
+_BREVITY_NUDGE = (
+    "\n\nIMPORTANT: your previous attempt ran out of output budget while reasoning "
+    "and returned nothing. Reason briefly. Do not restate the evidence, do not "
+    "enumerate alternatives you have rejected, and produce the required output "
+    "directly."
+)
+
+
+def _invoke_once(llm: BaseChatModel, messages: list):
+    """One model call, with a single retry when the BUDGET ran out.
+
+    NOT the same condition as the parse-repair retry below, and deliberately a
+    separate branch. A parse failure means the model answered and the answer did
+    not fit the schema. A length failure means it never answered at all, having
+    spent max_output_tokens on reasoning - the API returns 200 with empty content
+    and finish_reason="length", which http_chat_model names as
+    EmptyCompletionError rather than passing "" up the stack.
+
+    Conflating the two is a live hazard here rather than a hypothetical one. The
+    CapacityRequirement bug was exactly that shape: a guard that could not tell
+    "absent because not stated" from "wrong" refused both, and the repair retry
+    then asked the model to fix JSON that was never malformed - two calls and 68
+    seconds to reach an answer the first call already had. Telling a model to
+    "respond again with ONLY the JSON object" when the problem was that it ran out
+    of room addresses a failure that did not occur.
+
+    WHY RETRY RATHER THAN RAISE THE CEILING. c2 measured 24,428 characters of
+    reasoning on a narrator prompt - an order of magnitude past the 9,247-char
+    failure that supposedly needed 6,000, on a budget already raised from 2048 to
+    8192. It is also not deterministic: the identical call succeeded on retry. A
+    budget set above the worst case anyone has happened to observe is not a fix,
+    it is the same bet at a higher stake, and because max_output_tokens is
+    per-request every role pays for it on every call. A retry costs a second call
+    only on the path that already failed.
+
+    ONE retry, not a loop. If brevity does not help, the prompt is too large for
+    this model and quietly burning calls would hide that.
+    """
+    try:
+        return llm.invoke(messages)
+    except EmptyCompletionError as exc:
+        logger.warning("structured.length_retry", error=str(exc)[:200])
+        retried = [
+            SystemMessage(content=messages[0].content + _BREVITY_NUDGE),
+            *messages[1:],
+        ]
+        return llm.invoke(retried)
+
+
 def _invoke(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_model: type[T]) -> T:
     # Providers that can enforce the schema server-side do so. Format
     # instructions in a prompt are a request the model may quietly ignore -
@@ -219,7 +273,7 @@ def _invoke(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_mo
     # retrying it.
     if isinstance(llm, (MockChatModel, GeminiChatModel)):
         bound = llm.bind_response_schema(output_model)
-        result = bound.invoke([SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
+        result = _invoke_once(bound, [SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
         _last_usage.value = getattr(result, "response_metadata", None) or None
         return output_model.model_validate_json(result.content)
 
@@ -227,7 +281,7 @@ def _invoke(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_mo
     full_human = f"{human_prompt}\n\n{parser.get_format_instructions()}"
     messages = [SystemMessage(content=system_prompt), HumanMessage(content=full_human)]
 
-    result = llm.invoke(messages)
+    result = _invoke_once(llm, messages)
     _last_usage.value = getattr(result, "response_metadata", None) or None
     try:
         return parser.parse(result.content)
@@ -236,7 +290,7 @@ def _invoke(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_mo
             f"{full_human}\n\nYour previous response could not be parsed as valid JSON matching the "
             f"required schema. Respond again with ONLY the JSON object, no other text."
         )
-        result2 = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=repair_prompt)])
+        result2 = _invoke_once(llm, [SystemMessage(content=system_prompt), HumanMessage(content=repair_prompt)])
         return parser.parse(result2.content)
 
 
