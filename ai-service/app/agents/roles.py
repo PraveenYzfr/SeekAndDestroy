@@ -103,7 +103,12 @@ ROLES: tuple[ModelRole, ...] = (
             "Answers questions from retrieved evidence only. Rewards a model that says "
             "it does not know over one that fills the gap."
         ),
-        chains=("answer_grounded_question",),
+        # answer_rejection_question shares this role deliberately. It is the
+        # same job under a tighter word budget - answer from retrieved
+        # evidence, say so when the evidence does not cover it - so the model
+        # that suits one suits the other, and splitting it would mean two
+        # settings to keep in step for one behaviour.
+        chains=("answer_grounded_question", "answer_rejection_question"),
     ),
     ModelRole(
         name="judge",
