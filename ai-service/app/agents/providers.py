@@ -74,6 +74,66 @@ class ProviderAdapter(Protocol):
 MOCK_MODEL_SENTINEL = "seek-and-destroy-mock"
 
 
+# =============================================================================
+# What belongs in a model dropdown
+# =============================================================================
+#: Substrings that mean "this is not a text chat model, whatever else it is".
+#:
+#: Measured against the live listings rather than imagined: openai returned 124
+#: models of which 42 were transcription, speech, image, embedding or moderation;
+#: gemini 38 of which 10; groq 14 of which 5. Gemini already filters on
+#: generateContent and STILL returns gemini-3-pro-image and *-preview-tts,
+#: because those genuinely do implement that method - the capability flag says
+#: what the endpoint accepts, not what the model is for.
+#:
+#: This is safe to write down in a way a model-id list is not. Whisper is not a
+#: chat model today and will not become one; "tts" names what the thing IS. The
+#: hardcoded model ids removed from this file went stale twice because they named
+#: which instances existed, which changes weekly.
+#:
+#: The cost of getting one wrong is asymmetric and that is why the list is short.
+#: A non-chat model left in is selectable and fails at runtime on somebody's
+#: investigation; a chat model wrongly excluded is invisible and unfixable from
+#: the screen. So: no "vision" and no "preview". Vision models take text and
+#: answer in text - deepseek-v4-flash-vision-exp is a chat model - and "preview"
+#: is a release stage rather than a capability, covering most of what gemini
+#: currently ships.
+_NOT_CHAT = (
+    "embed", "embedding",
+    "tts", "whisper", "transcribe", "speech", "orpheus", "audio",
+    "image", "dall-e",
+    "moderation", "guard",
+    "realtime", "computer-use",
+)
+
+#: Retired FAMILIES, not retired ids.
+#:
+#: Neither OpenAI's nor Groq's /models carries a deprecation flag, so this cannot
+#: be derived and something has to be written down. A family is the right unit: a
+#: retired family does not come back, so this list only ever ages in one
+#: direction. An allowlist of current ids is the thing that goes stale, and it is
+#: what this file correctly stopped carrying.
+_RETIRED = ("babbage", "davinci", "curie", "ada-", "gpt-3.5", "text-davinci")
+
+
+def usable_chat_models(names: list[str]) -> list[str]:
+    """The subset an operator could sensibly assign to a role.
+
+    Applied by every adapter, so one provider cannot quietly offer a
+    text-to-speech model as a narration model. Sorted for a stable dropdown -
+    providers return their own order and openai's opens on babbage-002.
+    """
+    out = []
+    for name in names:
+        low = name.lower()
+        if any(bad in low for bad in _NOT_CHAT):
+            continue
+        if any(dead in low for dead in _RETIRED):
+            continue
+        out.append(name)
+    return sorted(out)
+
+
 def _resolve_model(model: str, adapter: Any) -> str:
     """The model to send, refusing to forward the mock sentinel.
 
@@ -153,7 +213,7 @@ class OpenAICompatible:
         base = (settings.base_url or self.default_base_url).rstrip("/")
         key = _require_key(settings, self.name)
         data = http_get(f"{base}/models", headers={"Authorization": f"Bearer {key}"})
-        return [m["id"] for m in data.get("data", [])]
+        return usable_chat_models([m["id"] for m in data.get("data", [])])
 
 
 @dataclass(frozen=True)
@@ -189,7 +249,11 @@ class Anthropic:
             f"{base}/models",
             headers={"x-api-key": _require_key(settings, self.name), "anthropic-version": self.version},
         )
-        return [m["id"] for m in data.get("data", [])]
+        # Anthropic already returns chat models only, so this filters nothing
+        # today. Applied anyway for the ordering, and so a future non-chat
+        # model on their catalogue does not become the one provider that
+        # offers it.
+        return usable_chat_models([m["id"] for m in data.get("data", [])])
 
 
 @dataclass(frozen=True)
@@ -226,11 +290,11 @@ class Gemini:
         data = http_get(f"{base}/models", headers={"x-goog-api-key": _require_key(settings, self.name)})
         # Gemini lists every model with the methods it supports; one that cannot
         # generateContent cannot narrate, whatever its name suggests.
-        return [
+        return usable_chat_models([
             m["name"].split("/", 1)[-1]
             for m in data.get("models", [])
             if "generateContent" in (m.get("supportedGenerationMethods") or [])
-        ]
+        ])
 
 
 @dataclass(frozen=True)
@@ -261,7 +325,7 @@ class Ollama:
 
         base = settings.ollama_base_url.rstrip("/")
         data = http_get(f"{base}/v1/models", headers={"Authorization": "Bearer ollama"})
-        return [m["id"] for m in data.get("data", [])]
+        return usable_chat_models([m["id"] for m in data.get("data", [])])
 
 
 @dataclass(frozen=True)

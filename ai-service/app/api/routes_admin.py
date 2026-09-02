@@ -48,13 +48,30 @@ def get_model_roles(current: AuthenticatedEmployee = Depends(require_admin)):
             }
             for role in roles.ROLES
         ],
-        # Stated here rather than left for someone to infer from the absence of
-        # an "evaluation" row. app.evaluation.graders uses no model on purpose;
-        # an LLM-as-judge would introduce the failure it is measuring.
+        # THIS USED TO CONTRADICT THE SCREEN IT APPEARS ON. It read "Evaluation
+        # has no model to configure" while an "Evaluation judge" role was listed
+        # directly above it, with its own model selector. Both halves were
+        # half-true and together they were misleading - Praveen read it and asked
+        # what it meant, which is the only reason it was found.
+        #
+        # The missing distinction is WHICH evaluation. The checks that decide
+        # whether a figure was invented use no model at all. The judge is a
+        # separate, narrower thing that does.
         "evaluation_note": (
-            "Evaluation has no model to configure. app/evaluation/graders.py grades "
-            "deterministically, and scripts/evaluate.py scores whichever models these "
-            "roles used, from recorded calls in sad.AgentAuditLog."
+            "Two different things are called evaluation here.\n\n"
+            "The checks that matter use NO model. app/evaluation/graders.py proves by "
+            "arithmetic that every figure in an answer traces to a value the engine "
+            "computed, and that every cluster or application code was a real candidate. "
+            "A model asked the same question could only agree or be wrong.\n\n"
+            "The Evaluation judge role above DOES use a model, deliberately limited to "
+            "the three things arithmetic cannot see - relevance, groundedness and "
+            "actionability. It is never asked about numbers and its schema gives it "
+            "nowhere to put a numeric verdict. Point it at a different provider from the "
+            "one being judged: a model scoring its own output rates it higher.\n\n"
+            "To compare two models: assign one above, run some investigations, then run "
+            "scripts/evaluate.py. It grades calls that already happened from "
+            "sad.AgentAuditLog, so a full run costs a table scan rather than a provider "
+            "bill, and every historical call is already tagged with the model that made it."
         ),
     }
 
