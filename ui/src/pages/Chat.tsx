@@ -17,6 +17,11 @@ interface ChatMessage {
   // once, so the two cannot drift.
   reviewPayload?: RunInvestigationResult["review_payload"];
   finalReport?: RunInvestigationResult["final_report"];
+  /** The real findings behind finalReport - present whether or not the report
+   *  narration itself succeeded, so a failed "write a summary" call never
+   *  leaves the reader with nothing but "narration unavailable" when the
+   *  actual, already-verified results are sitting right here. */
+  recommendationExplanations?: RunInvestigationResult["recommendation_explanations"];
   rejectionPrompt?: RunInvestigationResult["rejection_prompt"];
   recommendations?: InfrastructureRecommendation[];
   error?: string;
@@ -131,6 +136,7 @@ export default function Chat() {
       updateMessage(assistantId, {
         status: "completed",
         finalReport: result.final_report,
+        recommendationExplanations: result.recommendation_explanations,
         rejectionPrompt: result.rejection_prompt,
       });
       return;
@@ -141,6 +147,7 @@ export default function Chat() {
         status: "completed",
         investigationId: result.investigation_id,
         finalReport: result.final_report,
+        recommendationExplanations: result.recommendation_explanations,
         rejectionPrompt: result.rejection_prompt,
         recommendations,
       });
@@ -149,6 +156,7 @@ export default function Chat() {
         status: "completed",
         investigationId: result.investigation_id,
         finalReport: result.final_report,
+        recommendationExplanations: result.recommendation_explanations,
         rejectionPrompt: result.rejection_prompt,
       });
     }
@@ -357,6 +365,59 @@ function RecommendationRows({
   );
 }
 
+/** The narrated findings behind final_report, folded behind a disclosure -
+ *  same pattern as Outcome's "other options considered". Shown whenever there
+ *  is anything to show, not conditioned on whether final_report's own
+ *  narration succeeded: when it fails, this is the ONLY place the real,
+ *  already-computed, already-verified results are visible at all - the
+ *  executive summary above falls back to a generic "narration unavailable"
+ *  line, and without this a reader sees that line and nothing else, even
+ *  though the actual findings (which cluster, why, what to do) were sitting
+ *  in the response the whole time. */
+function RecommendationFindings({
+  explanations,
+}: {
+  explanations: NonNullable<RunInvestigationResult["recommendation_explanations"]>;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button className="secondary" onClick={() => setOpen(!open)}>
+        {open ? "Hide" : "Show"} {explanations.length} finding{explanations.length === 1 ? "" : "s"}
+      </button>
+      {open && (
+        <div style={{ marginTop: 6 }}>
+          {explanations.map((e, i) => {
+            // Shape varies by investigation type - a narrated candidate or
+            // right-sizing result carries `summary`, a grounded answer
+            // carries `answer` instead. Never both, so this picks whichever
+            // is actually present rather than assuming one.
+            const label = e.cluster_code || e.cluster_or_application_code;
+            const text = e.summary ?? e.answer;
+            return (
+              <div key={i} className="explain-box" style={{ marginTop: i === 0 ? 0 : 8 }}>
+                {label && <strong>{label}</strong>}
+                {e.classification && <span className="stat-label"> — {e.classification}</span>}
+                {text && <p style={{ margin: "4px 0 0" }}>{text}</p>}
+                {e.recommended_action && (
+                  <p style={{ margin: "4px 0 0", fontSize: 13 }}>Recommended: {e.recommended_action}</p>
+                )}
+                {e.key_strengths && e.key_strengths.length > 0 && (
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 13 }}>
+                    {e.key_strengths.map((s, j) => (
+                      <li key={j}>{s}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChatBubble({
   message,
   onDecide,
@@ -473,6 +534,10 @@ function ChatBubble({
               </>
             ) : (
               <p>Investigation #{message.investigationId} completed.</p>
+            )}
+
+            {message.recommendationExplanations && message.recommendationExplanations.length > 0 && (
+              <RecommendationFindings explanations={message.recommendationExplanations} />
             )}
 
             {message.recommendations && message.recommendations.length > 0 && (

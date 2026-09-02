@@ -376,6 +376,32 @@ export interface RunInvestigationResult {
     next_steps: string[];
     human_action_required: string;
   };
+  /** The narrated findings final_report is supposed to summarise - one per
+   *  scored candidate, right-sizing result, or (for a Question investigation)
+   *  the grounded answer itself. Always present when there was anything to
+   *  narrate, INDEPENDENTLY of whether that summary succeeded: if the
+   *  reporting model call fails, final_report falls back to a generic
+   *  "narration unavailable" line while this array still carries the real,
+   *  already-computed, already-verified content - see
+   *  app.graph.nodes.generate_final_report's except branch. Shape varies by
+   *  investigation type (narrated candidates and right-sizing results carry
+   *  `summary`; a grounded answer carries `answer` instead), so every field
+   *  beyond an identifier is optional and a renderer must check which one is
+   *  actually present rather than assume. */
+  recommendation_explanations?: {
+    cluster_code?: string;
+    cluster_or_application_code?: string;
+    eligibility_status?: string;
+    classification?: string;
+    overall_score?: number | null;
+    summary?: string;
+    answer?: string;
+    key_strengths?: string[];
+    key_risks?: string[];
+    recommended_action?: string;
+    estimated_monthly_savings?: number | null;
+    follow_ups?: string[];
+  }[];
 }
 
 /** One model role and the model currently serving it.
