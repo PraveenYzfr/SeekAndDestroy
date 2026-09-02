@@ -70,27 +70,29 @@ BEGIN
 END
 GO
 
--- The two must agree. require_admin reads IsAdmin, so a row claiming
--- Role='Administrator' with IsAdmin=0 would look like an administrator in every
--- report and be refused at the door - a permission bug that is invisible until
--- somebody is denied access they appear to have.
-IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_Employee_RoleMatchesIsAdmin')
-BEGIN
-    ALTER TABLE sad.Employee WITH CHECK ADD CONSTRAINT CK_Employee_RoleMatchesIsAdmin
-        CHECK ((Role = 'Administrator' AND IsAdmin = 1)
-            OR (Role <> 'Administrator' AND IsAdmin = 0)
-            OR Role IS NULL);
-    PRINT 'added CK_Employee_RoleMatchesIsAdmin';
-END
+-- ROLE IS DERIVED FROM IsAdmin, NOT CONSTRAINED AGAINST IT.
+--
+-- The first version of this added CK_Employee_RoleMatchesIsAdmin, requiring
+-- Role='Administrator' exactly when IsAdmin=1. The invariant is right and the
+-- constraint was wrong: migration 006 grants E1001 IsAdmin=1 and knows nothing
+-- about Role, so re-running the set failed with "The UPDATE statement conflicted
+-- with the CHECK constraint" - migration 016 blocking migration 006 from doing
+-- the one thing it exists to do.
+--
+-- Deriving instead of constraining enforces the same agreement without ordering
+-- becoming load-bearing: whatever IsAdmin says, Role is made to match. Run 006
+-- then 016 and the pair is consistent; run 016 twice and nothing changes.
+UPDATE sad.Employee SET Role = 'Administrator' WHERE IsAdmin = 1 AND Role <> 'Administrator';
+UPDATE sad.Employee SET Role = 'Engineer'      WHERE IsAdmin = 0 AND Role = 'Administrator';
 GO
 
--- E1001 is the account Praveen actually uses. Made an Approver so the approval
--- path is exercisable rather than theoretically enforced - a permission nobody
--- holds is a permission nobody has tested.
-UPDATE sad.Employee SET Role = 'Approver' WHERE EmployeeNumber = 'E1001' AND IsAdmin = 0;
-UPDATE sad.Employee SET Role = 'Administrator' WHERE EmployeeNumber = 'E1001' AND IsAdmin = 1;
-GO
-
+-- E1001 is NOT pinned to Approver here. Migration 006 grants it IsAdmin, and
+-- Administrator already outranks Approver in ROLE_ORDER, so pinning it lower both
+-- contradicted 006 and broke tests/test_model_roles.py, which asserts E1001 is an
+-- administrator because the admin screen is unreachable for everyone otherwise.
+--
+-- The approval path is still exercisable: an Administrator satisfies any
+-- require_role("Approver") check by ordering.
 DECLARE @by_role NVARCHAR(400) = (
     SELECT STRING_AGG(CONCAT(Role, '=', cnt), ', ')
     FROM (SELECT Role, COUNT(*) AS cnt FROM sad.Employee GROUP BY Role) t);

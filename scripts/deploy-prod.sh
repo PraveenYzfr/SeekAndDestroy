@@ -73,6 +73,22 @@ for f in database/migration_0*.sql; do
 done
 run -d SeekandDestroy -i /database/seed.sql >/dev/null && echo "    seed ok"
 
+echo "==> 4b. migrations AGAIN, after the seed"
+# Not belt-and-braces. Migrations run BEFORE the seed, so any migration that
+# UPDATEs seeded rows acts on an empty table and silently does nothing - which is
+# how E1001 lost the administrator grant migration 006 exists to give it, and how
+# the CI backfill in 008 linked zero incidents on a clean database. Both looked
+# like working migrations because neither errors on an empty table.
+#
+# Every migration is idempotent, so a second pass is safe. That property is now
+# load-bearing rather than merely claimed, and three of them were not idempotent
+# until tonight.
+for f in database/migration_0*.sql; do
+    b=$(basename "$f")
+    run -d SeekandDestroy -i "/database/$b" >/dev/null || echo "    $b FAILED on second pass"
+done
+echo "    second pass complete"
+
 echo "==> 5. restore credentials"
 run -d SeekandDestroy -h -1 -W -i /database/restore_credentials.sql
 

@@ -50,7 +50,7 @@ BEGIN
 END
 GO
 
-ALTER TABLE sad.ConfigurationItem WITH CHECK ADD CONSTRAINT CK_ConfigurationItem_Class
+ALTER TABLE sad.ConfigurationItem WITH NOCHECK ADD CONSTRAINT CK_ConfigurationItem_Class
 CHECK (ClassName IN (
     'cmdb_ci_appl', 'cmdb_ci_service', 'cmdb_ci_cluster', 'cmdb_ci_server',
     'cmdb_ci_vm_instance', 'cmdb_ci_db_instance', 'cmdb_ci_lb',

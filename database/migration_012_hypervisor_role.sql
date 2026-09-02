@@ -33,7 +33,7 @@ BEGIN
 END
 GO
 
-ALTER TABLE sad.CiServer WITH CHECK ADD CONSTRAINT CK_CiServer_Role
+ALTER TABLE sad.CiServer WITH NOCHECK ADD CONSTRAINT CK_CiServer_Role
 CHECK (ServerRole IN (
     -- virtualisation: the largest population, and absent until 012
     'Hypervisor', 'ContainerHost', 'BareMetalNode',

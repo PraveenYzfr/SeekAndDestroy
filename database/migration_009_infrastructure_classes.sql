@@ -57,7 +57,28 @@ BEGIN
 END
 GO
 
-ALTER TABLE sad.ConfigurationItem WITH CHECK ADD CONSTRAINT CK_ConfigurationItem_Class
+-- WITH NOCHECK, deliberately.
+--
+-- Three migrations redefine this constraint - 008 creates it, 009 and 011 widen
+-- it - and each does so by dropping and re-adding, because T-SQL has no ALTER
+-- CONSTRAINT. On a fresh sequential run that is fine. On a RE-RUN it is not: this
+-- migration re-adds a narrower list over rows a later migration made valid, and
+-- WITH CHECK validates every existing row against it. 011 adds
+-- cmdb_ci_cluster_node and 012 adds Hypervisor, so re-running 009 or 010 failed
+-- against data that is entirely correct.
+--
+-- Re-runnability is not optional here. Migrations execute BEFORE the seed on a
+-- clean database, so any migration that UPDATEs seeded rows acts on an empty table
+-- and silently does nothing - which is exactly how E1001 lost the administrator
+-- grant that migration 006 exists to give it. The fix is to run the whole set
+-- again after the seed, and that only works if every migration tolerates a second
+-- run.
+--
+-- NOCHECK skips validation of existing rows. The constraint still governs
+-- everything inserted afterwards, and the later migration that widens it runs
+-- moments later in the same sequence, so the transiently-narrow window is closed
+-- before anything can write through it.
+ALTER TABLE sad.ConfigurationItem WITH NOCHECK ADD CONSTRAINT CK_ConfigurationItem_Class
 CHECK (ClassName IN (
     'cmdb_ci_appl', 'cmdb_ci_service', 'cmdb_ci_cluster', 'cmdb_ci_server',
     'cmdb_ci_vm_instance', 'cmdb_ci_db_instance', 'cmdb_ci_lb',
