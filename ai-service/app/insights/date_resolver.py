@@ -75,6 +75,22 @@ def resolve_relative_dates(question: str, *, now: datetime | None = None) -> tup
         first_of_this_month = current.replace(day=1)
         return first_of_this_month.date().isoformat(), current.date().isoformat()
 
+    if "last quarter" in text:
+        # The previous CALENDAR quarter (Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec),
+        # not "the last 90 days" - same reasoning as "last month" above.
+        first_of_this_quarter_month = ((current.month - 1) // 3) * 3 + 1
+        first_of_this_quarter = current.replace(month=first_of_this_quarter_month, day=1)
+        if first_of_this_quarter_month == 1:
+            first_of_last_quarter = first_of_this_quarter.replace(year=first_of_this_quarter.year - 1, month=10)
+        else:
+            first_of_last_quarter = first_of_this_quarter.replace(month=first_of_this_quarter_month - 3)
+        return first_of_last_quarter.date().isoformat(), first_of_this_quarter.date().isoformat()
+
+    if "this quarter" in text:
+        first_of_this_quarter_month = ((current.month - 1) // 3) * 3 + 1
+        first_of_this_quarter = current.replace(month=first_of_this_quarter_month, day=1)
+        return first_of_this_quarter.date().isoformat(), current.date().isoformat()
+
     if "today" in text:
         return current.date().isoformat(), (current + timedelta(days=1)).date().isoformat()
 

@@ -59,6 +59,34 @@ def test_this_month():
     assert before == "2026-09-02"
 
 
+def test_this_quarter():
+    # 2026-09-02 is in Q3 (Jul-Sep).
+    after, before = resolve_relative_dates("Sev1 incidents this quarter", now=_FIXED_NOW)
+    assert after == "2026-07-01"
+    assert before == "2026-09-02"
+
+
+def test_last_quarter():
+    after, before = resolve_relative_dates("incidents last quarter", now=_FIXED_NOW)
+    assert after == "2026-04-01"
+    assert before == "2026-07-01"
+
+
+def test_last_quarter_crosses_a_year_boundary():
+    # 2026-02-10 is in Q1 (Jan-Mar); last quarter is Q4 of the PRIOR year.
+    january_now = datetime(2026, 2, 10, tzinfo=timezone.utc)
+    after, before = resolve_relative_dates("incidents last quarter", now=january_now)
+    assert after == "2025-10-01"
+    assert before == "2026-01-01"
+
+
+def test_this_quarter_does_not_match_this_month():
+    """'this quarter' must not be shadowed by an earlier, less specific
+    check - a real risk given both phrases contain 'this' and a time unit."""
+    after, before = resolve_relative_dates("incidents this quarter", now=_FIXED_NOW)
+    assert after == "2026-07-01"  # quarter start, not month start (2026-09-01)
+
+
 def test_today():
     after, before = resolve_relative_dates("incidents opened today", now=_FIXED_NOW)
     assert after == "2026-09-02"
