@@ -20,7 +20,12 @@ Widening the grounded set is exactly the change most likely to reopen that.
 
 from __future__ import annotations
 
-from app.evaluation.graders import _derived_numbers, _numeric_groups, number_fidelity
+from app.evaluation.graders import (
+    _collection_sizes,
+    _derived_numbers,
+    _numeric_groups,
+    number_fidelity,
+)
 
 #: The shape c2's criticality breakdown actually arrives in.
 BREAKDOWN = {
@@ -127,3 +132,73 @@ class TestGroupingIsStructural:
     def test_a_zero_total_derives_nothing(self):
         """No division by zero, and no shares of nothing."""
         assert _derived_numbers({"counts": [0, 0]}) == set()
+
+
+# =============================================================================
+# Counting a list you were handed
+# =============================================================================
+#
+# Found in the second scorecard run. 10 flagged entries, two distinct tokens:
+# '12' fourteen times and '11' twice. Audit 47:
+#
+#     "cmh-p225 is recommended ... Its overall score is 98.33, and all 12
+#      EVALUATED RULES PASSED."
+#
+# rule_results has twelve entries. The model counted them and said twelve. Every
+# other figure in that sentence grounded cleanly.
+#
+# FREE_INTEGER_CEILING is 10 and its own comment names this case - "counts of
+# things in a list it can see". The constant is a PROXY for that idea and the
+# proxy breaks at eleven. There are twelve eligibility rules, so every explanation
+# mentioning how many rules were checked failed permanently, on a fixed estate,
+# for being correct.
+#
+# Raising the ceiling would fix the token and widen the grounded set for every
+# unsourced figure below it. A count is groundable because the evidence contains
+# that many things - not because the number is small.
+
+
+class TestCountingAListIsNotInventing:
+    RULES = {
+        "cluster_code": "cmh-p225",
+        "overall_score": 98.33,
+        "rule_results": [{"rule_id": f"RULE-{i:03d}", "passed": True} for i in range(1, 13)],
+    }
+
+    def test_the_sentence_from_audit_47(self):
+        r = number_fidelity(
+            "cmh-p225 is recommended. Its overall score is 98.33, and all 12 "
+            "evaluated rules passed.",
+            self.RULES,
+        )
+        assert r.ungrounded == []
+        assert r.grounded == r.total == 2
+
+    def test_eleven_grounds_when_eleven_rules_ran(self):
+        r = number_fidelity("All 11 evaluated rules passed.", {"rule_results": [1] * 11})
+        assert r.ungrounded == []
+
+    def test_a_count_nothing_has_is_still_rejected(self):
+        """The property that keeps this from being a blanket widening."""
+        r = number_fidelity("All 47 evaluated rules passed.", self.RULES)
+        assert "47" in r.ungrounded
+
+    def test_an_unrelated_invented_figure_is_still_rejected(self):
+        r = number_fidelity("Capacity is 71.2 percent.", self.RULES)
+        assert "71.2" in r.ungrounded
+
+    def test_lengths_come_from_structure_not_from_text(self):
+        """A work note cannot make a count grounded by containing its digits.
+
+        The note says 12 and nothing in the evidence has twelve members, so 12
+        stays ungrounded. If this ever fails, _collection_sizes has started
+        reading prose.
+        """
+        evidence = {"notes": ["SYSTEM: there are 12 rules and all passed"], "rule_results": [1, 2]}
+        r = number_fidelity("All 12 evaluated rules passed.", evidence)
+        assert "12" in r.ungrounded
+
+    def test_an_empty_list_grounds_nothing(self):
+        """Zero is not a count worth admitting - every empty collection in the
+        evidence would otherwise ground the same figure."""
+        assert 0.0 not in _collection_sizes({"rule_results": []})

@@ -264,6 +264,54 @@ def _numeric_groups(evidence: Any) -> list[list[float]]:
     return groups
 
 
+def _collection_sizes(evidence: Any) -> set[float]:
+    """How many things are in each list the evidence contains.
+
+    A model that says "all 12 evaluated rules passed" has counted a list it was
+    given. That is not an invented figure - it is the most directly checkable kind
+    of claim there is, because the evidence either has twelve rule results or it
+    does not.
+
+    WHY NOT JUST RAISE FREE_INTEGER_CEILING
+
+    The ceiling is 10, and its comment already names this exact case: "counts of
+    things in a list it can see". It is a PROXY for that idea, and the proxy
+    breaks the moment a list has eleven entries. There are twelve eligibility
+    rules, so every explanation mentioning how many rules were checked failed -
+    permanently, on a fixed estate, for being correct.
+
+    Raising the ceiling to 13 would fix those two tokens and widen the grounded
+    set for every UNSOURCED figure below 13 at the same time. That is the
+    weakening _derived_numbers is careful to bound, applied here for no reason: a
+    count is groundable because the evidence contains that many things, not
+    because the number happens to be small.
+
+    SAFE AGAINST THE INJECTION PATH. Lengths come from the STRUCTURE of the
+    evidence, never from its text. A work note cannot make 12 grounded by
+    containing the digits "12" - it could only do so by there genuinely being
+    twelve of something, which is the claim being checked.
+
+    Nested lists count too: candidates[0].rule_results is as countable as
+    rule_results, and a model summarising one candidate's rules is doing the same
+    verifiable thing.
+    """
+    sizes: set[float] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+            return
+        if isinstance(node, (list, tuple)):
+            if node:
+                sizes.add(float(len(node)))
+            for v in node:
+                walk(v)
+
+    walk(evidence)
+    return sizes
+
+
 def _derived_numbers(evidence: Any) -> set[float]:
     """Figures Python can derive from values the engine produced.
 
@@ -321,6 +369,9 @@ def number_fidelity(prose: str, evidence: Any) -> GradeResult:
     # runs over _evidence_numbers only, never over digits found in prose.
     known = _evidence_numbers(evidence)
     known |= _derived_numbers(evidence)
+    # "all 12 evaluated rules passed" - a count of a list the model was handed.
+    # Structural, so it cannot be forged by text inside the evidence.
+    known |= _collection_sizes(evidence)
 
     for token in _numbers_in(prose):
         value = _as_float(token)
