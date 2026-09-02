@@ -22,6 +22,10 @@ export default function ModelSettings() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState("");
+  //: A provider chosen but not yet paired with a model. Held per role
+  //: rather than globally: an administrator narrowing one role must not
+  //: change what another role is offering.
+  const [pending, setPending] = useState<Record<string, { provider: string; model: string }>>({});
 
   async function load(refreshProviders = false) {
     setLoading(true);
@@ -57,6 +61,15 @@ export default function ModelSettings() {
           ? `${role}: saved as ${provider} / ${model}, but ${provider} could not be reached to confirm the model exists.`
           : `${role}: now ${provider} / ${model}. Applies to the next investigation.`,
       );
+      // Drop the pending pair only on success. Leaving it on failure keeps the
+      // administrator's half-made choice on screen instead of snapping the row
+      // back to what is still in effect, which would read as though the change
+      // had been applied and then undone.
+      setPending((prev) => {
+        const next = { ...prev };
+        delete next[role];
+        return next;
+      });
       await load();
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
@@ -71,6 +84,11 @@ export default function ModelSettings() {
     try {
       const result = await api.clearModelRole(role);
       setStatus(result.removed ? `${role}: reset to the configured default.` : `${role}: was already the default.`);
+      setPending((prev) => {
+        const next = { ...prev };
+        delete next[role];
+        return next;
+      });
       await load();
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
@@ -134,31 +152,84 @@ export default function ModelSettings() {
               In effect: {role.provider} / {role.model}
               {role.source === "override" && role.updated_by ? ` — set by ${role.updated_by}` : ""}
             </label>
-            <select
-              disabled={busy === role.name}
-              value={`${role.provider}::${role.model}`}
-              onChange={(e) => void assign(role.name, e.target.value)}
-            >
-              {/* The current value may not appear in any provider listing - it
-                  could have been retired since it was chosen. Showing it keeps
-                  the select honest about what is actually configured. */}
-              {!providers.some((p) => p.provider === role.provider && p.models.includes(role.model)) && (
-                <option value={`${role.provider}::${role.model}`}>
-                  {role.provider} / {role.model} (not in the current list)
-                </option>
-              )}
-              {providers
-                .filter((p) => p.available)
-                .map((p) => (
-                  <optgroup key={p.provider} label={p.provider}>
-                    {p.models.map((m) => (
-                      <option key={`${p.provider}::${m}`} value={`${p.provider}::${m}`}>
-                        {p.provider} / {m}
-                      </option>
-                    ))}
-                  </optgroup>
+            {/* TWO SELECTS, NOT ONE GROUPED LIST.
+                A single select with an optgroup per provider meant scrolling
+                one list of every model on every provider - openai alone
+                enumerates 124. Choosing a provider first turns "find your model
+                among 190" into "pick one of five, then one of a dozen".
+
+                The provider select is deliberately NOT the same control as the
+                model select: switching provider does not assign anything. It
+                narrows the second list and waits, because a change here spends
+                money on the next investigation and an accidental keystroke
+                should not be able to do that. Nothing is written until a model
+                is chosen. */}
+            <div style={{ display: "flex", gap: 8 }}>
+              <select
+                aria-label="Provider"
+                disabled={busy === role.name}
+                value={pending[role.name]?.provider ?? role.provider}
+                onChange={(e) =>
+                  setPending((prev) => ({
+                    ...prev,
+                    // Model deliberately cleared: the previous model belongs to
+                    // the previous provider, and carrying it across would offer
+                    // a pairing that does not exist.
+                    [role.name]: { provider: e.target.value, model: "" },
+                  }))
+                }
+                style={{ flex: "0 0 40%" }}
+              >
+                {/* The configured provider may not be reachable right now - a
+                    key removed, an outage. It stays selectable so the screen
+                    shows what IS configured rather than quietly implying
+                    something else. */}
+                {!providers.some((p) => p.provider === role.provider && p.available) && (
+                  <option value={role.provider}>{role.provider} (unavailable)</option>
+                )}
+                {providers
+                  .filter((p) => p.available)
+                  .map((p) => (
+                    <option key={p.provider} value={p.provider}>
+                      {p.provider}
+                    </option>
+                  ))}
+              </select>
+
+              <select
+                aria-label="Model"
+                disabled={busy === role.name}
+                value={pending[role.name]?.model ?? role.model}
+                onChange={(e) => {
+                  const provider = pending[role.name]?.provider ?? role.provider;
+                  if (e.target.value) void assign(role.name, `${provider}::${e.target.value}`);
+                }}
+                style={{ flex: 1 }}
+              >
+                {/* Prompt shown only while a provider change is pending, so the
+                    select never sits on a blank that looks like a cleared
+                    setting. */}
+                {pending[role.name] && !pending[role.name].model && (
+                  <option value="">select a model...</option>
+                )}
+                {/* The model in effect may have been retired since it was
+                    chosen. Showing it keeps the control honest about what is
+                    actually running rather than displaying a neighbour. */}
+                {!pending[role.name] &&
+                  !providers.some(
+                    (p) => p.provider === role.provider && p.models.includes(role.model),
+                  ) && <option value={role.model}>{role.model} (not in the current list)</option>}
+                {(
+                  providers.find(
+                    (p) => p.provider === (pending[role.name]?.provider ?? role.provider),
+                  )?.models ?? []
+                ).map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
                 ))}
-            </select>
+              </select>
+            </div>
           </div>
 
           {role.source === "override" && (
