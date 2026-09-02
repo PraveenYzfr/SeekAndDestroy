@@ -67,7 +67,7 @@ class InsightNarrationError(ValueError):
     """
 
 
-def _evidence_for(result: dict) -> dict:
+def evidence_for(result: dict) -> dict:
     """The dict handed to the model, and what its output is checked against.
 
     Field names are reader-facing labels (INCIDENT_DIMENSIONS[...].label), not
@@ -110,7 +110,7 @@ def narrate(llm: BaseChatModel, question: str, result: dict) -> InsightNarrative
     result. Raises NumberDriftError or InsightNarrationError rather than
     returning an unsafe narrative - callers must not catch-and-serve-anyway.
     """
-    evidence = _evidence_for(result)
+    evidence = evidence_for(result)
     human = (
         f"Question: {question}\n\n"
         f"Evidence - the exact SQL result, authoritative, do not alter:\n"

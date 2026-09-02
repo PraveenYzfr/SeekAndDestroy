@@ -29,6 +29,20 @@ class Employee(_Entity):
     #: working until the token expired after admin was revoked, and in oidc mode
     #: this platform does not control the claims at all.
     IsAdmin: bool = False
+    #: Viewer | Engineer | Approver | Administrator (migration 016;
+    #: CK_Employee_Role). Read fresh on every request the same way IsAdmin
+    #: is - app.api.auth.require_role re-reads this from employee_repository
+    #: rather than trusting a token claim, for the identical reason IsAdmin
+    #: does: a claim survives a demotion until the token expires.
+    #:
+    #: Added because this field's absence made require_role silently
+    #: unusable: employee_repository's SELECT * always returned the column
+    #: once migration 016 landed, but Pydantic drops an unrecognised key by
+    #: default, so getattr(record, "Role", None) fell through to None on
+    #: every call, ranking every employee, including Administrators, below
+    #: even "Viewer" - a 403 with no code path that could ever return
+    #: anything else, on a function nothing had called yet to notice.
+    Role: Optional[str] = None
     # Deliberately excluded: PasswordHash. It exists on sad.Employee but is
     # never loaded into this model, so it cannot leak through any endpoint
     # that returns an Employee. The one code path that needs it reads the

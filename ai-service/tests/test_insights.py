@@ -408,12 +408,12 @@ def test_hosting_entity_which_app_lives_where():
 
 def test_number_fidelity_accepts_rows_actually_in_evidence():
     """Sanity check on the evidence shape itself: a narrative that only cites
-    counts/percentages present in _evidence_for must show zero ungrounded
+    counts/percentages present in evidence_for must show zero ungrounded
     figures - guards against the fidelity check above being trivially strict
     (rejecting everything) rather than precise."""
     spec = InsightQuerySpec(group_by=["root_cause_category"], filters={"severity": ["Sev1"]})
     result = run_query(spec)
-    evidence = narrator._evidence_for(result)
+    evidence = narrator.evidence_for(result)
     top_row = max(evidence["rows"], key=lambda r: r["count"]) if evidence["rows"] else None
 
     prose = f"Total: {evidence['total_count']}."
