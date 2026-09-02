@@ -43,7 +43,7 @@ _cache: dict[str, tuple[float, dict]] = {}
 #: - it is a legitimate choice for a role while comparing behaviour without
 #: spending anything, and leaving it out would mean the screen could not express
 #: a configuration the factory supports.
-LISTABLE = ("mock", "deepseek", "groq", "openai", "gemini", "ollama")
+LISTABLE = ("mock", "deepseek", "groq", "anthropic", "openai", "gemini", "ollama")
 
 #: Substrings that mean "not a chat model". Provider listings mix in embedding,
 #: speech and moderation models that would 404 or return nonsense as a narration
@@ -79,6 +79,21 @@ def _fetch(provider: str) -> dict:
                 # suggests.
                 if "generateContent" in (m.get("supportedGenerationMethods") or [])
             ]
+        elif provider == "anthropic":
+            # GET /v1/models, but authenticated the Anthropic way - x-api-key and
+            # the version header, not a Bearer token. Listing rather than typing
+            # matters most here: Claude ids carry dates and are retired on a
+            # published schedule, so a name that worked last quarter is exactly
+            # the kind of plausible-looking guess that has already bitten us.
+            key = settings.key_for("anthropic")
+            if not key:
+                return _unavailable(provider, "No credential: set SAD_LLM__PROVIDER_KEYS__ANTHROPIC")
+            base = (settings.base_url or "https://api.anthropic.com/v1").rstrip("/")
+            data = _get(
+                f"{base}/models",
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+            )
+            names = [m["id"] for m in data.get("data", [])]
         elif provider == "ollama":
             base = settings.ollama_base_url.rstrip("/")
             data = _get(f"{base}/v1/models", headers={"Authorization": "Bearer ollama"})

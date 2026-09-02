@@ -100,6 +100,35 @@ def build_chat_model_for_provider(provider: str, model_override: str | None = No
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds, provider_name=label,
         )
+    if provider == "anthropic":
+        # Its own client, not a base_url variant. Anthropic is the second
+        # provider here that is not OpenAI-compatible on the wire - different
+        # endpoint, x-api-key instead of Bearer, a required anthropic-version
+        # header, system as a top-level field rather than a message, and content
+        # returned as a list of typed blocks. Gemini needed a client for the same
+        # reason; groq, deepseek and ollama did not.
+        from app.agents.anthropic_chat_model import AnthropicChatModel
+
+        key = settings.key_for("anthropic")
+        if not key:
+            raise ValueError(
+                "No Anthropic credential. Set SAD_LLM__PROVIDER_KEYS__ANTHROPIC, or "
+                "SAD_LLM__API_KEY if Anthropic is the only provider in use."
+            )
+        return AnthropicChatModel(
+            api_key=key,
+            # No default model. Claude model ids carry dates and are retired on a
+            # published schedule, so a hardcoded one is a guess with an expiry -
+            # the same mistake as "deepseek-chat", which came from a vendor's own
+            # docs and is not served. The admin screen enumerates live ids.
+            model=model_override or settings.model,
+            base_url=settings.base_url or "https://api.anthropic.com/v1",
+            temperature=settings.temperature,
+            # Required by this API rather than optional, so the settings default
+            # is load-bearing here in a way it is not for the others.
+            max_tokens=settings.max_output_tokens,
+            timeout_seconds=settings.timeout_seconds, provider_name=label,
+        )
     if provider == "groq":
         # OpenAI-compatible, so no new client - the same reasoning as deepseek and
         # ollama. Groq's value here is latency rather than price: it serves small

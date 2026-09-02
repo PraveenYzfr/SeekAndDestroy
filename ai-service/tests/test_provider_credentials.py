@@ -22,48 +22,54 @@ from app.agents import llm_factory, provider_models
 from app.config import get_settings, settings as settings_module
 
 
-@pytest.fixture
-def llm(monkeypatch):
-    """A fresh LlmSettings built from env, with the caches cleared around it."""
-    def _build(**env):
-        for k in list(env):
-            monkeypatch.setenv(k, env[k])
-        get_settings.cache_clear()
-        return get_settings().llm
-    yield _build
-    get_settings.cache_clear()
+#: Built directly, never through get_settings(). These assert the RESOLUTION
+#: RULE, and reading the real .env would make them depend on whichever keys
+#: happen to be configured on the machine - which is how two of them failed the
+#: first time, and how a live credential ended up in a pytest diff.
+#:
+#: Nothing here compares a key VALUE. Assertions are on which source won, so a
+#: failure prints a field name rather than a secret.
+def _llm(**kw):
+    from app.config.settings import LlmSettings
+
+    # _env_file=None keeps the developer's .env out of it; explicit kwargs
+    # outrank environment variables in pydantic-settings.
+    return LlmSettings(_env_file=None, **kw)
 
 
 class TestCredentialResolution:
-    def test_a_provider_uses_its_own_key(self, llm, monkeypatch):
-        monkeypatch.setenv("SAD_LLM__API_KEY", "shared")
-        monkeypatch.setenv("SAD_LLM__PROVIDER_KEYS__GROQ", "groq-key")
-        s = llm()
+    def test_a_provider_uses_its_own_key(self):
+        s = _llm(api_key="shared", provider_keys={"groq": "groq-key"})
         assert s.key_for("groq") == "groq-key"
 
-    def test_a_provider_without_one_falls_back(self, llm, monkeypatch):
-        """The compatibility guarantee: a deployment with one provider and one
-        key behaves exactly as it did before provider_keys existed."""
-        monkeypatch.setenv("SAD_LLM__API_KEY", "shared")
-        monkeypatch.setenv("SAD_LLM__PROVIDER_KEYS__GROQ", "groq-key")
-        assert llm().key_for("deepseek") == "shared"
+    def test_a_provider_without_one_falls_back(self):
+        """The compatibility guarantee: one provider and one key behaves exactly
+        as it did before provider_keys existed."""
+        s = _llm(api_key="shared", provider_keys={"groq": "groq-key"})
+        assert s.key_for("deepseek") == "shared"
 
-    def test_two_providers_resolve_differently(self, llm, monkeypatch):
+    def test_two_providers_resolve_differently(self):
         """The property the whole feature exists for."""
-        monkeypatch.setenv("SAD_LLM__API_KEY", "")
-        monkeypatch.setenv("SAD_LLM__PROVIDER_KEYS__GROQ", "groq-key")
-        monkeypatch.setenv("SAD_LLM__PROVIDER_KEYS__DEEPSEEK", "deepseek-key")
-        s = llm()
+        s = _llm(api_key="", provider_keys={"groq": "a", "deepseek": "b"})
         assert s.key_for("groq") != s.key_for("deepseek")
 
-    def test_lookup_is_case_insensitive(self, llm, monkeypatch):
-        monkeypatch.setenv("SAD_LLM__PROVIDER_KEYS__GROQ", "groq-key")
-        assert llm().key_for("GROQ") == "groq-key"
+    def test_lookup_is_case_insensitive(self):
+        s = _llm(provider_keys={"groq": "groq-key"})
+        assert s.key_for("GROQ") == "groq-key"
 
-    def test_no_credential_anywhere_is_empty_not_an_error(self, llm, monkeypatch):
+    def test_an_empty_entry_falls_back_rather_than_returning_empty(self):
+        """A placed-but-unfilled slot is how a key arrives before somebody sets
+        it. It must behave as absent, not as a credential of zero length."""
+        s = _llm(api_key="shared", provider_keys={"groq": ""})
+        assert s.key_for("groq") == "shared"
+
+    def test_no_credential_anywhere_is_empty_not_an_error(self):
         """Resolution reports absence; the factory decides what to do about it."""
-        monkeypatch.setenv("SAD_LLM__API_KEY", "")
-        assert llm().key_for("groq") == ""
+        assert _llm(api_key="", provider_keys={}).key_for("groq") == ""
+
+    def test_a_provider_with_no_slot_of_its_own_falls_through(self):
+        """ollama, azure-openai and mock have no per-provider entry by design."""
+        assert _llm(api_key="shared").key_for("azure-openai") == "shared"
 
 
 class TestGroqIsAFirstClassProvider:
