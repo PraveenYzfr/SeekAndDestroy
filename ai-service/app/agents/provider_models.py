@@ -72,7 +72,7 @@ def _is_chat_model(name: str) -> bool:
     return not any(token in lowered for token in _NOT_CHAT)
 
 
-def _fetch(provider: str) -> dict:
+def _fetch(provider: str, *, refresh: bool = False) -> dict:
     """Live model ids for one provider, or an entry saying why not.
 
     The per-provider knowledge - endpoint, auth header, how to read the response
@@ -95,7 +95,40 @@ def _fetch(provider: str) -> dict:
         return _unavailable(provider, str(exc))
     except Exception as exc:  # noqa: BLE001 - any failure is a reportable state
         return _unavailable(provider, f"{type(exc).__name__}: {exc}")
-    return {"provider": provider, "available": True, "models": sorted(names), "error": None}
+    # PROBED, NOT TRUSTED. A catalogue entry is not permission to call it: on the
+    # live Gemini key, GET /models/gemini-2.5-pro returns 200 with
+    # generateContent among its supportedGenerationMethods, and POST
+    # ...:generateContent returns 404. The capability filter screened on that
+    # flag and confidently offered a model that cannot be called - which is how
+    # the judge role and its fallback were both set to 404s and produced zero
+    # verdicts across four evaluation runs.
+    #
+    # usable_chat_models stays as the CHEAP pre-filter: it removes whisper, tts,
+    # embeddings and retired families by name, so a real API call is not spent
+    # probing a text-to-speech model. The probe then answers the only question
+    # the catalogue cannot.
+    from app.agents.providers import callable_models
+
+    models = sorted(names)
+    try:
+        models, filtered = callable_models(adapter, settings, models, refresh=refresh)
+    except Exception as exc:  # noqa: BLE001
+        # A probe failure must not blank the dropdown. Fall back to the
+        # catalogue and SAY SO, rather than presenting an unverified list as a
+        # verified one.
+        return {
+            "provider": provider, "available": True, "models": models,
+            "filtered_uncallable": 0, "callability_verified": False,
+            "error": f"model list not verified: {type(exc).__name__}: {exc}",
+        }
+    return {
+        "provider": provider, "available": True, "models": models,
+        # Reported so a short list reads as a filtered one rather than an
+        # outage. 1 of 29 with no explanation is indistinguishable from broken.
+        "filtered_uncallable": filtered,
+        "callability_verified": True,
+        "error": None,
+    }
 
 
 def _unavailable(provider: str, reason: str) -> dict:
@@ -115,7 +148,7 @@ def list_models(provider: str, *, refresh: bool = False) -> dict:
         cached = _cache.get(provider)
         if cached and now - cached[0] < _CACHE_TTL_SECONDS:
             return cached[1]
-    result = _fetch(provider)
+    result = _fetch(provider, refresh=refresh)
     # Only successes are cached. Caching a failure would keep a provider dark
     # for ten minutes after a transient blip or after the operator fixed the key.
     if result["available"]:

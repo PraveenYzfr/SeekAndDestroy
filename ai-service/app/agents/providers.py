@@ -435,3 +435,126 @@ def adapter_for(provider: str) -> ProviderAdapter:
 def listable_providers() -> tuple[str, ...]:
     """Providers the admin screen can enumerate, derived rather than restated."""
     return tuple(sorted(name for name, a in REGISTRY.items() if a.listable))
+
+
+# =============================================================================
+# Callability: what this KEY can actually invoke
+# =============================================================================
+#: A catalogue entry is not permission to call it.
+#:
+#: Measured against production, on the live Gemini key:
+#:
+#:     GET  /v1beta/models/gemini-2.5-pro                  200, and
+#:          supportedGenerationMethods includes generateContent
+#:     POST /v1beta/models/gemini-2.5-pro:generateContent   404
+#:
+#: Both auth styles, header and ?key=. So supportedGenerationMethods describes
+#: what the MODEL supports, not what this key is entitled to invoke - and the
+#: capability filter that screens on it happily offered a model that 404s.
+#:
+#: It cost real time: the judge role and its fallback were both pointed at models
+#: chosen from that list, so the LLM-as-judge produced zero verdicts across four
+#: evaluation runs while every error read "all LLM providers failed". The screen
+#: offered 29 Gemini models and one of the five tried was callable.
+#:
+#: The only thing that distinguishes them is asking. One request per model.
+_PROBE_PROMPT = "Reply with the single word OK."
+
+#: Long, because each miss costs a real API call and a model's availability
+#: changes on the scale of weeks. The admin screen's explicit refresh bypasses
+#: it, which is the case where an operator has just fixed a key or changed a
+#: plan and wants the truth now.
+CALLABILITY_TTL_SECONDS = 86400
+
+#: Bounded so probing 74 OpenAI models does not open 74 sockets at once. These
+#: are I/O-bound, so a small pool is most of the win.
+_PROBE_WORKERS = 8
+
+#: name -> (probed_at, callable, hard-rejected). Transient failures appear in
+#: neither list, so they are re-probed rather than cached wrong.
+_callable_cache: dict[str, tuple[float, list[str], list[str]]] = {}
+
+
+#: A model that does not exist, or that this key may not call, answers the same
+#: way every time. A rate limit or a timeout does not. Caching those alike would
+#: remove a working model from the dropdown for a day because of one bad minute -
+#: so they are cached separately and transient verdicts are simply not cached.
+_HARD_STATUSES = frozenset({400, 401, 403, 404, 422})
+
+
+def _probe(adapter: Any, settings: Any, model: str) -> str:
+    """One trivial completion. Returns "ok", "hard" or "transient".
+
+    Uses the adapter's own build(), so this needs no per-provider probe code and
+    cannot drift from how the platform really calls that provider. A probe that
+    built its request differently from production would answer a different
+    question - which is precisely the failure being fixed.
+    """
+    from langchain_core.messages import HumanMessage
+
+    try:
+        llm = adapter.build(settings, model, f"probe:{adapter.name}")
+        llm.invoke([HumanMessage(content=_PROBE_PROMPT)])
+        return "ok"
+    except Exception as exc:  # noqa: BLE001
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status is None:
+            # An EmptyCompletionError means the endpoint SERVED the model and the
+            # model spent its budget thinking. That is a usable model with a
+            # small prompt problem, not a missing one.
+            if type(exc).__name__ == "EmptyCompletionError":
+                return "ok"
+            text = str(exc)
+            for code in _HARD_STATUSES:
+                if f"'{code}" in text or f" {code} " in text:
+                    return "hard"
+            return "transient"
+        return "hard" if status in _HARD_STATUSES else "transient"
+
+
+def callable_models(
+    adapter: Any, settings: Any, models: list[str], *, refresh: bool = False
+) -> tuple[list[str], int]:
+    """(models this key can invoke, how many were removed).
+
+    The count is returned rather than logged. A dropdown showing 1 of 29 with no
+    explanation is indistinguishable from an outage - the same way the blank
+    hallucination panel made "nothing is wrong" and "nothing is measured" look
+    identical for hours.
+
+    Catalogue order is preserved. The caller already sorted it, and a second
+    opinion here would silently reorder somebody's list.
+    """
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    now = time.time()
+    known_ok: set[str] = set()
+    known_bad: set[str] = set()
+    if not refresh:
+        hit = _callable_cache.get(adapter.name)
+        if hit and now - hit[0] < CALLABILITY_TTL_SECONDS:
+            known_ok, known_bad = set(hit[1]), set(hit[2])
+
+    # Only models with no cached verdict are probed. Intersecting with the live
+    # catalogue rather than trusting the cache wholesale, so a model that has
+    # since been withdrawn is not offered on the strength of an old yes.
+    unknown = [m for m in models if m not in known_ok and m not in known_bad]
+    if unknown:
+        with ThreadPoolExecutor(max_workers=min(_PROBE_WORKERS, len(unknown))) as pool:
+            verdicts = list(pool.map(lambda m: _probe(adapter, settings, m), unknown))
+        for model, verdict in zip(unknown, verdicts):
+            if verdict == "ok":
+                known_ok.add(model)
+            elif verdict == "hard":
+                known_bad.add(model)
+            # "transient" is deliberately not recorded either way: it will be
+            # re-probed next time rather than being held wrong for a day.
+        _callable_cache[adapter.name] = (now, sorted(known_ok), sorted(known_bad))
+
+    good = [m for m in models if m in known_ok]
+    return good, len(models) - len(good)
+
+
+def reset_callability_cache() -> None:
+    _callable_cache.clear()
