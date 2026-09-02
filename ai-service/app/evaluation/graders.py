@@ -43,6 +43,27 @@ _NUMBER_RE = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
 #: also uses APP-CRM style application codes.
 _ENTITY_RE = re.compile(r"\b(?:APP-[A-Z0-9]+|[a-z]{3}-[a-z]?\d{2,4})\b")
 
+#: Dates and quarters, removed before numbers are extracted for the same reason
+#: entity codes are: they identify a window, they do not measure one.
+#:
+#: A narrator copying "2026-07-01" verbatim - the CORRECT behaviour, the value
+#: came straight from the evidence - was tokenised into 2026, -07 and -01. Two of
+#: those are negative numbers nothing can ever ground, so quoting a date
+#: accurately failed number_fidelity. The insights narrator worked around it by
+#: describing windows in words and reported the root cause here rather than
+#: patching around it a second time.
+#:
+#: Named gap, so nobody assumes otherwise: number_fidelity now says NOTHING about
+#: whether a date is correct. It never usefully did - it failed accurate dates and
+#: invented ones alike - but this makes the check absent rather than lenient, and
+#: a fabricated date would need a grader of its own.
+_DATE_RE = re.compile(
+    r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b"       # 2026-07-01, 2026/7/1
+    r"|\b\d{1,2}[-/]\d{1,2}[-/]\d{4}\b"      # 01-07-2026, 1/7/2026
+    r"|\bQ[1-4]\b",                           # Q3 - the 3 is not a measurement
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class GradeResult:
@@ -73,7 +94,7 @@ def _numbers_in(text: str) -> list[str]:
     it was, since those "numbers" always matched the evidence they came from.
     Entity codes are graded by entity_fidelity; their digits are not metrics.
     """
-    return _NUMBER_RE.findall(_ENTITY_RE.sub(" ", text or ""))
+    return _NUMBER_RE.findall(_DATE_RE.sub(" ", _ENTITY_RE.sub(" ", text or "")))
 
 
 def _as_float(token: str) -> float | None:
