@@ -115,14 +115,19 @@ class DatabaseSettings(_Base):
 
 
 class LlmSettings(_Base):
+    # env_nested_delimiter lets SAD_LLM__PROVIDER_KEYS__GROQ populate
+    # provider_keys["groq"]. Verified not to disturb the flat variables: none of
+    # SAD_LLM__PROVIDER, __MODEL, __API_KEY or __MAX_OUTPUT_TOKENS contains a
+    # second "__" after the prefix, so nothing that resolved before splits now.
     model_config = SettingsConfigDict(
-        env_file=str(ENV_FILE), env_prefix="SAD_LLM__", extra="ignore", case_sensitive=False
+        env_file=str(ENV_FILE), env_prefix="SAD_LLM__", extra="ignore",
+        case_sensitive=False, env_nested_delimiter="__",
     )
 
     # "gemini" speaks Google's native generateContent API - a different wire
     # format from the OpenAI-compatible providers, so it has its own client
     # (app/agents/gemini_chat_model.py), exactly like the embedder does.
-    provider: Literal["mock", "openai", "azure-openai", "ollama", "gemini", "deepseek"] = "mock"
+    provider: Literal["mock", "openai", "azure-openai", "ollama", "gemini", "deepseek", "groq"] = "mock"
     model: str = "seek-and-destroy-mock"
     temperature: float = 0.0
     #: Ceiling on generated tokens, NOT a reservation - billing is per token
@@ -139,10 +144,31 @@ class LlmSettings(_Base):
     timeout_seconds: int = 60
     base_url: str = ""
     api_key: str = ""
+    #: Per-provider credentials, so two providers can run at once.
+    #:
+    #: Every role could already choose a different MODEL. None could choose a
+    #: different PROVIDER, because api_key is process-wide: pointing `planning`
+    #: at Groq while the default was DeepSeek built a Groq client with DeepSeek's
+    #: key and got a 401 that reads as a bad credential rather than a design
+    #: limit. That is the whole blocker on running a fast model for extraction
+    #: and a reasoning model for reporting.
+    #:
+    #: api_key remains the fallback for any provider without its own entry, so a
+    #: single-provider deployment needs no change at all and nothing that works
+    #: today stops working.
+    provider_keys: dict[str, str] = {}
     azure_endpoint: str = ""
     azure_deployment: str = ""
     azure_api_version: str = "2024-10-21"
     ollama_base_url: str = "http://localhost:11434"
+
+    def key_for(self, provider: str) -> str:
+        """The credential for one provider, falling back to the shared api_key.
+
+        Lowercased on lookup: pydantic lowercases the env-var segment, and an
+        operator writing PROVIDER_KEYS__Groq should not get a silently empty key.
+        """
+        return (self.provider_keys or {}).get((provider or "").lower()) or self.api_key
     #: Overrides the `provider=` label on metrics. Any OpenAI-compatible
     #: endpoint - Groq, Together, Fireworks, whatever ships next - runs through
     #: provider="openai" with a custom base_url, which would file every one of

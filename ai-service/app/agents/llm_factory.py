@@ -85,14 +85,42 @@ def build_chat_model_for_provider(provider: str, model_override: str | None = No
         # structured output falls back to prompt instructions plus a repair
         # retry (app/agents/structured.py) rather than the guarantee Gemini's
         # responseSchema gives.
-        if not settings.api_key:
-            raise ValueError("SAD_LLM__API_KEY is required for the deepseek provider")
+        key = settings.key_for("deepseek")
+        if not key:
+            raise ValueError(
+                "No DeepSeek credential. Set SAD_LLM__PROVIDER_KEYS__DEEPSEEK, or "
+                "SAD_LLM__API_KEY if DeepSeek is the only provider in use."
+            )
         return HttpChatModel(
             base_url=settings.base_url or "https://api.deepseek.com/v1",
             # Verified against GET /models, not assumed - "deepseek-chat" was a
             # plausible-looking guess that this account does not serve at all.
             model=model_override or (settings.model if settings.model != "seek-and-destroy-mock" else "deepseek-v4-flash"),
             api_key=settings.api_key,
+            temperature=settings.temperature, max_tokens=settings.max_output_tokens,
+            timeout_seconds=settings.timeout_seconds, provider_name=label,
+        )
+    if provider == "groq":
+        # OpenAI-compatible, so no new client - the same reasoning as deepseek and
+        # ollama. Groq's value here is latency rather than price: it serves small
+        # models on custom silicon, which is what makes it a candidate for the
+        # extraction and planning roles that are currently paying reasoning-model
+        # time for schema-filling work.
+        key = settings.key_for("groq")
+        if not key:
+            raise ValueError(
+                "No Groq credential. Set SAD_LLM__PROVIDER_KEYS__GROQ, or "
+                "SAD_LLM__API_KEY if Groq is the only provider in use."
+            )
+        return HttpChatModel(
+            base_url=settings.base_url or "https://api.groq.com/openai/v1",
+            # No default model name. Groq retires and renames models often, and
+            # "deepseek-chat" - a plausible guess straight from a vendor's own
+            # docs - turned out not to be served at all. The admin screen
+            # enumerates live ids from GET /models; this raises rather than
+            # guessing one.
+            model=model_override or settings.model,
+            api_key=key,
             temperature=settings.temperature, max_tokens=settings.max_output_tokens,
             timeout_seconds=settings.timeout_seconds, provider_name=label,
         )

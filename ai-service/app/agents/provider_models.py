@@ -43,7 +43,7 @@ _cache: dict[str, tuple[float, dict]] = {}
 #: - it is a legitimate choice for a role while comparing behaviour without
 #: spending anything, and leaving it out would mean the screen could not express
 #: a configuration the factory supports.
-LISTABLE = ("mock", "deepseek", "openai", "gemini", "ollama")
+LISTABLE = ("mock", "deepseek", "groq", "openai", "gemini", "ollama")
 
 #: Substrings that mean "not a chat model". Provider listings mix in embedding,
 #: speech and moderation models that would 404 or return nonsense as a narration
@@ -89,9 +89,14 @@ def _fetch(provider: str) -> dict:
             default_base = {
                 "openai": "https://api.openai.com/v1",
                 "deepseek": "https://api.deepseek.com/v1",
+                "groq": "https://api.groq.com/openai/v1",
             }[provider]
-            if not settings.api_key:
-                return _unavailable(provider, "SAD_LLM__API_KEY is not set")
+            key = settings.key_for(provider)
+            if not key:
+                return _unavailable(
+                    provider,
+                    f"No credential: set SAD_LLM__PROVIDER_KEYS__{provider.upper()}",
+                )
             data = _get(f"{(settings.base_url or default_base).rstrip('/')}/models",
                         headers={"Authorization": f"Bearer {settings.api_key}"})
             names = [m["id"] for m in data.get("data", [])]
