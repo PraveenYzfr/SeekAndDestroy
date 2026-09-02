@@ -1,0 +1,116 @@
+#  Alerts on AI behaviour.
+#
+#  A dashboard nobody is watching at 2am is a wall of graphs. These are the four
+#  conditions worth waking up for, and each one is written to fire on a CHANGE
+#  rather than on a level - "hallucination rate is 3%" is not actionable without
+#  knowing whether it was 3% yesterday.
+#
+#  DELIBERATELY NOT ALERTED
+#  ------------------------
+#  * A single drifted narration. The guard already refused it and the user got a
+#    correct answer instead. That is the system working, and paging on it trains
+#    people to ignore the page.
+#  * Absolute spend. A budget ceiling is enforced in code (spend_denials_total);
+#    an alert on top of it would fire second, after the thing that already
+#    handled it.
+#  * A low judge score on one answer. It is one model's opinion of another's
+#    work. The review queue at /api/admin/answer-evaluations?worst_only=true is
+#    where those belong - a queue, not a page.
+
+groups:
+  - name: ai-quality
+    interval: 1m
+    rules:
+      # The signal that a model change made things worse. Drift means a model
+      # stated a figure it was never given and the platform refused the answer;
+      # a sustained climb means the current model invents more than the last one.
+      - alert: HallucinationRateElevated
+        expr: |
+          sum(rate(sad_narration_drift_total{outcome="drift"}[30m]))
+            / clamp_min(sum(rate(sad_narration_drift_total[30m])), 0.0001) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over 5% of narrations are being refused for stating ungrounded figures"
+          description: >
+            The guard is working - these answers were refused, not shown - but a
+            rate this high usually follows a model change. Compare against the
+            change history on the Model Settings screen before assuming the
+            evidence is at fault.
+
+      # The instrument, not the output. A judge that has silently stopped leaves
+      # every quality panel showing its last good score forever, which reads as
+      # health. This is the alert that says the measurement is broken.
+      - alert: JudgeNotProducingVerdicts
+        expr: sum(rate(sad_judge_failures_total[15m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The answer judge is failing to produce verdicts"
+          description: >
+            Quality panels will keep rendering from older data and will look
+            healthy. Check the judge role's provider on the Model Settings
+            screen; reason label says whether it was the provider, the evidence,
+            or the parse.
+
+      # Fidelity is a rate over figures, so a p10 below 0.9 means one answer in
+      # ten carried a figure its evidence did not support. Alerting on the tail
+      # rather than the mean is the whole point: a mean of 0.97 can be 97 clean
+      # answers and 3 broken ones.
+      - alert: FidelityTailDegraded
+        expr: |
+          histogram_quantile(0.1, sum by (le, grader) (rate(sad_fidelity_score_bucket[1h]))) < 0.9
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bottom-decile answer fidelity has fallen below 0.9 ({{ $labels.grader }})"
+          description: >
+            One answer in ten is carrying figures its evidence does not support.
+            The individual answers are at
+            /api/admin/answer-evaluations?worst_only=true - Prometheus has the
+            rate, that endpoint has the answers behind it.
+
+      # Not a budget alert. This fires when cost per unit of work MOVES, which is
+      # what a role being pointed at a more expensive model looks like from
+      # outside - and is invisible in total spend if volume dropped at the same
+      # time.
+      - alert: CostPerInvestigationJumped
+        expr: |
+          (
+            sum(increase(sad_llm_cost_usd_total[1h]))
+              / clamp_min(sum(increase(sad_investigations_total[1h])), 1)
+          )
+          >
+          2 * (
+            sum(increase(sad_llm_cost_usd_total[24h] offset 1h))
+              / clamp_min(sum(increase(sad_investigations_total[24h] offset 1h)), 1)
+          )
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "Cost per investigation has doubled against its 24h baseline"
+          description: >
+            Usually a role moved onto a larger model, or fallbacks are firing and
+            a more expensive backup is answering. Check
+            sad_llm_fallback_total before assuming it was a configuration change.
+
+  - name: ai-availability
+    interval: 1m
+    rules:
+      # Fallbacks working is not an incident. Fallbacks working CONSTANTLY means
+      # the platform is answering from a model nobody selected, indefinitely,
+      # and the screen still shows the primary.
+      - alert: SustainedProviderFallback
+        expr: sum(rate(sad_llm_fallback_total[15m])) > 0.1
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A primary model provider has been failing over for 20 minutes"
+          description: >
+            Answers are still being produced, by the backup model rather than the
+            configured one. The audit log records which actually answered.

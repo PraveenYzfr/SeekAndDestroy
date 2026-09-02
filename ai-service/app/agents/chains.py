@@ -20,7 +20,6 @@ from app.models.agent_contracts import (
     ForecastExplanation,
     FinalRecommendationReport,
     GroundedAnswer,
-    InvestigationPlan,
     RightSizingExplanation,
     TradeOffSummary,
 )
@@ -33,7 +32,6 @@ from app.prompts.templates import (
     FORECAST_EXPLANATION_SYSTEM,
     GROUNDED_QA_SYSTEM,
     REJECTION_ANSWER_SYSTEM,
-    INTENT_PARSER_SYSTEM,
     REQUIREMENT_EXTRACTION_SYSTEM,
     RIGHTSIZING_EXPLANATION_SYSTEM,
     TRADEOFF_SYSTEM,
@@ -41,9 +39,21 @@ from app.prompts.templates import (
 )
 
 
-def parse_investigation_plan(llm: BaseChatModel, user_query: str) -> InvestigationPlan:
-    human = f"User request:\n{user_query}\n\nClassify it and produce a short investigation plan."
-    return run_structured(llm, INTENT_PARSER_SYSTEM, human, InvestigationPlan)
+# REMOVED: parse_investigation_plan.
+#
+# 2bd4311 stopped calling it - the plan it built averaged 8.2s per investigation
+# and nothing downstream read it - and this function stayed behind with no
+# caller. Its role in Model Settings went at the same time (see
+# app.agents.roles), which left it as the one public chain in this module with
+# no role routing it, and test_the_map_covers_every_chain_in_chains_py caught
+# exactly that.
+#
+# Left as dead code it would eventually be called again by someone reading it as
+# available, which is how a removed 8-second step comes back.
+#
+# InvestigationPlan and INTENT_PARSER_SYSTEM are kept: the schema is still named
+# by the evaluation suite's list of known schemas, and a prompt costs nothing to
+# keep. It was the CALL that was expensive.
 
 
 def extract_hosting_requirement(llm: BaseChatModel, user_query: str) -> ApplicationHostingRequirement:

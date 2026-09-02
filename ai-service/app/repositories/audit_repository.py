@@ -65,6 +65,7 @@ def log_complete(
     # unpriced - a spend report reading zero, with nothing to indicate it was
     # wrong rather than free.
     cost = _price(model, prompt_tokens, completion_tokens)
+    _observe_cost(provider, model, cost)
 
     execute(
         f"UPDATE {T('AgentAuditLog')} SET OutputJson = :output_json, CompletedAt = :completed_at, "
@@ -119,3 +120,26 @@ def _now():
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _observe_cost(provider: str | None, model: str | None, cost) -> None:
+    """Export what this call cost, at the moment it is priced.
+
+    Here rather than in a nightly job over the audit table, because a dashboard
+    that lags the spend it reports cannot answer the question people actually ask
+    of it - "is something expensive happening right now".
+
+    An unpriced model is counted under model="UNPRICED" with zero dollars rather
+    than dropped. A spend graph reading zero because a model was unknown is worse
+    than one reading low: the second is visibly incomplete.
+    """
+    try:
+        from app.observability.metrics import llm_cost_usd_total
+
+        amount = float(getattr(cost, "cost", 0) or 0)
+        priced = getattr(cost, "cost", None) is not None
+        llm_cost_usd_total.labels(
+            provider=provider or "unknown", model=(model or "unknown") if priced else "UNPRICED"
+        ).inc(amount)
+    except Exception:  # noqa: BLE001 - never fail a call to record what it cost
+        pass

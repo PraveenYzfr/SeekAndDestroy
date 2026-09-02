@@ -1,6 +1,13 @@
 global:
   scrape_interval: 15s
 
+# Conditions worth a human's attention, kept beside the scrape config rather than
+# only in Grafana. A Grafana-only alert lives in Grafana's own database, which is
+# not in this repository and is not restored by a redeploy - so it survives right
+# up until the day the container is recreated.
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   - job_name: ai-service
     metrics_path: /metrics

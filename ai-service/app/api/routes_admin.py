@@ -216,3 +216,88 @@ def get_evaluation(limit: int = 5000, current: AuthenticatedEmployee = Depends(r
             title="Evaluation could not be computed",
             detail=str(exc)[:500],
         ) from exc
+
+
+@router.get("/api/admin/answer-evaluations")
+def get_answer_evaluations(
+    limit: int = 50,
+    worst_only: bool = False,
+    current: AuthenticatedEmployee = Depends(require_admin),
+):
+    """Verdicts on answers this platform actually delivered.
+
+    DIFFERENT QUESTION FROM /api/admin/evaluation, which is why both exist.
+    That one grades the audit table on demand and answers "how is this MODEL
+    behaving". This one reads verdicts recorded at the time each answer was
+    given and answers "was THAT answer any good" - including the judge's opinion,
+    which the harness never had because the harness runs long after the fact.
+
+    Grafana covers the rates. It cannot show the four answers that scored 2 on
+    groundedness last week, because it stores aggregates and drops the
+    individuals - and those individuals are what a fix starts from.
+
+    ``worst_only`` is the review queue: judge scores at or below 3 on any
+    dimension, self-judged verdicts excluded. A model grading its own work grades
+    it high, so including those would fill a reviewer's queue with noise about
+    the grader rather than the answers.
+    """
+    from app.repositories import answer_evaluation_repository as repo
+
+    bounded = max(1, min(int(limit), 500))
+    try:
+        rows = repo.worst(limit=bounded) if worst_only else repo.recent(limit=bounded)
+    except Exception as exc:  # noqa: BLE001
+        raise ProblemDetailsError(
+            status=500,
+            title="Answer evaluations could not be read",
+            detail=str(exc)[:500],
+        ) from exc
+
+    return {
+        "count": len(rows),
+        "worst_only": worst_only,
+        "evaluations": [
+            {
+                "id": row.AnswerEvaluationId,
+                "investigation_id": row.InvestigationId,
+                "conversation_id": row.ConversationId,
+                "question": row.Question,
+                # Kept apart in the payload exactly as they are kept apart in the
+                # table. A client that wants one number can compute one; a client
+                # handed one number cannot recover which half moved.
+                "deterministic": {
+                    "number_fidelity": _as_float(row.NumberFidelity),
+                    "entity_fidelity": _as_float(row.EntityFidelity),
+                    "completeness": _as_float(row.Completeness),
+                    "graded_calls": row.GradedCalls,
+                    "ungradeable_calls": row.UngradeableCalls,
+                    "ungrounded": repo.ungrounded_tokens(row),
+                },
+                "judge": {
+                    "provider": row.JudgeProvider,
+                    "model": row.JudgeModel,
+                    "relevance": row.JudgeRelevance,
+                    "groundedness": row.JudgeGroundedness,
+                    "actionability": row.JudgeActionability,
+                    "confident": row.JudgeConfident,
+                    # Surfaced, never quietly dropped. A reader comparing scores
+                    # has to know which of them a model gave itself.
+                    "self_judged": row.JudgeSelfJudged,
+                    "justification": row.JudgeJustification,
+                    "error": row.JudgeError,
+                },
+                "created_at": row.CreatedAt,
+            }
+            for row in rows
+        ],
+    }
+
+
+def _as_float(value) -> float | None:
+    """Decimal to float for JSON, preserving None.
+
+    None means NOT MEASURED and must survive the trip to the client. Coercing it
+    to 0.0 here would undo the distinction the table goes to some trouble to
+    keep, one layer before anybody sees it.
+    """
+    return None if value is None else float(value)

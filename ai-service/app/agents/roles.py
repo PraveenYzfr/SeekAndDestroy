@@ -56,8 +56,8 @@ class ModelRole:
     chains: tuple[str, ...]
 
 
-#: Suffix naming a role's backup. "planning.fallback" is where planning goes when
-#: its own provider fails.
+#: Suffix naming a role's backup. "extraction.fallback" is where extraction goes
+#: when its own provider fails.
 #:
 #: A suffix rather than a column, so no migration and no second table: the
 #: override store is keyed by role name and a fallback IS a role assignment - the
@@ -86,16 +86,23 @@ def primary_role_name(role_name: str) -> str:
     return role_name[: -len(FALLBACK_SUFFIX)] if is_fallback_role(role_name) else role_name
 
 
+#: REMOVED: "planning".
+#:
+#: It named parse_investigation_plan, and 2bd4311 stopped calling that - the plan
+#: it produced averaged 8.2s per investigation and nothing downstream read it.
+#: The role outlived the work, so Model Settings kept offering a model dropdown
+#: and a fallback slot for a chain that no longer runs.
+#:
+#: A dropdown that does nothing is worse than an absent one. An operator setting
+#: it would see no effect, find no calls under it in AgentAuditLog, and have no
+#: way to tell that from a broken configuration - so it is gone rather than
+#: hidden or disabled.
+#:
+#: Existing sad.LlmRoleOverride rows naming "planning" are left in place. They are
+#: inert, and deleting somebody's saved configuration to tidy up a table is a
+#: worse trade than leaving a dead row nothing reads. If the planning step ever
+#: returns, this entry comes back and those rows start meaning something again.
 ROLES: tuple[ModelRole, ...] = (
-    ModelRole(
-        name="planning",
-        title="Planning",
-        description=(
-            "Turns a request into an investigation plan. Runs once per investigation, "
-            "before anything is computed."
-        ),
-        chains=("parse_investigation_plan",),
-    ),
     ModelRole(
         name="extraction",
         title="Requirement extraction",

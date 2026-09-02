@@ -308,6 +308,7 @@ def _recall(prior: conversation.PriorInvestigation, conversation_id: str | None)
 
 def run_investigation(*, query: str, created_by: int, conversation_id: str | None = None) -> dict:
     from app.graph.nodes import quick_reply
+    from app.services import answer_evaluation
     from app.observability.metrics import investigations_total
 
     # What this turn refers to, if anything. Resolved before the Investigation
@@ -327,6 +328,18 @@ def run_investigation(*, query: str, created_by: int, conversation_id: str | Non
                 conversation_id, "Assistant", conversation.turn_summary(result),
                 investigation_id=result.get("investigation_id"),
             )
+        # Every final answer leaves through here - the four early returns above
+        # and the full investigation below - which is why the evaluation hangs
+        # off this function rather than off the last one. A grader wired to the
+        # main path only would silently skip the recall and the conversation
+        # reply, and their absence would read as "those answers are never bad".
+        #
+        # Fire and forget: it grades work that has already been handed over, so
+        # it must not be able to delay or fail it. See
+        # app.services.answer_evaluation for why the judge is off the hot path.
+        answer_evaluation.evaluate_async(
+            question=query, result=result, conversation_id=conversation_id
+        )
         return result
 
     # A reference with nothing to refer to ("give me the options again" as the

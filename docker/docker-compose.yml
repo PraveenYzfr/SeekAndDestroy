@@ -324,6 +324,7 @@ services:
       - "127.0.0.1:9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     # No depends_on ai-service/api-gateway on purpose - this profile must work
     # standalone (--profile observability without --profile core). Prometheus

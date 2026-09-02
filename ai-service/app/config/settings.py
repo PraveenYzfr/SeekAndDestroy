@@ -251,6 +251,27 @@ class LlmSettings(_Base):
     #: deliberately, so recovery does not require finding who set what.
     force_single: str = ""
 
+    # -- Answer evaluation -------------------------------------------------
+    #: Grade every delivered answer and keep the verdict. Off means the platform
+    #: still refuses a narration that drifts - that guard is not a setting - but
+    #: nothing records how often, and no answer is ever scored.
+    evaluate_answers: bool = True
+
+    #: Share of answers that get an LLM judge, 0.0-1.0.
+    #:
+    #: 1.0 by default because "a judge for each final output" is what was asked
+    #: for. The dial exists so the trade-off stays visible: judging is one extra
+    #: model call per investigation. It runs AFTER the answer is returned, so it
+    #: costs no user-facing latency, but it does cost a call.
+    #:
+    #: Lowering this makes judge scores a SAMPLE and does NOT reduce the
+    #: deterministic fidelity checks, which are arithmetic over rows that already
+    #: exist and are always run - they are the half that catches an invented
+    #: figure, and sampling them would save nothing at the price of the signal
+    #: that matters most.
+    judge_sample_rate: float = 1.0
+
+
     @property
     def role_tier_map(self) -> dict[str, str]:
         from app.agents.tiers import parse_role_tiers

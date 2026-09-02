@@ -2,16 +2,26 @@
 (wired up in app.main via prometheus-fastapi-instrumentator, which also adds
 the standard HTTP request-rate/latency/status metrics automatically).
 
-These are deliberately narrow: what would an on-call engineer actually need
-mid-incident? Is a real LLM/embedding provider failing or falling back, is
-the narration cache doing anything, is the spend budget about to bite, is
-investigation volume normal. Nothing here duplicates a number the
-deterministic engines already compute - this is purely operational signal.
+Two kinds of signal live here, and the split is deliberate.
+
+OPERATIONAL - what an on-call engineer needs mid-incident. Is a provider failing
+or falling back, is the cache doing anything, is the budget about to bite, is
+volume normal.
+
+QUALITY - whether the answers were any good. This half did not exist. The guards
+that catch a fabricated figure fired live on every request and were recorded only
+as structured log lines, so "how often does this platform state a number it was
+never given" was answerable by grepping logs and by nothing else. The checks were
+real; the signal was invisible.
+
+That is the gap these metrics close. Nothing here RECOMPUTES a verdict - each
+counter is emitted at the point where an existing check already reached one, so
+the dashboard and the runtime can never disagree about what happened.
 """
 
 from __future__ import annotations
 
-from prometheus_client import Counter
+from prometheus_client import Counter, Histogram
 
 llm_calls_total = Counter(
     "sad_llm_calls_total", "Real (non-mock) LLM chat-model calls attempted", ["provider", "outcome"]
@@ -41,4 +51,70 @@ budget_denied_total = Counter(
 )
 investigations_total = Counter(
     "sad_investigations_total", "Investigations created, by type", ["investigation_type"]
+)
+
+
+# =============================================================================
+# Quality - was the answer any good, not just how many were there
+# =============================================================================
+
+#: Narrations checked by assert_no_number_drift, and whether the check passed.
+#:
+#: This is the hallucination rate in its most load-bearing form: outcome="drift"
+#: means a model stated a figure that was not in the evidence it was given, and
+#: the platform refused the narration rather than showing it. It was already
+#: happening on every request; it was simply not counted, so the answer to "how
+#: often" was a log grep.
+#:
+#: Emitted inside the guard rather than at its five call sites - a counter that
+#: has to be remembered at each caller is a counter that will be missed at one.
+narration_drift_total = Counter(
+    "sad_narration_drift_total",
+    "Narrations checked for number drift, by schema and outcome (ok|drift)",
+    ["schema", "outcome"],
+)
+
+#: Money, as a counter rather than a gauge, so rate() gives spend per second and
+#: increase() gives spend over a window.
+#:
+#: Priced from sad.ModelPrice at the moment of the call, which matters because a
+#: price change should not retroactively rewrite what last month cost. Calls whose
+#: model has no price row are counted under model="UNPRICED" instead of being
+#: dropped - a spend dashboard reading zero because a model was unknown is worse
+#: than one reading low, since the second is visibly incomplete.
+llm_cost_usd_total = Counter(
+    "sad_llm_cost_usd_total", "Cost in USD of completed model calls", ["provider", "model"]
+)
+
+#: The deterministic graders, as a distribution rather than a mean.
+#:
+#: A mean fidelity of 0.97 can be 97 perfect answers and 3 broken ones, or 100
+#: answers each with a wrong figure. Those need different responses and a single
+#: number cannot tell them apart. Buckets are dense near 1.0 because that is
+#: where the interesting movement is - the difference between 0.99 and 1.0 is a
+#: fabricated number in one answer out of a hundred.
+fidelity_score = Histogram(
+    "sad_fidelity_score",
+    "Deterministic grader scores over model prose, by grader",
+    ["grader"],
+    buckets=(0.5, 0.8, 0.9, 0.95, 0.98, 0.99, 0.995, 1.0),
+)
+
+#: The LLM judge, by the dimension it scored.
+#:
+#: Deliberately separate from fidelity_score. The graders are arithmetic and the
+#: judge is an opinion, and averaging the two would produce a "quality score" that
+#: cannot be acted on - a drop could mean a fabricated figure or a model being
+#: less chatty, and only one of those is an incident.
+judge_score = Histogram(
+    "sad_judge_score",
+    "LLM-as-judge scores, by dimension (relevance|groundedness|actionability)",
+    ["dimension"],
+    buckets=(1, 2, 3, 4, 5),
+)
+
+#: Judge verdicts that could not be produced. A judge that silently stops running
+#: leaves a dashboard showing the last good score forever, which reads as health.
+judge_failures_total = Counter(
+    "sad_judge_failures_total", "Judge invocations that failed, by reason", ["reason"]
 )

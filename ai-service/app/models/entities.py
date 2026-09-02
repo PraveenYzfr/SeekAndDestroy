@@ -359,6 +359,39 @@ class ConversationTurn(_Entity):
     CreatedAt: datetime
 
 
+class AnswerEvaluation(_Entity):
+    """One verdict on one delivered answer.
+
+    Optional everywhere it can be, because a missing score means NOT MEASURED
+    and must stay distinguishable from a bad one. A judge that was unavailable
+    leaves nulls and a JudgeError; a model that invented every figure leaves
+    NumberFidelity 0.0. Collapsing those two into the same value is how a
+    broken instrument starts reading as broken output.
+    """
+
+    AnswerEvaluationId: int
+    InvestigationId: Optional[int]
+    ConversationId: Optional[str]
+    Question: Optional[str]
+    NumberFidelity: Optional[Decimal]
+    EntityFidelity: Optional[Decimal]
+    Completeness: Optional[Decimal]
+    UngroundedJson: Optional[str]
+    GradedCalls: int
+    UngradeableCalls: int
+    JudgeProvider: Optional[str]
+    JudgeModel: Optional[str]
+    JudgeRelevance: Optional[int]
+    JudgeGroundedness: Optional[int]
+    JudgeActionability: Optional[int]
+    JudgeConfident: Optional[bool]
+    JudgeSelfJudged: Optional[bool]
+    JudgeJustification: Optional[str]
+    JudgeError: Optional[str]
+    DurationMs: Optional[int]
+    CreatedAt: datetime
+
+
 class AgentAuditLog(_Entity):
     AuditId: int
     InvestigationId: Optional[int]

@@ -5,13 +5,21 @@
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "panels": [
     {
       "id": 1,
       "title": "HTTP request rate (ai-service)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "targets": [
         {
           "expr": "sum(rate(http_requests_total{job=\"ai-service\"}[5m])) by (handler, status)",
@@ -23,7 +31,12 @@
       "id": 2,
       "title": "HTTP request rate (api-gateway)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
       "targets": [
         {
           "expr": "sum(rate(http_requests_received_total{job=\"api-gateway\"}[5m])) by (code)",
@@ -35,7 +48,12 @@
       "id": 3,
       "title": "Real LLM calls by provider/outcome",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
       "targets": [
         {
           "expr": "sum(rate(sad_llm_calls_total[5m])) by (provider, outcome)",
@@ -47,7 +65,12 @@
       "id": 4,
       "title": "Real embedding calls by provider/outcome",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
       "targets": [
         {
           "expr": "sum(rate(sad_embedding_calls_total[5m])) by (provider, outcome)",
@@ -59,7 +82,12 @@
       "id": 5,
       "title": "LLM fallback activations",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      },
       "targets": [
         {
           "expr": "sum(rate(sad_llm_fallback_total[5m])) by (from_provider)",
@@ -71,7 +99,12 @@
       "id": 6,
       "title": "Narration cache hit rate",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      },
       "targets": [
         {
           "expr": "sum(rate(sad_narration_cache_total[5m])) by (result)",
@@ -83,7 +116,12 @@
       "id": 7,
       "title": "Spend-budget denials",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
       "targets": [
         {
           "expr": "sum(rate(sad_budget_denied_total[5m])) by (namespace)",
@@ -95,13 +133,275 @@
       "id": 8,
       "title": "Investigations created by type",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
       "targets": [
         {
           "expr": "sum(rate(sad_investigations_total[5m])) by (investigation_type)",
           "legendFormat": "{{investigation_type}}"
         }
       ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "AI quality - was the answer right",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Hallucination rate (number drift)",
+      "description": "Share of narrations REJECTED for stating a figure that was not in the evidence. This is the guard firing, not an estimate - the answer was refused rather than shown. A non-zero rate is not necessarily an incident: it is the platform working. A rate that CLIMBS after a model change is the signal, because it means the new model invents more.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(sad_narration_drift_total{outcome=\"drift\"}[15m])) / clamp_min(sum(rate(sad_narration_drift_total[15m])), 0.0001)",
+          "legendFormat": "drift rate",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Narration checks by schema",
+      "description": "Which explanation type is drifting. A rate concentrated in one schema points at that chain's evidence rather than at the model - it usually means the prompt is asking for a figure the evidence does not carry, which is a fixable bug rather than a bad model.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (schema, outcome) (rate(sad_narration_drift_total[15m]))",
+          "legendFormat": "{{schema}} {{outcome}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Spend per hour by model",
+      "description": "Priced from sad.ModelPrice at the moment of each call, so a later price change does not rewrite history. Calls whose model has no price row appear as UNPRICED - a spend graph reading zero because a model was unknown is worse than one reading low, because the second is visibly incomplete.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 42
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (model) (increase(sad_llm_cost_usd_total[1h]))",
+          "legendFormat": "{{model}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Cost per investigation",
+      "description": "The number that decides whether a faster model is worth it. Latency and cost move together when roles are switched, and this is the half that shows up on a bill.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 42
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(sad_llm_cost_usd_total[1h])) / clamp_min(sum(increase(sad_investigations_total[1h])), 1)",
+          "legendFormat": "USD per investigation",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Fidelity score distribution",
+      "description": "A DISTRIBUTION, not a mean. An average fidelity of 0.97 can be 97 perfect answers and 3 broken ones, or 100 answers each carrying a wrong figure - those need different responses and a mean cannot tell them apart.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (le, grader) (rate(sad_fidelity_score_bucket[1h]))",
+          "legendFormat": "{{grader}} {{le}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Judge scores by dimension",
+      "description": "The LLM judge, kept separate from the deterministic graders on purpose. Graders are arithmetic; the judge is an opinion. Averaging them gives a 'quality score' that cannot be acted on, because a drop could be a fabricated figure or a model being less chatty and only one of those is an incident. p10 matters more than p50 - it is the bad tail.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, dimension) (rate(sad_judge_score_bucket[1h])))",
+          "legendFormat": "p50 {{dimension}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.1, sum by (le, dimension) (rate(sad_judge_score_bucket[1h])))",
+          "legendFormat": "p10 {{dimension}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Judge failures",
+      "description": "A judge that silently stops running leaves every quality panel showing its last good score forever, which reads as health. This is the panel that says the instrument itself is broken.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 58
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (reason) (rate(sad_judge_failures_total[15m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "type": "timeseries",
+      "title": "Fallback activations by role",
+      "description": "How often a primary provider failed and its backup answered. Sustained non-zero means a provider is degraded and the platform is quietly absorbing it - answers are still being produced, by a different model than the one configured.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 58
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (provider) (rate(sad_llm_fallback_total[15m]))",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ]
     }
-  ]
+  ],
+  "description": "Operational volume AND answer quality. The quality row exists because the guards that catch a fabricated figure already fired on every request and were recorded only as log lines - the checks were real and the signal was invisible."
 }

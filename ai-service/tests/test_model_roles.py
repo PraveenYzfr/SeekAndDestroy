@@ -16,13 +16,23 @@ from app.repositories import llm_role_repository as repo
 
 @pytest.fixture(autouse=True)
 def clean_overrides():
-    for role in roles.ROLES:
-        repo.clear(role.name)
-    reset_role_model_cache()
+    """Clear every ASSIGNABLE name, not every role.
+
+    These differ now: a role's fallback is stored under its own key
+    ("extraction.fallback"), and this fixture iterating roles.ROLES cleaned the
+    primaries and left the fallbacks behind. A leaked override survives the
+    process - it is a database row - so the damage lands on the NEXT run, as a
+    test failing on state a previous run wrote. That is the worst shape a test
+    failure can take, because the run that caused it passed.
+    """
+    def _wipe():
+        for name in roles.ASSIGNABLE_ROLE_NAMES:
+            repo.clear(name)
+        reset_role_model_cache()
+
+    _wipe()
     yield
-    for role in roles.ROLES:
-        repo.clear(role.name)
-    reset_role_model_cache()
+    _wipe()
 
 
 class TestRoleDefinitions:
@@ -87,14 +97,14 @@ class TestResolution:
     def test_reset_reports_whether_anything_was_removed(self):
         """"reset" and "was already the default" are different answers, and the
         screen should not claim to have changed something it did not."""
-        assert repo.clear("planning") is False
-        repo.set_override("planning", "mock", "seek-and-destroy-mock", "E1001")
-        assert repo.clear("planning") is True
+        assert repo.clear("extraction") is False
+        repo.set_override("extraction", "mock", "seek-and-destroy-mock", "E1001")
+        assert repo.clear("extraction") is True
 
     def test_a_second_write_updates_rather_than_duplicating(self):
-        repo.set_override("planning", "mock", "seek-and-destroy-mock", "E1001")
-        repo.set_override("planning", "mock", "seek-and-destroy-mock", "E1002")
-        rows = [r for r in repo.list_all() if r["RoleName"] == "planning"]
+        repo.set_override("extraction", "mock", "seek-and-destroy-mock", "E1001")
+        repo.set_override("extraction", "mock", "seek-and-destroy-mock", "E1002")
+        rows = [r for r in repo.list_all() if r["RoleName"] == "extraction"]
         assert len(rows) == 1
         assert rows[0]["UpdatedBy"] == "E1002"
 

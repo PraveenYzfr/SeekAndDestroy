@@ -49,8 +49,31 @@ def assert_no_number_drift(explanation: BaseModel, evidence: dict, *, tolerance:
         except (TypeError, ValueError):
             continue
         if abs(float(value) - expected_f) > tolerance:
+            # Counted here, not at the five call sites. A metric that each caller
+            # has to remember is one that will be missed at whichever call site is
+            # added next - and the miss would look like an improvement in the
+            # hallucination rate.
+            _count_drift(explanation, "drift")
             raise NumberDriftError(
                 f"LLM output field '{field_name}' = {value} does not match evidence "
                 f"'{evidence_key}' = {expected_f}. Rejecting explanation - numbers must come "
                 f"from the deterministic engines only."
             )
+
+    # The denominator. Without it the drift counter says how many were rejected
+    # and never what share that is - and "12 rejections" means nothing without
+    # knowing whether it was out of 20 narrations or 20,000.
+    _count_drift(explanation, "ok")
+
+
+def _count_drift(explanation, outcome: str) -> None:
+    """Record one drift check. Never raises: observability must not be able to
+    fail a request it is only watching."""
+    try:
+        from app.observability.metrics import narration_drift_total
+
+        narration_drift_total.labels(
+            schema=type(explanation).__name__, outcome=outcome
+        ).inc()
+    except Exception:  # noqa: BLE001
+        pass

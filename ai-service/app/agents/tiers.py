@@ -47,7 +47,7 @@ TIERS = (CHEAP, COSTLY)
 #:           writing prose around figures it cannot change. A weaker model
 #:           produces a clumsier sentence, not a wrong answer.
 #:
-#:   costly  planning, extraction, grounded_qa, reporting, judging - each can be
+#:   costly  extraction, grounded_qa, reporting, judging - each can be
 #:           wrong in a way nothing downstream catches. Extraction feeds the
 #:           whole investigation; grounded_qa must be willing to say it does not
 #:           know; reporting is the artefact a human reads and acts on; the
@@ -55,7 +55,6 @@ TIERS = (CHEAP, COSTLY)
 DEFAULT_ROLE_TIERS: dict[str, str] = {
     "narration": CHEAP,
     "summarization": CHEAP,
-    "planning": COSTLY,
     "extraction": COSTLY,
     "grounded_qa": COSTLY,
     "reporting": COSTLY,
