@@ -56,26 +56,37 @@ class ModelRole:
     chains: tuple[str, ...]
 
 
-#: The name the fallback occupies on the Model Settings screen.
+#: Suffix naming a role's backup. "planning.fallback" is where planning goes when
+#: its own provider fails.
 #:
-#: Not a chain - nothing routes to it directly. It is listed as a role because
-#: that is the surface where a provider and model are chosen, and a backup nobody
-#: can see or change is a backup nobody checks.
-FALLBACK_ROLE = "fallback"
+#: A suffix rather than a column, so no migration and no second table: the
+#: override store is keyed by role name and a fallback IS a role assignment - the
+#: same provider, the same model, chosen the same way, used under a different
+#: condition.
+#:
+#: Per role rather than one global backup, because the roles do not fail alike.
+#: Extraction wants strict schema adherence and reporting wants readable prose;
+#: a single estate-wide substitute is the right answer for at most one of them,
+#: and being wrong for the others shows up as a quiet change in output quality
+#: rather than an error.
+FALLBACK_SUFFIX = ".fallback"
+
+
+def fallback_role_name(role_name: str) -> str:
+    """The override key holding this role's backup."""
+    return f"{role_name}{FALLBACK_SUFFIX}"
+
+
+def is_fallback_role(role_name: str) -> bool:
+    return role_name.endswith(FALLBACK_SUFFIX)
+
+
+def primary_role_name(role_name: str) -> str:
+    """The role a fallback backs, or the name unchanged."""
+    return role_name[: -len(FALLBACK_SUFFIX)] if is_fallback_role(role_name) else role_name
 
 
 ROLES: tuple[ModelRole, ...] = (
-    ModelRole(
-        name=FALLBACK_ROLE,
-        title="Fallback",
-        description=(
-            "Used when the primary provider fails, for any role. Should be of "
-            "comparable capability to the primary - a markedly weaker fallback "
-            "turns an outage into a quiet drop in answer quality, which nobody "
-            "investigates because nothing errored."
-        ),
-        chains=(),
-    ),
     ModelRole(
         name="planning",
         title="Planning",
@@ -152,6 +163,12 @@ ROLES: tuple[ModelRole, ...] = (
 )
 
 ROLE_NAMES: frozenset[str] = frozenset(r.name for r in ROLES)
+
+#: What the admin API will accept. Every role, plus its fallback key - the screen
+#: sets both through the same endpoint, so both have to be valid names.
+ASSIGNABLE_ROLE_NAMES: frozenset[str] = ROLE_NAMES | frozenset(
+    fallback_role_name(r.name) for r in ROLES
+)
 
 #: Chain function -> role. Used to attribute a recorded call to a role in the
 #: audit log, so scripts/evaluate.py can score a model per role rather than only

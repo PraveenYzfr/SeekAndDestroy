@@ -26,7 +26,7 @@ from app.config import get_settings
 
 logger = structlog.get_logger(__name__)
 
-from app.agents.roles import FALLBACK_ROLE
+from app.agents.roles import fallback_role_name
 
 
 def build_chat_model_for_provider(provider: str, model_override: str | None = None) -> BaseChatModel:
@@ -71,12 +71,7 @@ def build_chat_model() -> BaseChatModel:
     # The Model Settings screen wins over configuration, exactly as it does for
     # every other role. Without this the fallback would be VISIBLE on that screen
     # and unchangeable by it, which is worse than not showing it at all.
-    chain: list[tuple[str, str | None]] = []
-    chosen = resolve_role(FALLBACK_ROLE)
-    if chosen.get("source") == "override":
-        chain.append((chosen["provider"], chosen.get("model") or None))
-    else:
-        chain = [(name, settings.fallback_model or None) for name in settings.fallback_provider_list]
+    chain = [(name, settings.fallback_model or None) for name in settings.fallback_provider_list]
 
     members = [(settings.provider, primary)]
     for name, model in chain:
@@ -256,19 +251,45 @@ def _model_for(provider: str, model: str) -> BaseChatModel:
 
 
 def get_chat_model_for_role(role_name: str) -> BaseChatModel:
-    """The model configured for ``role_name``.
+    """The model configured for ``role_name``, with that role's own backup behind it.
 
-    Falls back to the process-wide model whenever the role has no override, so
-    an unconfigured platform behaves exactly as it did before roles existed.
+    Falls back to the process-wide model whenever the role has no override, so an
+    unconfigured platform behaves exactly as it did before roles existed - and
+    that path already carries the estate-wide chain from
+    SAD_LLM__FALLBACK_PROVIDERS.
+
+    An OVERRIDDEN role used to have no backup at all. The reasoning was that the
+    operator named one model and answering from another would make the audit log
+    disagree with the screen. That is right about silence and wrong about the
+    consequence: it meant configuring a role removed its resilience, so the more
+    deliberately the platform was set up, the more fragile it became.
+
+    Now the screen carries a second choice per role, and answering from it is
+    something an operator picked rather than something the platform did quietly.
+    The audit log records the provider that actually answered, so the two still
+    agree.
     """
     resolved = resolve_role(role_name)
     if resolved["source"] == "config":
-        # The configured default keeps the fallback chain from
-        # SAD_LLM__FALLBACK_PROVIDERS. An overridden role deliberately does not:
-        # the operator named one model, and silently answering from a different
-        # provider would make the audit log disagree with the screen.
         return get_chat_model()
-    return _model_for(resolved["provider"], resolved["model"])
+
+    primary = _model_for(resolved["provider"], resolved["model"])
+    backup = resolve_role(fallback_role_name(role_name))
+    if backup.get("source") != "override":
+        # No backup chosen for this role. Deliberate: a fallback nobody selected
+        # is a model nobody evaluated, and picking one automatically is how an
+        # outage becomes a quiet change in behaviour.
+        return primary
+    try:
+        secondary = _model_for(backup["provider"], backup["model"])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "llm_factory.role_fallback_unavailable", role=role_name, error=str(exc)
+        )
+        return primary
+    return FallbackChatModel(members=[
+        (resolved["provider"], primary), (backup["provider"], secondary),
+    ])
 
 
 def reset_role_model_cache() -> None:

@@ -15,7 +15,8 @@ from __future__ import annotations
 import pytest
 
 from app.agents import llm_factory
-from app.agents.roles import FALLBACK_ROLE, ROLES
+from app.agents import roles as roles_mod
+from app.agents.roles import ROLES
 from app.config.settings import LlmSettings
 
 
@@ -80,27 +81,73 @@ class TestTheChainCannotBreakThePrimary:
         assert not hasattr(result, "members")
 
 
-class TestItIsChangeableOnTheModelSettingsScreen:
-    def test_fallback_is_listed_as_a_role(self):
-        """A backup nobody can see or change is a backup nobody checks."""
-        assert FALLBACK_ROLE in {r.name for r in ROLES}
+class TestEveryRoleHasItsOwnFallback:
+    """Per role, not one global spare.
 
-    def test_it_routes_no_chains(self):
-        """It is not a stage of an investigation - it is where every stage goes
-        when the primary is down. Listing chains would misdescribe it."""
-        role = next(r for r in ROLES if r.name == FALLBACK_ROLE)
-        assert role.chains == ()
+    The roles do not fail alike. Extraction wants strict schema adherence;
+    reporting wants readable prose. A single estate-wide substitute is the right
+    answer for at most one of them, and being wrong for the others shows up as a
+    quiet change in output quality rather than as an error.
+    """
 
-    def test_an_override_beats_configuration(self, monkeypatch):
-        """Shown on that screen and unchangeable by it would be worse than not
-        showing it at all."""
-        s = _settings()
-        monkeypatch.setattr(llm_factory, "get_settings", lambda: type("S", (), {"llm": s})())
-        monkeypatch.setattr(
-            llm_factory, "resolve_role",
-            lambda r: {"source": "override", "provider": "groq", "model": "llama-3.3-70b"},
-        )
+    def test_each_role_has_an_assignable_fallback_key(self):
+        for role in ROLES:
+            assert roles_mod.fallback_role_name(role.name) in roles_mod.ASSIGNABLE_ROLE_NAMES
+
+    def test_the_key_maps_back_to_its_role(self):
+        assert roles_mod.primary_role_name("planning.fallback") == "planning"
+        assert roles_mod.primary_role_name("planning") == "planning"
+
+    def test_a_fallback_key_is_not_itself_a_role(self):
+        """It is a slot on the planning row, not an eighth stage of an
+        investigation."""
+        assert "planning.fallback" not in roles_mod.ROLE_NAMES
+
+    def test_an_overridden_role_with_a_fallback_gets_a_chain(self, monkeypatch):
+        """Configuring a role used to REMOVE its resilience - an overridden role
+        had no backup at all, so the more deliberately the platform was set up,
+        the more fragile it became."""
+        def fake_resolve(name):
+            if name == "planning":
+                return {"source": "override", "provider": "deepseek", "model": "deepseek-v4-flash"}
+            if name == "planning.fallback":
+                return {"source": "override", "provider": "openai", "model": "gpt-4o"}
+            return {"source": "config"}
+
+        monkeypatch.setattr(llm_factory, "resolve_role", fake_resolve)
+        monkeypatch.setattr(llm_factory, "get_settings",
+                            lambda: type("S", (), {"llm": _settings()})())
         llm_factory.reset_role_model_cache()
-        chain = llm_factory.build_chat_model()
-        assert [n for n, _ in chain.members] == ["deepseek", "groq"]
-        assert chain.members[1][1].model == "llama-3.3-70b"
+        chain = llm_factory.get_chat_model_for_role("planning")
+        assert [n for n, _ in chain.members] == ["deepseek", "openai"]
+
+    def test_no_fallback_chosen_means_no_chain(self, monkeypatch):
+        """A fallback nobody selected is a model nobody evaluated. Filling one in
+        automatically is how an outage becomes a silent change in behaviour."""
+        def fake_resolve(name):
+            if name == "planning":
+                return {"source": "override", "provider": "deepseek", "model": "deepseek-v4-flash"}
+            return {"source": "config"}
+
+        monkeypatch.setattr(llm_factory, "resolve_role", fake_resolve)
+        monkeypatch.setattr(llm_factory, "get_settings",
+                            lambda: type("S", (), {"llm": _settings()})())
+        llm_factory.reset_role_model_cache()
+        result = llm_factory.get_chat_model_for_role("planning")
+        assert not hasattr(result, "members")
+
+    def test_an_unbuildable_role_fallback_does_not_break_the_role(self, monkeypatch):
+        def fake_resolve(name):
+            if name == "planning":
+                return {"source": "override", "provider": "deepseek", "model": "deepseek-v4-flash"}
+            if name == "planning.fallback":
+                return {"source": "override", "provider": "groq", "model": "x"}
+            return {"source": "config"}
+
+        monkeypatch.setattr(llm_factory, "resolve_role", fake_resolve)
+        # no groq credential
+        monkeypatch.setattr(llm_factory, "get_settings",
+                            lambda: type("S", (), {"llm": _settings(provider_keys={"deepseek": "d"})})())
+        llm_factory.reset_role_model_cache()
+        result = llm_factory.get_chat_model_for_role("planning")
+        assert not hasattr(result, "members"), "the role must still answer"

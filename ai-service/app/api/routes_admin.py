@@ -25,6 +25,21 @@ class RoleAssignment(BaseModel):
     model: str = Field(min_length=1, max_length=200)
 
 
+def _fallback_for(role_name: str) -> dict:
+    """What answers for this role when its primary provider fails."""
+    from app.agents.llm_factory import resolve_role
+
+    key = roles.fallback_role_name(role_name)
+    resolved = resolve_role(key)
+    configured = resolved.get("source") == "override"
+    return {
+        "role": key,
+        "provider": resolved.get("provider") if configured else None,
+        "model": resolved.get("model") if configured else None,
+        "configured": configured,
+    }
+
+
 @router.get("/api/admin/model-roles")
 def get_model_roles(current: AuthenticatedEmployee = Depends(require_admin)):
     """Every role, its effective model, and where that model came from.
@@ -45,6 +60,20 @@ def get_model_roles(current: AuthenticatedEmployee = Depends(require_admin)):
                 "description": role.description,
                 "chains": list(role.chains),
                 **resolved.get(role.name, {}),
+                # This role's own backup, sent beside it so the screen can show
+                # the pair together rather than as two unrelated rows.
+                #
+                # Per role, not one global spare: extraction wants strict schema
+                # adherence and reporting wants readable prose, so a single
+                # estate-wide substitute is right for at most one of them. Being
+                # wrong for the others surfaces as a quiet change in output
+                # quality rather than an error.
+                #
+                # `configured` False means no backup was chosen. Deliberately not
+                # filled in with a default - a fallback nobody selected is a model
+                # nobody evaluated, and choosing one automatically turns an outage
+                # into a silent change in behaviour.
+                "fallback": _fallback_for(role.name),
             }
             for role in roles.ROLES
         ],
@@ -100,9 +129,9 @@ def set_model_role(
     storing a name the provider does not serve turns a bad save into a failed
     investigation later, somewhere with no visible connection to this screen.
     """
-    if role_name not in roles.ROLE_NAMES:
+    if role_name not in roles.ASSIGNABLE_ROLE_NAMES:
         raise ProblemDetailsError(
-            404, "Unknown role", f"'{role_name}' is not a model role. Known roles: {sorted(roles.ROLE_NAMES)}."
+            404, "Unknown role", f"'{role_name}' is not a model role. Known roles: {sorted(roles.ASSIGNABLE_ROLE_NAMES)}."
         )
     if assignment.provider not in provider_models.LISTABLE:
         raise ProblemDetailsError(
@@ -139,7 +168,7 @@ def set_model_role(
 @router.delete("/api/admin/model-roles/{role_name}")
 def clear_model_role(role_name: str, current: AuthenticatedEmployee = Depends(require_admin)):
     """Drop the override so the role follows config/settings.py again."""
-    if role_name not in roles.ROLE_NAMES:
+    if role_name not in roles.ASSIGNABLE_ROLE_NAMES:
         raise ProblemDetailsError(404, "Unknown role", f"'{role_name}' is not a model role.")
     removed = llm_role_repository.clear(role_name)
     reset_role_model_cache()
