@@ -110,6 +110,10 @@ class TestResolution:
 
 
 class TestProviderListing:
+    # Patches provider_models.http_get, which the adapters import at call time.
+    # It was _get; the underscore said "private to this module" and it stopped
+    # being that when the per-provider listing logic moved into
+    # agents.providers and started calling it across a module boundary.
     def test_non_chat_models_are_filtered_out(self):
         """Provider listings mix in embedding and speech models that would fail
         or return nonsense as a narration model, and the name alone does not
@@ -122,7 +126,7 @@ class TestProviderListing:
     def test_an_unreachable_provider_reports_its_reason(self, monkeypatch):
         """Never a remembered list. A stale dropdown fails at run time, far from
         the screen that caused it."""
-        monkeypatch.setattr(provider_models, "_get", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("connection refused")))
+        monkeypatch.setattr(provider_models, "http_get", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("connection refused")))
         provider_models.reset_cache()
         result = provider_models.list_models("deepseek", refresh=True)
         assert result["available"] is False
@@ -133,7 +137,7 @@ class TestProviderListing:
         """Caching a failure would keep a provider dark for ten minutes after a
         blip, or after the operator fixed the key."""
         provider_models.reset_cache()
-        monkeypatch.setattr(provider_models, "_get", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+        monkeypatch.setattr(provider_models, "http_get", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
         provider_models.list_models("deepseek", refresh=True)
         assert "deepseek" not in provider_models._cache
 

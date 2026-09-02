@@ -43,7 +43,20 @@ _cache: dict[str, tuple[float, dict]] = {}
 #: - it is a legitimate choice for a role while comparing behaviour without
 #: spending anything, and leaving it out would mean the screen could not express
 #: a configuration the factory supports.
-LISTABLE = ("mock", "deepseek", "groq", "anthropic", "openai", "gemini", "ollama")
+def _listable() -> tuple[str, ...]:
+    """Derived from the registry rather than restated.
+
+    This was a hand-maintained tuple beside an if-chain that also named
+    providers. Nothing kept the two in agreement, so a provider could be
+    listable-but-unbuildable or the reverse, and neither the type system nor a
+    test would notice.
+    """
+    from app.agents.providers import listable_providers
+
+    return listable_providers()
+
+
+LISTABLE = _listable()
 
 #: Substrings that mean "not a chat model". Provider listings mix in embedding,
 #: speech and moderation models that would 404 or return nonsense as a narration
@@ -60,76 +73,36 @@ def _is_chat_model(name: str) -> bool:
 
 
 def _fetch(provider: str) -> dict:
+    """Live model ids for one provider, or an entry saying why not.
+
+    The per-provider knowledge - endpoint, auth header, how to read the response
+    - moved to agents.providers, so this is now only the part that is the same
+    for everyone: call it, and turn a failure into a reportable state rather
+    than an exception. A provider that is down must show as unavailable WITH ITS
+    REASON, because "no models" and "could not reach it" send an operator to
+    different places.
+    """
+    from app.agents.providers import adapter_for
+
     settings = get_settings().llm
-
-    if provider == "mock":
-        return {"provider": "mock", "available": True, "models": ["seek-and-destroy-mock"], "error": None}
-
     try:
-        if provider == "gemini":
-            if not settings.api_key:
-                return _unavailable(provider, "SAD_LLM__API_KEY is not set")
-            base = (settings.base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
-            data = _get(f"{base}/models?key={settings.api_key}")
-            names = [
-                m["name"].split("/", 1)[-1]
-                for m in data.get("models", [])
-                # Gemini lists every model with the methods it supports; a model
-                # that cannot generateContent cannot narrate, whatever its name
-                # suggests.
-                if "generateContent" in (m.get("supportedGenerationMethods") or [])
-            ]
-        elif provider == "anthropic":
-            # GET /v1/models, but authenticated the Anthropic way - x-api-key and
-            # the version header, not a Bearer token. Listing rather than typing
-            # matters most here: Claude ids carry dates and are retired on a
-            # published schedule, so a name that worked last quarter is exactly
-            # the kind of plausible-looking guess that has already bitten us.
-            key = settings.key_for("anthropic")
-            if not key:
-                return _unavailable(provider, "No credential: set SAD_LLM__PROVIDER_KEYS__ANTHROPIC")
-            base = (settings.base_url or "https://api.anthropic.com/v1").rstrip("/")
-            data = _get(
-                f"{base}/models",
-                headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
-            )
-            names = [m["id"] for m in data.get("data", [])]
-        elif provider == "ollama":
-            base = settings.ollama_base_url.rstrip("/")
-            data = _get(f"{base}/v1/models", headers={"Authorization": "Bearer ollama"})
-            names = [m["id"] for m in data.get("data", [])]
-        else:
-            # OpenAI-compatible: OpenAI itself, DeepSeek, and anything else
-            # serving /v1/models.
-            default_base = {
-                "openai": "https://api.openai.com/v1",
-                "deepseek": "https://api.deepseek.com/v1",
-                "groq": "https://api.groq.com/openai/v1",
-            }[provider]
-            key = settings.key_for(provider)
-            if not key:
-                return _unavailable(
-                    provider,
-                    f"No credential: set SAD_LLM__PROVIDER_KEYS__{provider.upper()}",
-                )
-            data = _get(f"{(settings.base_url or default_base).rstrip('/')}/models",
-                        headers={"Authorization": f"Bearer {settings.api_key}"})
-            names = [m["id"] for m in data.get("data", [])]
-    except Exception as exc:  # noqa: BLE001
-        # Reported, not raised. One provider being down must not empty the whole
-        # screen - the operator can still see and change the others.
-        logger.warning("provider_models.list_failed", provider=provider, error=str(exc))
-        return _unavailable(provider, str(exc)[:200])
-
-    chat = sorted({n for n in names if _is_chat_model(n)})
-    return {"provider": provider, "available": True, "models": chat, "error": None}
+        adapter = adapter_for(provider)
+    except ValueError as exc:
+        return _unavailable(provider, str(exc))
+    try:
+        names = adapter.list_models(settings)
+    except NotImplementedError as exc:
+        return _unavailable(provider, str(exc))
+    except Exception as exc:  # noqa: BLE001 - any failure is a reportable state
+        return _unavailable(provider, f"{type(exc).__name__}: {exc}")
+    return {"provider": provider, "available": True, "models": sorted(names), "error": None}
 
 
 def _unavailable(provider: str, reason: str) -> dict:
     return {"provider": provider, "available": False, "models": [], "error": reason}
 
 
-def _get(url: str, headers: dict | None = None) -> dict[str, Any]:
+def http_get(url: str, headers: dict | None = None) -> dict[str, Any]:
     with httpx.Client(timeout=15.0) as client:
         response = client.get(url, headers=headers or {})
         response.raise_for_status()

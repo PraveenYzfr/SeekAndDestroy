@@ -42,11 +42,19 @@ class TestCredentialResolution:
         s = _llm(api_key="shared", provider_keys={"groq": "groq-key"})
         assert s.key_for("groq") == "groq-key"
 
-    def test_a_provider_without_one_falls_back(self):
+    def test_the_default_provider_falls_back_to_api_key(self):
         """The compatibility guarantee: one provider and one key behaves exactly
         as it did before provider_keys existed."""
-        s = _llm(api_key="shared", provider_keys={"groq": "groq-key"})
+        s = _llm(provider="deepseek", api_key="shared", provider_keys={"groq": "groq-key"})
         assert s.key_for("deepseek") == "shared"
+
+    def test_a_NON_default_provider_does_not_borrow_it(self):
+        """api_key belongs to the default provider. Lending it to another made a
+        MISSING credential look like a WRONG one - Groq with no key sent
+        DeepSeek's and reported 401, and the natural response is to re-issue a
+        credential that was never broken."""
+        s = _llm(provider="deepseek", api_key="shared", provider_keys={})
+        assert s.key_for("groq") == ""
 
     def test_two_providers_resolve_differently(self):
         """The property the whole feature exists for."""
@@ -60,16 +68,16 @@ class TestCredentialResolution:
     def test_an_empty_entry_falls_back_rather_than_returning_empty(self):
         """A placed-but-unfilled slot is how a key arrives before somebody sets
         it. It must behave as absent, not as a credential of zero length."""
-        s = _llm(api_key="shared", provider_keys={"groq": ""})
+        s = _llm(provider="groq", api_key="shared", provider_keys={"groq": ""})
         assert s.key_for("groq") == "shared"
 
     def test_no_credential_anywhere_is_empty_not_an_error(self):
         """Resolution reports absence; the factory decides what to do about it."""
         assert _llm(api_key="", provider_keys={}).key_for("groq") == ""
 
-    def test_a_provider_with_no_slot_of_its_own_falls_through(self):
-        """ollama, azure-openai and mock have no per-provider entry by design."""
-        assert _llm(api_key="shared").key_for("azure-openai") == "shared"
+    def test_the_default_provider_with_no_slot_still_resolves(self):
+        """azure-openai as the default, configured the old way, keeps working."""
+        assert _llm(provider="azure-openai", api_key="shared").key_for("azure-openai") == "shared"
 
 
 class TestGroqIsAFirstClassProvider:
@@ -98,10 +106,14 @@ class TestGroqIsAFirstClassProvider:
         assert "SAD_LLM__PROVIDER_KEYS__GROQ" in str(exc.value)
         get_settings.cache_clear()
 
-    def test_no_default_model_is_guessed(self, monkeypatch):
-        """Groq renames and retires models often. The admin screen enumerates
-        live ids; this must not invent one."""
-        import inspect
-        source = inspect.getsource(llm_factory.build_chat_model_for_provider)
-        groq_branch = source.split('provider == "groq"', 1)[1].split("if provider ==", 1)[0]
-        assert "model_override or settings.model" in groq_branch
+    def test_no_default_model_is_guessed(self):
+        """Groq renames and retires ids on its own schedule, so the adapter
+        carries no default and RAISES rather than sending a guess. Gemini and
+        DeepSeek do carry one, because their names are stable and forwarding the
+        mock sentinel to them 404s in a way that reads like an auth failure."""
+        from app.agents.providers import REGISTRY
+
+        assert not getattr(REGISTRY["groq"], "default_model", "")
+        assert not getattr(REGISTRY["anthropic"], "default_model", "")
+        assert REGISTRY["gemini"].default_model
+        assert REGISTRY["deepseek"].default_model

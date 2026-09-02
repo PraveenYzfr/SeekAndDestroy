@@ -165,12 +165,26 @@ class LlmSettings(_Base):
     ollama_base_url: str = "http://localhost:11434"
 
     def key_for(self, provider: str) -> str:
-        """The credential for one provider, falling back to the shared api_key.
+        """The credential for one provider.
+
+        api_key is the fallback ONLY for the configured default provider, because
+        that is plainly whose key it is. It used to serve any provider, which made
+        a MISSING credential indistinguishable from a WRONG one: selecting Groq
+        with no Groq key sent DeepSeek's, and the screen reported "401
+        Unauthorized". The natural response is to re-issue a credential that was
+        never broken - so the fallback was actively misleading, not merely loose.
+
+        Now an unconfigured provider resolves to empty, and the factory says
+        which variable to set.
 
         Lowercased on lookup: pydantic lowercases the env-var segment, and an
         operator writing PROVIDER_KEYS__Groq should not get a silently empty key.
         """
-        return (self.provider_keys or {}).get((provider or "").lower()) or self.api_key
+        name = (provider or "").lower()
+        own = (self.provider_keys or {}).get(name)
+        if own:
+            return own
+        return self.api_key if name == (self.provider or "").lower() else ""
     #: Overrides the `provider=` label on metrics. Any OpenAI-compatible
     #: endpoint - Groq, Together, Fireworks, whatever ships next - runs through
     #: provider="openai" with a custom base_url, which would file every one of

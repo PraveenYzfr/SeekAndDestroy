@@ -188,6 +188,11 @@ def test_factory_builds_a_gemini_model_and_refuses_without_a_key(monkeypatch):
         assert model.model == "gemini-flash-latest"
 
         monkeypatch.setenv("SAD_LLM__API_KEY", "")
+        # Clear the per-provider slot too. Credentials stopped being one field
+        # when two providers had to run at once, so emptying api_key alone no
+        # longer produces "no credential" - the .env supplies
+        # PROVIDER_KEYS__GEMINI and the factory correctly finds it.
+        monkeypatch.setenv("SAD_LLM__PROVIDER_KEYS__GEMINI", "")
         get_settings.cache_clear()
         with pytest.raises(ValueError, match="SAD_LLM__API_KEY"):
             llm_factory.build_chat_model_for_provider("gemini")

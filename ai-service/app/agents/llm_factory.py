@@ -28,138 +28,25 @@ logger = structlog.get_logger(__name__)
 
 
 def build_chat_model_for_provider(provider: str, model_override: str | None = None) -> BaseChatModel:
-    """Build a client for ``provider``.
+    """Build a client for ``provider``, via its registered adapter.
 
-    ``model_override`` names a specific model, for per-role selection. Without
-    it the configured SAD_LLM__MODEL is used, which is the behaviour every
-    existing caller gets - the parameter is additive, so a role with no override
-    resolves to exactly what this function returned before roles existed.
+    ``model_override`` names a specific model, for per-role selection. Without it
+    the configured SAD_LLM__MODEL is used, which is the behaviour every existing
+    caller gets - the parameter is additive, so a role with no override resolves
+    to exactly what this returned before roles existed.
+
+    This was an eight-branch if-chain, and a second four-branch chain in
+    provider_models had to agree with it. Both are now derived from
+    agents.providers.REGISTRY, so a provider cannot be constructible and
+    unlistable, and adding one changes no existing function.
     """
+    from app.agents.providers import adapter_for
+
     settings = get_settings().llm
     # What metrics call this. Defaults to the provider name; SAD_LLM__PROVIDER_LABEL
     # distinguishes the OpenAI-compatible endpoints that all share provider="openai".
     label = settings.provider_label or provider
-    if provider == "mock":
-        return MockChatModel()
-    if provider == "openai":
-        return HttpChatModel(
-            base_url=settings.base_url or "https://api.openai.com/v1",
-            model=model_override or settings.model, api_key=settings.api_key,
-            temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds, provider_name=label,
-        )
-    if provider == "azure-openai":
-        if not settings.azure_endpoint or not settings.azure_deployment:
-            raise ValueError("SAD_LLM__AZURE_ENDPOINT and SAD_LLM__AZURE_DEPLOYMENT are required for azure-openai")
-        base_url = (
-            f"{settings.azure_endpoint.rstrip('/')}/openai/deployments/{settings.azure_deployment}"
-        )
-        return HttpChatModel(
-            base_url=base_url, model=model_override or settings.model, api_key=settings.api_key,
-            temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds,
-            extra_headers={"api-key": settings.api_key} if settings.api_key else {}, provider_name=label,
-        )
-    if provider == "gemini":
-        if not settings.api_key:
-            raise ValueError("SAD_LLM__API_KEY is required for the gemini provider")
-        return GeminiChatModel(
-            api_key=settings.api_key,
-            # Falls back to a Gemini chat model rather than settings.model's
-            # default, which names the mock. Pointing the Gemini endpoint at
-            # "seek-and-destroy-mock" would 404 in a way that reads like an
-            # auth problem.
-            model=model_override or (settings.model if settings.model != "seek-and-destroy-mock" else GEMINI_DEFAULT_MODEL),
-            base_url=settings.base_url or GEMINI_DEFAULT_BASE_URL,
-            temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds, provider_name=label,
-        )
-    if provider == "deepseek":
-        # No new client needed - DeepSeek serves the OpenAI chat-completions
-        # wire format, so HttpChatModel works unchanged. Same reason `ollama`
-        # is a base_url variant rather than its own class, and the opposite of
-        # Gemini, which needed one because generateContent is a different shape.
-        #
-        # Roughly an order of magnitude cheaper than frontier models. The
-        # trade-off worth knowing: no server-side schema enforcement, so
-        # structured output falls back to prompt instructions plus a repair
-        # retry (app/agents/structured.py) rather than the guarantee Gemini's
-        # responseSchema gives.
-        key = settings.key_for("deepseek")
-        if not key:
-            raise ValueError(
-                "No DeepSeek credential. Set SAD_LLM__PROVIDER_KEYS__DEEPSEEK, or "
-                "SAD_LLM__API_KEY if DeepSeek is the only provider in use."
-            )
-        return HttpChatModel(
-            base_url=settings.base_url or "https://api.deepseek.com/v1",
-            # Verified against GET /models, not assumed - "deepseek-chat" was a
-            # plausible-looking guess that this account does not serve at all.
-            model=model_override or (settings.model if settings.model != "seek-and-destroy-mock" else "deepseek-v4-flash"),
-            api_key=settings.api_key,
-            temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds, provider_name=label,
-        )
-    if provider == "anthropic":
-        # Its own client, not a base_url variant. Anthropic is the second
-        # provider here that is not OpenAI-compatible on the wire - different
-        # endpoint, x-api-key instead of Bearer, a required anthropic-version
-        # header, system as a top-level field rather than a message, and content
-        # returned as a list of typed blocks. Gemini needed a client for the same
-        # reason; groq, deepseek and ollama did not.
-        from app.agents.anthropic_chat_model import AnthropicChatModel
-
-        key = settings.key_for("anthropic")
-        if not key:
-            raise ValueError(
-                "No Anthropic credential. Set SAD_LLM__PROVIDER_KEYS__ANTHROPIC, or "
-                "SAD_LLM__API_KEY if Anthropic is the only provider in use."
-            )
-        return AnthropicChatModel(
-            api_key=key,
-            # No default model. Claude model ids carry dates and are retired on a
-            # published schedule, so a hardcoded one is a guess with an expiry -
-            # the same mistake as "deepseek-chat", which came from a vendor's own
-            # docs and is not served. The admin screen enumerates live ids.
-            model=model_override or settings.model,
-            base_url=settings.base_url or "https://api.anthropic.com/v1",
-            temperature=settings.temperature,
-            # Required by this API rather than optional, so the settings default
-            # is load-bearing here in a way it is not for the others.
-            max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds, provider_name=label,
-        )
-    if provider == "groq":
-        # OpenAI-compatible, so no new client - the same reasoning as deepseek and
-        # ollama. Groq's value here is latency rather than price: it serves small
-        # models on custom silicon, which is what makes it a candidate for the
-        # extraction and planning roles that are currently paying reasoning-model
-        # time for schema-filling work.
-        key = settings.key_for("groq")
-        if not key:
-            raise ValueError(
-                "No Groq credential. Set SAD_LLM__PROVIDER_KEYS__GROQ, or "
-                "SAD_LLM__API_KEY if Groq is the only provider in use."
-            )
-        return HttpChatModel(
-            base_url=settings.base_url or "https://api.groq.com/openai/v1",
-            # No default model name. Groq retires and renames models often, and
-            # "deepseek-chat" - a plausible guess straight from a vendor's own
-            # docs - turned out not to be served at all. The admin screen
-            # enumerates live ids from GET /models; this raises rather than
-            # guessing one.
-            model=model_override or settings.model,
-            api_key=key,
-            temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds, provider_name=label,
-        )
-    if provider == "ollama":
-        return HttpChatModel(
-            base_url=settings.ollama_base_url.rstrip("/") + "/v1", model=model_override or settings.model,
-            api_key="ollama", temperature=settings.temperature, max_tokens=settings.max_output_tokens,
-            timeout_seconds=settings.timeout_seconds, provider_name=label,
-        )
-    raise ValueError(f"unknown SAD_LLM__PROVIDER: {provider}")
+    return adapter_for(provider).build(settings, model_override or settings.model, label)
 
 
 def build_chat_model() -> BaseChatModel:
