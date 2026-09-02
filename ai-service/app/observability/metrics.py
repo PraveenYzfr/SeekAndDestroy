@@ -141,3 +141,23 @@ judge_excluded_total = Counter(
     "Judge verdicts produced but excluded from headline scores, by reason",
     ["reason"],
 )
+
+
+#: Verdicts that were computed and could not be stored.
+#:
+#: The write is deliberately best-effort - it grades an answer that has already
+#: been handed to a user, so failing to store a comment must never turn a
+#: completed investigation into an error. That is right, and it made a real
+#: failure invisible: migrations 018 and 019 were deployed without INSERT grants
+#: (the schema-wide grant covers SELECT only), so every write failed, every
+#: failure was logged at warning, and the platform reported nothing wrong. It was
+#: found by someone checking the table by hand.
+#:
+#: A swallowed exception needs a counter for exactly this reason. "Best effort"
+#: describes what the code should do about a failure, not whether anyone should
+#: be told it happened.
+evaluation_persist_failures_total = Counter(
+    "sad_evaluation_persist_failures_total",
+    "Evaluation verdicts that were computed but could not be stored",
+    ["table"],
+)

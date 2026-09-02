@@ -108,6 +108,20 @@ GRANT INSERT, UPDATE ON sad.IndexRun                    TO [$APP_LOGIN];
 -- row the first time a role is overridden and updates it after; Reset
 -- deletes it, so DELETE is required here and nowhere else in this schema.
 GRANT INSERT, UPDATE, DELETE ON sad.LlmRoleOverride     TO [$APP_LOGIN];
+-- Answer and per-call evaluation (migrations 018, 019). Added after both were
+-- deployed WITHOUT them and every write failed in silence.
+--
+-- The schema-wide GRANT SELECT above covers reads, so a new table is readable
+-- the moment it exists and writable never - and the failure surfaces nowhere,
+-- because answer_evaluation_repository.record deliberately swallows its
+-- exception so that grading can never break a delivered answer. Correct design,
+-- and it meant the code ran, nothing was stored, and nothing complained. Found
+-- on the VM by hand, not by any check.
+--
+-- No DELETE on either. A verdict is a record of what the platform said at a
+-- point in time; deleting one is falsifying an audit trail, not tidying up.
+GRANT INSERT ON sad.AnswerEvaluation                    TO [$APP_LOGIN];
+GRANT INSERT ON sad.CallEvaluation                      TO [$APP_LOGIN];
   -- auth.login performs an opportunistic rehash when scrypt parameters change,
   -- which UPDATEs these two columns inside the login request. Without this the
   -- first login after a policy change fails on a *correct* password, and the

@@ -57,6 +57,17 @@ def record(values: dict) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("answer_evaluation.persist_failed", error=str(exc)[:300])
+        # Counted as well as logged. Swallowing the exception is right - this
+        # grades an answer already handed to a user - but a log line is not a
+        # signal anybody watches, and that is not a hypothetical: this table
+        # shipped without an INSERT grant and every write failed silently until
+        # somebody queried it by hand.
+        try:
+            from app.observability.metrics import evaluation_persist_failures_total
+
+            evaluation_persist_failures_total.labels(table="AnswerEvaluation").inc()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def recent(limit: int = 50) -> list[AnswerEvaluation]:

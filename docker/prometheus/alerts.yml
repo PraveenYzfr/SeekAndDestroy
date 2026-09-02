@@ -117,6 +117,24 @@ groups:
             unmeasured. Point the judge role at a different provider on the Model
             Settings screen.
 
+      # The instrument failing to record, as opposed to the platform failing.
+      # Fires on ANY sustained rate because there is no acceptable level: a
+      # verdict that cannot be stored is a verdict that did not happen, and the
+      # dashboards above go quietly stale while every panel keeps rendering.
+      - alert: EvaluationVerdictsNotBeingStored
+        expr: sum(rate(sad_evaluation_persist_failures_total[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Evaluation verdicts are being computed and not stored ({{ $labels.table }})"
+          description: >
+            The write is best-effort by design so grading cannot break a
+            delivered answer, which means nothing else will report this. First
+            thing to check is the INSERT grant - the schema-wide grant covers
+            SELECT only, so a newly migrated table is readable and not writable
+            until db-init.sh grants it explicitly.
+
   - name: ai-availability
     interval: 1m
     rules:
