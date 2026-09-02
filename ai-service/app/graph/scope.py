@@ -105,22 +105,35 @@ _VOCABULARY = frozenset(
 #: and "bare-metal" survive as single tokens and can be matched whole.
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
 
-#: The reply names what this agent *is* and lists what it does, rather than
-#: only saying what it will not do. Someone who asked an off-topic question has
-#: no idea what the on-topic ones look like, and "that is out of scope" leaves
-#: them guessing - which is how a person decides the tool is useless and stops.
+#: TWO EXAMPLES, NO INVENTORY, AND NO "THIS ESTATE".
 #:
-#: Three examples, not six. The first version listed every investigation type
-#: with a description and an example, which read as a manual at the moment
-#: somebody wanted a redirect. Three copyable lines teach the shape of a valid
-#: question; the remaining types are discoverable by asking one.
+#: Three versions of this string have been rejected and the reasons compound
+#: rather than replace each other:
+#:
+#:   The first listed every investigation type with a description and an example.
+#:   That was clumsy - a manual delivered at the moment somebody wanted a redirect.
+#:
+#:   A later one came back as six bullets covering hosting, capacity, right-sizing,
+#:   consolidation, forecasts and trade-offs. The objection to that one was
+#:   different and sharper: enumerating everything the platform can do is
+#:   INFORMATION LEAKAGE. Whoever just asked an off-topic question is the last
+#:   person who should be handed a capability inventory, and an internal tool has
+#:   no reason to advertise its surface to whoever happens to be typing.
+#:
+#:   "for this estate" and "about this infrastructure estate" both went the same
+#:   way. It is filler - the reader knows what system they are using - and it
+#:   reads as a system describing itself rather than answering.
+#:
+#: What survives: one sentence naming the domain, and two copyable examples. Two
+#: rather than three, because the examples teach the SHAPE of a valid question,
+#: and two shapes - a placement carrying requirements, and an estate-wide query -
+#: do that. A third example is one more line of inventory.
 OUT_OF_SCOPE_REPLY = (
-    "I only answer questions about this infrastructure estate - where to place "
-    "workloads, what capacity exists, and why.\n\n"
+    "I answer infrastructure questions only - where to place a workload, what "
+    "capacity exists, and why a decision was made.\n\n"
     "Try:\n"
     '  "Where can I host a Tier-1 production Java app needing 32 cores and 128 GB?"\n'
-    '  "Which clusters are underutilized?"\n'
-    '  "Why was atl-03 rejected?"'
+    '  "Which clusters are underutilized?"'
 )
 
 
