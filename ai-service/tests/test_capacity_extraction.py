@@ -240,11 +240,16 @@ def _prior_offering(*data_centers: str) -> PriorInvestigation:
     )
 
 
-def test_asking_for_a_different_dc_excludes_the_ones_already_offered():
+def test_asking_for_a_different_dc_excludes_only_the_site_it_was_offered():
+    """_prior_offering lists the shortlist in rank order, so the FIRST entry is
+    the recommendation. Denver here, deliberately not Atlanta - an expectation
+    that happens to match the alphabetically-first site would pass whether the
+    code read the ranking or just sorted."""
     prior = _prior_offering("Denver-DC1", "Atlanta-DC1", "Denver-DC1")
-    assert excluded_data_centers("give me from a different DC", prior) == [
-        "Atlanta-DC1", "Denver-DC1",
-    ]
+    excluded = excluded_data_centers("give me from a different DC", prior)
+    assert excluded == ["Denver-DC1"]
+    # Atlanta was ranked below it and never offered, so it stays available.
+    assert "Atlanta-DC1" not in excluded
 
 
 def test_a_rescope_that_names_no_location_excludes_nothing():
@@ -310,7 +315,7 @@ def test_naming_one_data_centre_excludes_only_that_one():
     ) == ["Atlanta-DC1"]
 
 
-def test_generic_rescope_with_no_named_dc_falls_back_to_eligible_only_never_the_rejected_pool():
+def test_generic_rescope_with_no_named_dc_excludes_only_what_was_offered():
     """The exact reproduction of the live bug, at the scale that triggered
     it: "give me from a different DC" with nothing named must exclude the
     data centres that were actually OFFERED (eligible), never the ones a
@@ -328,7 +333,14 @@ def test_generic_rescope_with_no_named_dc_falls_back_to_eligible_only_never_the_
             for i, dc in enumerate(["Phoenix-DC1", "Columbus-DC1", "Dallas-DC1"])
         ],
     )
-    assert excluded_data_centers("give me from a different DC", prior) == ["Atlanta-DC1", "Denver-DC1"]
+    excluded = excluded_data_centers("give me from a different DC", prior)
+    # Only the site that was actually recommended.
+    assert excluded == ["Atlanta-DC1"]
+    # Denver survives - ranks 2 and 3 were never offered, and they are the
+    # genuine next set Praveen asked for.
+    assert "Denver-DC1" not in excluded
+    # And never the rejected pool - the original point of c2's fixture.
+    assert not {"Phoenix-DC1", "Columbus-DC1", "Dallas-DC1"} & set(excluded)
 
 
 def test_plurals_and_synonyms_all_open_the_gate():
@@ -348,3 +360,69 @@ def test_a_subject_free_rescope_still_opens_no_gate():
     prior = _prior_offering("Denver-DC1")
     for phrasing in ("what other options?", "give me another one", "show me something else"):
         assert excluded_data_centers(phrasing, prior) == [], phrasing
+
+
+# ---------------------------------------------------------------------------
+# The exclusion must not empty the shortlist
+# ---------------------------------------------------------------------------
+# Measured on the live estate, APP-CRM's eligible shortlist:
+#     rank 1  atl-03    Atlanta-DC1  91.38   <- the recommendation
+#     rank 2  den-03    Denver-DC1   85.30
+#     rank 3  den-p096  Denver-DC1   81.84
+# Excluding every eligible DC removes the whole shortlist and returns nothing,
+# on Praveen's own phrasing. He rejected ONE recommendation; ranks 2 and 3 were
+# never offered and are the "genuine next set" he asked for.
+
+
+def _ranked_prior() -> PriorInvestigation:
+    return PriorInvestigation(
+        investigation_id=7, investigation_type="Hosting",
+        user_query="find hosting for APP-CRM", application_code="APP-CRM",
+        candidate_scores=[
+            {"cluster_code": "atl-03", "data_center": "Atlanta-DC1",
+             "eligibility_status": "Eligible", "rank": 1, "overall_score": 91.38},
+            {"cluster_code": "den-03", "data_center": "Denver-DC1",
+             "eligibility_status": "Eligible", "rank": 2, "overall_score": 85.30},
+            {"cluster_code": "den-p096", "data_center": "Denver-DC1",
+             "eligibility_status": "Eligible", "rank": 3, "overall_score": 81.84},
+            # The rejected pool spans the whole estate and must never be excluded.
+            {"cluster_code": "nyc-01", "data_center": "New York-DC1",
+             "eligibility_status": "Rejected", "rank": None, "overall_score": None},
+            {"cluster_code": "cmh-02", "data_center": "Columbus-DC1",
+             "eligibility_status": "Rejected", "rank": None, "overall_score": None},
+        ],
+    )
+
+
+def test_it_excludes_only_the_data_centre_that_was_recommended():
+    assert excluded_data_centers("give me from a different DC", _ranked_prior()) == ["Atlanta-DC1"]
+
+
+def test_the_genuine_next_set_survives():
+    """The whole point: ranks 2 and 3 were never offered, so they must remain."""
+    excluded = excluded_data_centers("give me from a different DC", _ranked_prior())
+    survivors = [
+        c for c in _ranked_prior().candidate_scores
+        if c["eligibility_status"] == "Eligible" and c["data_center"] not in excluded
+    ]
+    assert [c["cluster_code"] for c in survivors] == ["den-03", "den-p096"]
+
+
+def test_naming_a_site_still_wins_over_the_ranking():
+    """c2's case 1 is unchanged - the rejection button names one site."""
+    assert excluded_data_centers(
+        "Show other options, but not in the Denver-DC1 data center.", _ranked_prior()
+    ) == ["Denver-DC1"]
+
+
+def test_an_unranked_shortlist_falls_back_to_score():
+    prior = PriorInvestigation(
+        investigation_id=8, investigation_type="Hosting", user_query="x",
+        candidate_scores=[
+            {"cluster_code": "a", "data_center": "Denver-DC1",
+             "eligibility_status": "Eligible", "rank": None, "overall_score": 70.0},
+            {"cluster_code": "b", "data_center": "Atlanta-DC1",
+             "eligibility_status": "Eligible", "rank": None, "overall_score": 88.0},
+        ],
+    )
+    assert excluded_data_centers("a different DC", prior) == ["Atlanta-DC1"]

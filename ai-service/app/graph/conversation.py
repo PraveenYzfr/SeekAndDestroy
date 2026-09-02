@@ -372,9 +372,11 @@ def excluded_data_centers(query: str, prior: PriorInvestigation) -> list[str]:
        specific site is named, only that site is excluded.
 
     2. No data centre is named ("give me from a different DC" - Praveen's own
-       original phrasing). The honest fallback is the data centres of what
-       was actually OFFERED - the ELIGIBLE candidates, never the rejected
-       ones too. ``prior.candidate_scores`` is eligible + REJECTED, from
+       original phrasing). The fallback is the site of the RECOMMENDATION
+       that was actually made - the top-ranked eligible candidate - and not
+       every site that held an eligible one. See _offered_data_center; the
+       broader version emptied the shortlist on the headline query.
+       Never the rejected pool either. ``prior.candidate_scores`` is eligible + REJECTED, from
        app.services.placement.discover_candidate_clusters's full scan of
        every cluster matching the requirement's environment and platform -
        for a common combination that can be most of the estate, most of it
@@ -398,12 +400,53 @@ def excluded_data_centers(query: str, prior: PriorInvestigation) -> list[str]:
     named = {dc for dc in known if dc.lower() in text}
     if named:
         return sorted(named)
-    eligible = {
-        str(c["data_center"])
-        for c in prior.candidate_scores
+    return _offered_data_center(prior)
+
+
+def _offered_data_center(prior: PriorInvestigation) -> list[str]:
+    """The data centre of the recommendation that was actually made.
+
+    NOT every data centre that happened to hold an eligible candidate. That was
+    the second version of this and it is still too broad - live-verified on
+    APP-CRM, whose eligible shortlist is:
+
+        rank 1  atl-03    Atlanta-DC1  91.38   <- the recommendation
+        rank 2  den-03    Denver-DC1   85.30
+        rank 3  den-p096  Denver-DC1   81.84
+
+    Excluding every eligible data centre removes Atlanta AND Denver, which is
+    the whole shortlist, so "give me from a different DC" returned zero
+    candidates - Praveen's own phrasing, and the headline case for the feature.
+
+    The engineer rejected ONE recommendation. They were shown atl-03; ranks 2
+    and 3 were never offered to them and there is nothing to move away from in
+    Denver. Excluding it discards the genuine next set - which is precisely what
+    Praveen asked for: "should have given me the genuine next set".
+
+    So the exclusion is the top-ranked eligible candidate's site, and the answer
+    to "a different DC" becomes den-03 and den-p096 rather than nothing.
+
+    Ranked by ``rank`` where the engine set one, falling back to score, because
+    a candidate list that arrives unranked must not silently pick an arbitrary
+    row as "the recommendation" - the ordering IS the claim about which one was
+    offered.
+    """
+    eligible = [
+        c for c in prior.candidate_scores
         if c.get("data_center") and c.get("eligibility_status") == "Eligible"
-    }
-    return sorted(eligible)
+    ]
+    if not eligible:
+        return []
+
+    def _order(candidate: dict) -> tuple[int, float]:
+        rank = candidate.get("rank")
+        score = candidate.get("overall_score")
+        return (
+            int(rank) if rank is not None else 1_000_000,
+            -float(score) if score is not None else 0.0,
+        )
+
+    return [str(min(eligible, key=_order)["data_center"])]
 
 
 def carry_subject(query: str, prior: PriorInvestigation) -> Optional[str]:
