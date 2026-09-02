@@ -26,7 +26,6 @@ from app.agents.chains import (
     explain_cluster_right_sizing,
     extract_capacity_requirement,
     generate_final_report as generate_final_report_chain,
-    parse_investigation_plan,
 )
 # get_chat_model is deliberately NOT imported. Every call site here uses
 # get_chat_model_for_role, and keeping the unused name in this namespace is
@@ -251,15 +250,17 @@ def parse_user_request(state: InfrastructureRecommendationState) -> dict:
     # serializer only round-trips plain str/int/etc without a deprecation
     # warning, so state never carries the enum instance itself.
     investigation_type = str(classify_investigation_type(resolved))
-    llm = get_chat_model_for_role("planning")
-    try:
-        plan = parse_investigation_plan(llm, resolved)
-        parsed_intent = plan.model_dump()
-    except Exception as exc:  # noqa: BLE001 - narration failure must not break the pipeline
-        logger.warning("graph.parse_user_request.llm_failed", error=str(exc))
-        parsed_intent = {"investigation_type": investigation_type, "summary": resolved, "steps": []}
+    # This used to also call the "planning" role (parse_investigation_plan)
+    # to build parsed_intent/investigation_plan - averaging 8.2s and up to 21s
+    # over 48 measured calls, on every single investigation. Removed after
+    # tracing every reader of that value: router.route_after_plan only reads
+    # investigation_type (computed above, deterministically, before that call
+    # ever ran); nothing else in app.graph, the API response types, or the UI
+    # reads parsed_intent or investigation_plan's content, and it was never
+    # persisted. A full LLM call computing a value nothing downstream reads is
+    # not a plan the platform acts on, it is latency with a docstring.
     return {
-        "investigation_type": investigation_type, "parsed_intent": parsed_intent,
+        "investigation_type": investigation_type,
         "user_query": query, "resolved_query": resolved,
     }
 
