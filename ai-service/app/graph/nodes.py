@@ -786,6 +786,66 @@ def retrieve_related_context(state: InfrastructureRecommendationState) -> dict:
 # =============================================================================
 
 
+#: Independent narrations run together rather than one after another.
+#:
+#: Measured on production investigation 16, three candidate explanations:
+#:     78 at 03:24:51   9.9s
+#:     79 at 03:25:01  19.7s
+#:     80 at 03:25:20  16.7s
+#: Strictly sequential, 46.3 seconds, for three calls that do not read each
+#: other's output. A whole investigation was 98 seconds end to end and most of
+#: it was this shape - four model calls waiting on a reasoning provider in a
+#: row. Not a retry, not a timeout, not a slow query: addition.
+#:
+#: THREADS RATHER THAN ASYNC, deliberately. app.agents.structured has
+#: arun_structured and its docstring describes exactly this problem, but the
+#: graph nodes are synchronous and LangGraph calls them synchronously; making
+#: one node async would push the change through the whole graph. These calls
+#: block on an HTTP response, so a thread pool gets the same win at the size of
+#: change the fix deserves.
+#:
+#: Safe against the audit writes each call makes: app.repositories.base builds
+#: its engine with NullPool, so every connect() is its own connection rather
+#: than a shared session, and SQLAlchemy engines are thread-safe. Checked before
+#: writing this, not assumed.
+#:
+#: ORDER IS PRESERVED. The list is ranked, and a narration list whose order
+#: disagrees with the ranking would put the second-best cluster first in the
+#: report. executor.map preserves input order regardless of completion order.
+#:
+#: Bounded at 4. Beyond the three or five items these paths produce it would
+#: only add provider concurrency nobody asked for.
+_NARRATION_WORKERS = 4
+
+
+def _narrate_all(items: list, narrate, on_error) -> list[dict]:
+    """Run one narration per item concurrently, in order, skipping failures.
+
+    ``narrate`` returns a pydantic model; ``on_error`` is called with (item,
+    exception) so each branch keeps the log line it had. A failure drops that
+    item and no other - same behaviour as the loop this replaces, where one
+    cluster failing to narrate never cost the others.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not items:
+        return []
+
+    def one(item):
+        try:
+            return narrate(item).model_dump()
+        except Exception as exc:  # noqa: BLE001 - a narration failure must not break the graph
+            on_error(item, exc)
+            return None
+
+    if len(items) == 1:
+        result = one(items[0])
+        return [result] if result is not None else []
+
+    with ThreadPoolExecutor(max_workers=min(_NARRATION_WORKERS, len(items))) as pool:
+        return [r for r in pool.map(one, items) if r is not None]
+
+
 def generate_recommendation_explanations(state: InfrastructureRecommendationState) -> dict:
     itype = state["investigation_type"]
     # Two roles in one node: the HOSTING/CAPACITY and RIGHT_SIZING branches
@@ -798,29 +858,26 @@ def generate_recommendation_explanations(state: InfrastructureRecommendationStat
     if itype in (InvestigationType.HOSTING, InvestigationType.CAPACITY):
         llm = get_chat_model_for_role("narration")
         top = [c for c in state.get("candidate_scores", []) if c.get("eligibility_status") == "Eligible"][:3]
-        explanations = []
-        for c in top:
-            try:
-                candidate = CandidateScore.model_validate(c)
-                explanation = explain_candidate(llm, candidate, app_code)
-                explanations.append(explanation.model_dump())
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("graph.explain_candidate_failed", cluster=c.get("cluster_code"), error=str(exc))
+        explanations = _narrate_all(
+            top,
+            lambda c: explain_candidate(llm, CandidateScore.model_validate(c), app_code),
+            lambda c, exc: logger.warning(
+                "graph.explain_candidate_failed", cluster=c.get("cluster_code"), error=str(exc)
+            ),
+        )
         return {"recommendation_explanations": explanations}
 
     if itype == InvestigationType.RIGHT_SIZING:
         results = state.get("capacity_calculations", {}).get("right_sizing", [])
         llm = get_chat_model_for_role("narration")
         flagged = [r for r in results if r["classification"] != "Healthy"][:5]
-        explanations = []
-        for r in flagged:
-            try:
-                from app.models.rightsizing import ClusterRightSizingResult
+        from app.models.rightsizing import ClusterRightSizingResult
 
-                explanation = explain_cluster_right_sizing(llm, ClusterRightSizingResult.model_validate(r))
-                explanations.append(explanation.model_dump())
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("graph.explain_rightsizing_failed", error=str(exc))
+        explanations = _narrate_all(
+            flagged,
+            lambda r: explain_cluster_right_sizing(llm, ClusterRightSizingResult.model_validate(r)),
+            lambda r, exc: logger.warning("graph.explain_rightsizing_failed", error=str(exc)),
+        )
         return {"recommendation_explanations": explanations}
 
     if itype == InvestigationType.QUESTION:
