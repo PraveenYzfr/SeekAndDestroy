@@ -172,3 +172,45 @@ class TestThroughQuickReply:
         registered as infrastructure-shaped because "apps" contains "app"."""
         assert "dc" in qc.DATACENTRE_WORDS
         assert "datacentre" in qc.DATACENTRE_WORDS
+
+
+class TestWordsNotSubstrings:
+    """Four incident lookups in the hundred-case run were refused because
+    "happened" contains "app".
+
+    _INFRA_INTENT_WORDS was matched with `in`, so any query containing an
+    ordinary English word with an infrastructure noun buried in it looked
+    infrastructure-shaped. "What happened in INC1009985?" got "I need a bit more
+    to work with" - a whole query class, silently unavailable.
+    """
+
+    @pytest.mark.parametrize("text, word", [
+        ("what happened in INC1009985", "app"),
+        ("apparently the change failed", "app"),
+        ("apply the recommendation", "app"),
+        ("a ghost in the machine", "host"),
+        ("replace the disk", "place"),
+    ])
+    def test_a_buried_noun_is_not_a_mention(self, text, word):
+        assert not qc.mentions_any(text, (word,))
+
+    @pytest.mark.parametrize("text", ["java apps", "the application", "hosting for it",
+                                      "cluster capacity", "which datacentre"])
+    def test_real_mentions_still_match(self, text):
+        """Uses the REAL word list, not a hand-picked one.
+
+        An earlier version of this test passed ("app", "host", ...) and failed on
+        "the application" - correctly, because "application" is not "app" plus an
+        inflection. The fix was to list "application" in _INFRA_INTENT_WORDS
+        rather than to widen the matcher back into matching "apply", and a test
+        with its own private word list would not have shown that.
+        """
+        from app.graph.nodes import _INFRA_INTENT_WORDS
+
+        assert qc.mentions_any(text, _INFRA_INTENT_WORDS + qc.DATACENTRE_WORDS)
+
+    def test_an_incident_lookup_reaches_the_graph(self):
+        """The regression, end to end."""
+        from app.graph.nodes import quick_reply
+
+        assert quick_reply("What happened in INC1009985?") is None

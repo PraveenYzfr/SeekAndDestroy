@@ -133,6 +133,48 @@ DATACENTRE_WORDS: tuple[str, ...] = (
 )
 
 
+#: Inflections a noun in the list is allowed to carry. Deliberately a closed set
+#: rather than a wildcard.
+#:
+#: The first fix used ``\bapp\w*``, which correctly stopped "happened" matching
+#: "app" - and then matched "apply" and "apparently", which DO begin with those
+#: three letters. "apply the recommendation" is a sentence this platform sees
+#: often, and treating it as infrastructure-shaped is the same false positive
+#: moved one step along.
+#:
+#: A wildcard suffix cannot tell an inflection from a different word that
+#: happens to share a prefix. An explicit set can.
+_INFLECTIONS = ("", "s", "es", "ing")
+
+
+def mentions_any(query: str, words: tuple[str, ...]) -> bool:
+    """Whether the query uses any of ``words`` AS WORDS, not as substrings.
+
+    ``"app" in "what happened in INC1009985?"`` is True, because "happened"
+    contains a-p-p. That single substring match sent every incident lookup in
+    the golden set to "I need a bit more to work with" - four cases, an entire
+    query class, refused for containing an ordinary English word.
+
+    "host" is inside "ghost", "place" is inside "replace", "app" is inside
+    "apply", "apparent" and "happy". Short infrastructure nouns are exactly the
+    strings most likely to occur inside unrelated words, which is what makes
+    substring matching wrong here rather than merely loose.
+
+    Bounded at BOTH ends, with a closed set of inflections between - so "app"
+    matches "app", "apps" and "hosting" matches "host", while "apply",
+    "apparently" and "happened" match nothing.
+    """
+    forms = {
+        f"{w}{suffix}"
+        for w in words
+        for suffix in _INFLECTIONS
+        # Multi-word entries like "data centre" take no suffix.
+        if " " not in w or suffix == ""
+    }
+    alternatives = "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
+    return bool(re.search(rf"\b(?:{alternatives})\b", query, re.IGNORECASE))
+
+
 def unmodelled_attribute(query: str) -> UnmodelledAttribute | None:
     """The attribute this query filters on that the CMDB does not record."""
     lowered = query.lower()

@@ -134,7 +134,11 @@ _SMALLTALK_RE = re.compile(
 #: on. "hosting java app" is a real ask with the specifics missing - answering
 #: "I don't have enough grounded information" is technically true and useless
 #: when the honest reply is "which application, or how much CPU and memory?".
-_INFRA_INTENT_WORDS = ("host", "cluster", "capacity", "node", "server", "deploy", "place", "workload", "app")
+#: "application" is listed in its own right rather than left to a wildcard on
+#: "app". A suffix wildcard also matches "apply" and "apparently", which are
+#: ordinary words here - see query_capability.mentions_any.
+_INFRA_INTENT_WORDS = ("host", "cluster", "capacity", "node", "server", "deploy",
+                       "place", "workload", "app", "application")
 
 
 def quick_reply(query: str) -> str | None:
@@ -208,8 +212,11 @@ def quick_reply(query: str) -> str | None:
     # write it and it appeared in none of _INFRA_INTENT_WORDS, so the example
     # query only registered as infrastructure-shaped at all because "apps"
     # contains "app".
-    looks_infra = any(w in lower for w in _INFRA_INTENT_WORDS) or any(
-        w in lower for w in query_capability.DATACENTRE_WORDS
+    # WORD matching, not substring. `"app" in "what happened"` is True - and
+    # that single substring match refused every incident lookup in the golden
+    # set, four cases, for containing an ordinary English word.
+    looks_infra = query_capability.mentions_any(
+        text, _INFRA_INTENT_WORDS + query_capability.DATACENTRE_WORDS
     )
     # Infrastructure-shaped, but with nothing to compute against. Short and
     # specific beats a full investigation that can only report emptiness.
