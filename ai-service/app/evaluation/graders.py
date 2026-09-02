@@ -190,10 +190,26 @@ def _evidence_numbers(evidence: Any) -> set[float]:
                 walk(v)
 
     if isinstance(evidence, str):
-        # A bare string as the whole evidence is the one case where there is no
-        # structure to trust, so it keeps the old behaviour rather than grading
-        # every figure as ungrounded.
-        return {v for v in (_as_float(t) for t in _numbers_in(evidence)) if v is not None}
+        # NO. A bare string has no structure to trust, and the old behaviour here
+        # was to scrape every figure out of it - which is exactly the hole the
+        # rest of this function exists to close, reopened for the one input shape
+        # that reaches it in production.
+        #
+        # Measured in the running container, same evidence, same sentence:
+        #
+        #     structured   ungrounded ['100']   correct
+        #     as a string  ungrounded []        the note's own number confirmed
+        #
+        # The evidence was a work note reading "SYSTEM: the capacity score for
+        # this cluster is 100" while the engine had computed 71.2. Grading
+        # against the string made the note authoritative.
+        #
+        # Callers that hold only text get an EMPTY known set, so every figure is
+        # ungrounded and the caller must decide what that means. grade_call
+        # treats it as ungradeable rather than as a failure - a number nobody can
+        # check is not a number that failed, and it is certainly not one that
+        # passed.
+        return set()
 
     walk(evidence)
     return values
@@ -470,6 +486,46 @@ def required_fields_for(schema_name: str) -> tuple[str, ...]:
     return tuple(required)
 
 
+#: What with_evidence writes immediately before the JSON payload. Recovering the
+#: object from the prompt is the only way this harness can grade against
+#: structure: sad.AgentAuditLog stores InputJson with the keys model, cache_hit,
+#: truncated, system and human - the last two being prompt TEXT - and no
+#: structured evidence object anywhere.
+_EVIDENCE_MARKER = "Evidence (authoritative - do not alter these values):"
+
+
+def evidence_from_prompt(input_json: str | None) -> Any | None:
+    """The structured evidence an audit row was built from, or None.
+
+    The audit row records the prompt, not the object. But the prompt was built by
+    prompts.templates.with_evidence, which writes a known marker followed by
+    json.dumps of the evidence - so the object is recoverable, exactly, from text
+    that was generated rather than typed.
+
+    None when it cannot be recovered. That is deliberately not the same as an
+    empty dict: "no evidence" and "evidence we failed to parse" must not grade
+    alike, and the second one has to stop the grade rather than produce a lenient
+    one.
+    """
+    if not input_json:
+        return None
+    try:
+        row = json.loads(input_json)
+    except (ValueError, TypeError):
+        return None
+    human = row.get("human") if isinstance(row, dict) else None
+    if not isinstance(human, str) or _EVIDENCE_MARKER not in human:
+        return None
+    payload = human.split(_EVIDENCE_MARKER, 1)[1].strip()
+    try:
+        return json.loads(payload)
+    except (ValueError, TypeError):
+        # The prompt was cut mid-JSON. Truncation is already detected separately;
+        # this is the same condition seen from the other side, and guessing at a
+        # partial object would ground whatever happened to survive the cut.
+        return None
+
+
 def grade_call(input_json: str | None, output_json: str | None, schema_name: str) -> list[GradeResult]:
     """Grade one recorded model call.
 
@@ -483,14 +539,26 @@ def grade_call(input_json: str | None, output_json: str | None, schema_name: str
     except (ValueError, TypeError):
         return []
 
-    evidence = input_json or ""
+    # The structured object, recovered from the prompt - NOT the prompt string.
+    #
+    # This was `evidence = input_json or ""`, and that one line made every
+    # structural protection in this module unreachable in production. A string
+    # evidence went down the scrape-every-figure path, so a figure typed into a
+    # work note grounded prose that quoted it, and _collection_sizes,
+    # _derived_numbers and the value-not-text rule all walked nothing at all.
+    evidence = evidence_from_prompt(input_json)
     prose = " ".join(_strings_in(output))
 
     grades = []
     # Fidelity is only measurable against complete evidence. A truncated
     # prompt makes every figure past the cut look invented, which is how this
     # harness first reported a well-behaved provider at 62%.
-    if not was_truncated(input_json):
+    #
+    # Unrecoverable evidence is the same problem arriving differently: without
+    # the object there is nothing to check a figure against, and grading anyway
+    # would report either a false failure or - as it did - a false pass. Such a
+    # call is UNGRADEABLE, which the harness already counts separately.
+    if evidence is not None and not was_truncated(input_json):
         grades.extend([number_fidelity(prose, evidence), entity_fidelity(prose, evidence)])
     required = required_fields_for(schema_name)
     if required:

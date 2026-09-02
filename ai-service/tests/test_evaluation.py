@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 
+from app.prompts.templates import with_evidence
+
 import pytest
 
 from app.agents.structured import AUDIT_LIMIT, _audit_payload
@@ -33,11 +35,17 @@ from app.evaluation.graders import (
 # =============================================================================
 
 
-EVIDENCE = json.dumps({
+#: The evidence OBJECT, not a JSON string of it.
+#:
+#: This was json.dumps(...), and a string sent number_fidelity down a branch that
+#: scraped every figure out of the text - so these tests were checking that a
+#: number in the prose matched a number in a string, which is not what the grader
+#: is for. Production passes the object; so do the tests now.
+EVIDENCE = {
     "cluster_code": "nyc-p006",
     "overall_score": 91.8,
     "projected": {"projected_headroom_percent": 27.28, "projected_cpu_utilization_percent": 72.72},
-})
+}
 
 
 def test_a_number_the_model_was_never_given_is_flagged():
@@ -235,9 +243,23 @@ def _row(audit_id, *, model="m", cached=False, output=None, success=True, durati
     return {
         "AuditId": audit_id,
         "ToolName": "llm:CandidateExplanation",
+        # A REAL prompt, built the way production builds one.
+        #
+        # This was `"human": "cluster nyc-p006 scored 91.8"` - prose, with no
+        # evidence object in it. That fixture modelled an audit row the system
+        # never produces, and the tests passed BECAUSE of a defect: grade_call
+        # graded against the prompt string, so "91.8" in the answer grounded
+        # against "91.8" in the prompt text. Both halves were the model's own
+        # output and nothing was being checked against the engine at all.
+        #
+        # with_evidence writes the marker and the JSON that grade_call now
+        # recovers, so these tests exercise the path production uses.
         "InputJson": json.dumps({
             "model": model, "cache_hit": cached, "truncated": truncated,
-            "human": "cluster nyc-p006 scored 91.8",
+            "human": with_evidence(
+                "Explain this candidate",
+                {"cluster_code": "nyc-p006", "overall_score": 91.8},
+            ),
         }),
         "OutputJson": output if output is not None else json.dumps(
             {"cluster_code": "nyc-p006", "eligibility_status": "Eligible", "summary": "nyc-p006 scored 91.8"}
