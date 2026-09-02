@@ -425,3 +425,37 @@ export interface InsightAnswer {
   row_count?: number;
   total_count?: number;
 }
+
+/** One model's behaviour, graded from calls it already made.
+ *
+ *  Rates always travel with their denominator. "100% entity fidelity" over three
+ *  mentions is not the same claim as over four hundred, and a scorecard that
+ *  hides which one it is invites the wrong conclusion. */
+export interface EvaluationProperty {
+  rate: number | null;
+  observations: number;
+}
+
+export interface EvaluationModel {
+  model: string;
+  calls: number;
+  generated: number;
+  /** Counted but never graded - a cached answer is the same text served again,
+   *  and grading it each time turns one success into twenty. */
+  cached: number;
+  failures: number;
+  /** Prompt was capped, so fidelity is not measurable. Reported rather than
+   *  dropped: a rate over an unstated subset is worse than none. */
+  ungradeable: number;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  properties: Record<string, EvaluationProperty>;
+  by_schema: Record<string, Record<string, EvaluationProperty>>;
+  flagged_count: number;
+}
+
+export interface EvaluationResult {
+  calls_seen: number;
+  models: EvaluationModel[];
+  flagged: { audit_id: number; schema: string; property: string; ungrounded: string[] }[];
+}

@@ -51,6 +51,17 @@ public sealed class AdminController(IAiServiceClient aiServiceClient) : Controll
     public async Task<IActionResult> GetModelProviders([FromQuery] bool refresh, CancellationToken ct) =>
         Ok(await aiServiceClient.GetModelProvidersAsync(refresh, ct));
 
+    /// <summary>The evaluation scorecard. Graded from sad.AgentAuditLog, so it
+    /// calls no model and costs a table scan - the expensive part already
+    /// happened and was already paid for.
+    ///
+    /// Exposed because the Model Settings screen told an administrator to run
+    /// scripts/evaluate.py, and scripts/ is not in the service image. Nobody
+    /// could follow that instruction on the deployed system.</summary>
+    [HttpGet("evaluation")]
+    public async Task<IActionResult> GetEvaluation([FromQuery] int limit, CancellationToken ct) =>
+        Ok(await aiServiceClient.GetEvaluationAsync(limit <= 0 ? 5000 : limit, ct));
+
     [HttpPut("model-roles/{roleName}")]
     public async Task<IActionResult> SetModelRole(string roleName, [FromBody] ModelRoleAssignmentDto request, CancellationToken ct) =>
         Ok(await aiServiceClient.SetModelRoleAsync(roleName, request, ct));

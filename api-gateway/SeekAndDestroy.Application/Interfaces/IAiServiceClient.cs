@@ -31,6 +31,10 @@ public interface IAiServiceClient
     Task<JsonNode?> SetModelRoleAsync(string roleName, ModelRoleAssignmentDto request, CancellationToken ct);
     Task<JsonNode?> ClearModelRoleAsync(string roleName, CancellationToken ct);
 
+    /// <summary>The evaluation scorecard, graded from recorded calls. Calls no
+    /// model and spends nothing.</summary>
+    Task<JsonNode?> GetEvaluationAsync(int limit, CancellationToken ct);
+
     Task<JsonNode?> CreateInvestigationAsync(CreateInvestigationRequestDto request, CancellationToken ct);
     Task<JsonNode?> GetInvestigationAsync(int investigationId, CancellationToken ct);
     Task<JsonNode?> ResumeInvestigationAsync(int investigationId, ResumeInvestigationRequestDto request, CancellationToken ct);

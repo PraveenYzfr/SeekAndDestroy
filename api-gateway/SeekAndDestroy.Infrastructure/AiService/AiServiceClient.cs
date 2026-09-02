@@ -123,6 +123,9 @@ public sealed class AiServiceClient(HttpClient httpClient, IHttpContextAccessor 
     public Task<JsonNode?> ClearModelRoleAsync(string roleName, CancellationToken ct) =>
         SendAsync(HttpMethod.Delete, $"/api/admin/model-roles/{Uri.EscapeDataString(roleName)}", null, ct);
 
+    public Task<JsonNode?> GetEvaluationAsync(int limit, CancellationToken ct) =>
+        GetAsync($"/api/admin/evaluation?limit={limit}", ct);
+
     public Task<JsonNode?> CreateInvestigationAsync(CreateInvestigationRequestDto request, CancellationToken ct) =>
         PostAsync("/api/investigations", request, ct);
 

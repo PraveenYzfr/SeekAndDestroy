@@ -146,3 +146,44 @@ def clear_model_role(role_name: str, current: AuthenticatedEmployee = Depends(re
     # "was already the default" is a different answer from "reset", and the
     # screen should not claim to have changed something it did not.
     return {"role": role_name, "removed": removed, "source": "config"}
+
+
+@router.get("/api/admin/evaluation")
+def get_evaluation(limit: int = 5000, current: AuthenticatedEmployee = Depends(require_admin)):
+    """The scorecard, from calls that already happened.
+
+    WHY THIS ENDPOINT EXISTS. The Model Settings screen told an administrator to
+    "run scripts/evaluate.py" - and scripts/ is not in the service image, so on
+    the deployed system that instruction could not be followed by anyone. The
+    capability was real and reachable only by someone with a shell on the box and
+    a willingness to import app.evaluation.harness by hand. Which meant that in
+    practice nobody could see whether a model change had made answers worse.
+
+    That matters more now than it did a week ago: the point of per-role model
+    selection is to move a role onto a faster or cheaper model, and the only
+    thing standing between that and "fast and confidently wrong" is this
+    scorecard. An acceptance gate nobody can run is not a gate.
+
+    NO MODEL IS CALLED HERE and nothing is spent. The harness reads
+    sad.AgentAuditLog and grades text that was already generated and already paid
+    for, so a run costs a table scan. That is also why it is safe to expose: the
+    expensive, irreversible thing already happened.
+
+    ``limit`` bounds the scan rather than the result. An estate running for a year
+    has more audit rows than belong in one response, and the default is chosen to
+    cover recent behaviour rather than all history - a lifetime average hides
+    exactly the regression this is meant to catch.
+    """
+    from app.evaluation import harness
+
+    try:
+        return harness.evaluate(limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        # Surfaced rather than swallowed. An empty scorecard and a broken one look
+        # identical to a reader, and the difference is whether the platform is
+        # behaving or the measurement is.
+        raise ProblemDetailsError(
+            status=500,
+            title="Evaluation could not be computed",
+            detail=str(exc)[:500],
+        ) from exc

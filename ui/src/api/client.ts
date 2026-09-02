@@ -1,4 +1,4 @@
-import type { ModelProvider, ModelRole } from "../types";
+import type { EvaluationResult, ModelProvider, ModelRole } from "../types";
 import type {
   CmdbApplication,
   InfrastructureCluster,
@@ -74,6 +74,11 @@ export const api = {
    *  the cached list is exactly wrong. */
   getModelProviders: (refresh = false) =>
     request<{ providers: ModelProvider[] }>(`/admin/model-providers${refresh ? "?refresh=true" : ""}`),
+
+  /** Grades calls that already happened, from sad.AgentAuditLog. Calls no model
+   *  and spends nothing, which is why an admin screen can run it on demand. */
+  getEvaluation: (limit = 5000) =>
+    request<EvaluationResult>(`/admin/evaluation?limit=${limit}`),
 
   setModelRole: (role: string, provider: string, model: string) =>
     request<{ role: string; provider: string; model: string; unverified: boolean }>(

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { ModelProvider, ModelRole } from "../types";
+import type { EvaluationModel, EvaluationResult, ModelProvider, ModelRole } from "../types";
 
 /** Administrator screen: which model runs each role.
  *
@@ -26,6 +26,8 @@ export default function ModelSettings() {
   //: rather than globally: an administrator narrowing one role must not
   //: change what another role is offering.
   const [pending, setPending] = useState<Record<string, { provider: string; model: string }>>({});
+  const [evaluation, setEvaluation] = useState<EvaluationResult | null>(null);
+  const [grading, setGrading] = useState(false);
 
   async function load(refreshProviders = false) {
     setLoading(true);
@@ -247,12 +249,90 @@ export default function ModelSettings() {
 
       <div className="card">
         <strong>Evaluation</strong>
-        <p style={{ fontSize: 13, marginTop: 6 }}>{note}</p>
-        <p style={{ fontSize: 13 }}>
-          So the way to compare two models is to assign one here, run some investigations, then run{" "}
-          <code>scripts/evaluate.py</code>. It grades calls that already happened, from the audit log, so it costs
-          a table scan rather than a provider bill.
-        </p>
+        {/* The note explains WHICH evaluation - the deterministic graders use no
+            model, the judge role above does. It used to say evaluation had no
+            model at all, which contradicted the judge row on the same screen. */}
+        <p style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-line" }}>{note}</p>
+
+        {/* RUNNABLE FROM HERE, because the alternative was not runnable at all.
+            This card used to say "run scripts/evaluate.py" - and scripts/ is not
+            in the service image, so on the deployed system nobody could follow
+            that instruction. An acceptance gate nobody can run is not a gate,
+            and per-role model switching is exactly the change that needs one. */}
+        <button
+          className="secondary"
+          disabled={grading}
+          onClick={() => {
+            setGrading(true);
+            setStatus("");
+            api
+              .getEvaluation()
+              .then(setEvaluation)
+              .catch((e) => setStatus(e instanceof Error ? e.message : String(e)))
+              .finally(() => setGrading(false));
+          }}
+          style={{ marginTop: 8 }}
+        >
+          {grading ? "Grading..." : "Run evaluation"}
+        </button>
+        <span style={{ fontSize: 12, opacity: 0.75, marginLeft: 10 }}>
+          Grades calls already made. No model is called and nothing is spent.
+        </span>
+
+        {evaluation && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>
+              {evaluation.calls_seen} recorded calls graded
+            </div>
+            {evaluation.models.length === 0 && (
+              <p style={{ fontSize: 13 }}>
+                No graded calls yet. Run an investigation, then grade again.
+              </p>
+            )}
+            {evaluation.models.map((m: EvaluationModel) => (
+              <div key={m.model} style={{ marginBottom: 12 }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{m.model}</div>
+                <div style={{ fontSize: 12, opacity: 0.8, margin: "2px 0 6px" }}>
+                  {m.generated} generated, {m.cached} cached (never graded), {m.failures} failed,{" "}
+                  {m.ungradeable} ungradeable &middot; p50{" "}
+                  {m.latency_p50_ms === null ? "-" : `${(m.latency_p50_ms / 1000).toFixed(1)}s`} &middot; p95{" "}
+                  {m.latency_p95_ms === null ? "-" : `${(m.latency_p95_ms / 1000).toFixed(1)}s`}
+                </div>
+                <table style={{ fontSize: 12, width: "100%", maxWidth: 520 }}>
+                  <tbody>
+                    {Object.entries(m.properties).map(([name, v]) => (
+                      <tr key={name}>
+                        <td style={{ opacity: 0.85 }}>{name.replace(/_/g, " ")}</td>
+                        {/* The denominator is part of the claim, not a footnote.
+                            A rate over a handful of observations is not the same
+                            statement as one over hundreds. */}
+                        <td style={{ textAlign: "right" }}>
+                          {v.rate === null ? "-" : `${(v.rate * 100).toFixed(1)}%`}
+                        </td>
+                        <td style={{ textAlign: "right", opacity: 0.7 }}>
+                          over {v.observations}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+            {evaluation.flagged.length > 0 && (
+              <details style={{ fontSize: 12, marginTop: 4 }}>
+                <summary>{evaluation.flagged.length} flagged figures</summary>
+                <ul style={{ margin: "6px 0 0 16px" }}>
+                  {evaluation.flagged.slice(0, 12).map((f, i) => (
+                    <li key={i}>
+                      audit {f.audit_id} &middot; {f.schema} &middot; {f.property}:{" "}
+                      {f.ungrounded.join(", ")}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
       </div>
 
       <button className="secondary" onClick={() => void load(true)}>
