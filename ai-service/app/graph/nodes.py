@@ -477,7 +477,9 @@ def identify_candidate_infrastructure(state: InfrastructureRecommendationState) 
     itype = state["investigation_type"]
     if itype in (InvestigationType.HOSTING, InvestigationType.CAPACITY) and state.get("requirement"):
         requirement = HostingRequirement.model_validate(state["requirement"])
-        clusters = placement.discover_candidate_clusters(requirement)
+        clusters = placement.discover_candidate_clusters(
+            requirement, exclude_data_centers=state.get("exclude_data_centers"),
+        )
     else:
         clusters = cluster_repository.list_all(limit=500)
     return {"candidate_clusters": [to_jsonable(c) for c in clusters]}
@@ -494,7 +496,12 @@ def apply_hard_eligibility_rules(state: InfrastructureRecommendationState) -> di
         return {"eligible_candidates": [], "rejected_candidates": []}
 
     requirement = HostingRequirement.model_validate(state["requirement"])
-    ranked = placement.find_and_score_candidates(requirement)
+    # The exclusion has to be applied HERE as well as in discovery. These two
+    # nodes call placement independently, and a filter applied to only one of
+    # them produces a shortlist that disagrees with its own candidate list.
+    ranked = placement.find_and_score_candidates(
+        requirement, exclude_data_centers=state.get("exclude_data_centers"),
+    )
     eligible = [to_jsonable(c) for c in ranked if c.eligibility_status == "Eligible"]
     rejected = [to_jsonable(c) for c in ranked if c.eligibility_status != "Eligible"]
     # Cached here so downstream nodes (which conceptually run capacity/scoring

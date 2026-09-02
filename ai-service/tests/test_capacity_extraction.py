@@ -219,3 +219,87 @@ def test_a_scored_recommendation_can_still_be_high():
     out = nodes.assess_risk_and_confidence(state)
     assert out["confidence"] == "High"
     assert out["human_review_required"] is True
+
+
+# ---------------------------------------------------------------------------
+# "give me from a different DC" must actually exclude the data centre
+# ---------------------------------------------------------------------------
+from app.graph.conversation import PriorInvestigation, excluded_data_centers, resolve
+
+
+def _prior_offering(*data_centers: str) -> PriorInvestigation:
+    return PriorInvestigation(
+        investigation_id=1,
+        investigation_type="Hosting",
+        user_query="find hosting for APP-CRM",
+        application_code="APP-CRM",
+        candidate_scores=[
+            {"cluster_code": f"c{i}", "data_center": dc, "eligibility_status": "Eligible"}
+            for i, dc in enumerate(data_centers)
+        ],
+    )
+
+
+def test_asking_for_a_different_dc_excludes_the_ones_already_offered():
+    prior = _prior_offering("Denver-DC1", "Atlanta-DC1", "Denver-DC1")
+    assert excluded_data_centers("give me from a different DC", prior) == [
+        "Atlanta-DC1", "Denver-DC1",
+    ]
+
+
+def test_a_rescope_that_names_no_location_excludes_nothing():
+    """"what other options?" wants a different ANSWER, not necessarily a
+    different site. Excluding a data centre nobody mentioned would drop
+    candidates for a reason never stated and never shown."""
+    prior = _prior_offering("Denver-DC1", "Atlanta-DC1")
+    assert excluded_data_centers("what other options?", prior) == []
+
+
+def test_it_excludes_nothing_when_the_previous_turn_had_no_candidates():
+    prior = PriorInvestigation(
+        investigation_id=1, investigation_type="Question", user_query="anything",
+    )
+    assert excluded_data_centers("what other DCs?", prior) == []
+
+
+def test_the_exclusion_reaches_the_resolution():
+    """End of the chain that graph.py hands to new_state."""
+    prior = _prior_offering("Denver-DC1")
+    resolution = resolve("give me from a different DC", prior)
+    assert resolution.kind == "InheritSubject"
+    assert resolution.exclude_data_centers == ["Denver-DC1"]
+
+
+def test_an_ordinary_turn_carries_no_exclusion():
+    prior = _prior_offering("Denver-DC1")
+    assert resolve("why was that rejected?", prior).exclude_data_centers == []
+
+
+def test_the_location_gate_matches_a_real_data_centre_name():
+    """The rejection button in Chat.tsx sends "...but not in Denver-DC1", and
+    that is the PRIMARY way this feature is reached. \bdc\b does not match
+    inside "DC1" - no word boundary between C and 1 - so the click meant to
+    trigger the whole feature would have excluded nothing, silently."""
+    prior = _prior_offering("Denver-DC1", "Atlanta-DC1")
+    assert excluded_data_centers("Show other options, but not in Denver-DC1.", prior) == [
+        "Atlanta-DC1", "Denver-DC1",
+    ]
+
+
+def test_plurals_and_synonyms_all_open_the_gate():
+    prior = _prior_offering("Denver-DC1")
+    for phrasing in (
+        "what other DCs?",
+        "anything in another zone",
+        "what other regions",
+        "a different site",
+        "somewhere in another data centre",
+    ):
+        assert excluded_data_centers(phrasing, prior) == ["Denver-DC1"], phrasing
+
+
+def test_a_subject_free_rescope_still_opens_no_gate():
+    """The counter-case that keeps the gate meaningful."""
+    prior = _prior_offering("Denver-DC1")
+    for phrasing in ("what other options?", "give me another one", "show me something else"):
+        assert excluded_data_centers(phrasing, prior) == [], phrasing

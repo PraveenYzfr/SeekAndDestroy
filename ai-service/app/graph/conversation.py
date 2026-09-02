@@ -127,8 +127,22 @@ _RESCOPE_RE = re.compile(
 #: Which dimension is being re-scoped, when it is a location. Only used to
 #: decide what to EXCLUDE from the re-run - a re-scope that names no dimension
 #: still re-runs the placement, it just excludes nothing.
+#: dcs?\d* rather than dcs? - real data centre names are Denver-DC1, Atlanta-DC1,
+#: and \bdc\b does NOT match inside "DC1" because there is no word boundary
+#: between C and 1. So "Show other options, but not in Denver-DC1" - which is
+#: what the rejection button in Chat.tsx generates, and the PRIMARY way this
+#: feature is reached - contained no word this gate recognised, and the click
+#: meant to trigger the whole thing would have excluded nothing, silently.
+#:
+#: c2 found it by reading what the UI actually sends rather than what the
+#: feature is described as doing. The UI wording is now explicit too, but the
+#: gate must not depend on a sentence some other file happens to build - a
+#: human typing "not in Denver-DC1" deserves the same answer as the button.
+#:
+#: Plurals folded in for the same reason a9 stemmed the scope vocabulary: a list
+#: with dc but not dcs, site but not sites, looks complete and is not.
 _LOCATION_WORD_RE = re.compile(
-    r"\b(?:dc|dcs|data\s*cent(?:er|re)s?|site|sites|region|regions|location|locations|campus)\b",
+    r"\b(?:dcs?\d*|data\s*cent(?:er|re)s?|sites?|regions?|locations?|zones?|campus)\b",
     re.IGNORECASE,
 )
 
@@ -206,6 +220,9 @@ class Resolution:
     resolved_query: str = ""
     prior: Optional[PriorInvestigation] = None
     reply: Optional[str] = None
+    #: Data centres the previous shortlist came from, when this turn asked for a
+    #: different one. Empty for every other turn, and empty means no exclusion.
+    exclude_data_centers: list[str] = field(default_factory=list)
 
 
 def looks_like_follow_up(query: str) -> Optional[str]:
@@ -326,9 +343,39 @@ def resolve(query: str, prior: Optional[PriorInvestigation]) -> Resolution:
             # placement) - treat it as a question about that previous turn
             # rather than pretending a subject exists.
             return Resolution(kind=ABOUT_PREVIOUS, resolved_query=query, prior=prior)
-        return Resolution(kind=INHERIT_SUBJECT, resolved_query=carried, prior=prior)
+        return Resolution(
+            kind=INHERIT_SUBJECT, resolved_query=carried, prior=prior,
+            exclude_data_centers=excluded_data_centers(query, prior),
+        )
 
     return Resolution(kind=ABOUT_PREVIOUS, resolved_query=query, prior=prior)
+
+
+def excluded_data_centers(query: str, prior: PriorInvestigation) -> list[str]:
+    """Which data centres this turn is asking to move away from.
+
+    Gated on _LOCATION_WORD_RE rather than on _RESCOPE_RE, and the difference
+    matters. "what other options?" is a re-scope with no dimension named - the
+    engineer wants a different ANSWER, not necessarily a different site - and
+    quietly excluding a data centre nobody mentioned would drop candidates for a
+    reason never stated and never shown. "what other DCs?" names the dimension,
+    so the exclusion is what was asked for.
+
+    Derived from the previous shortlist rather than parsed out of the sentence.
+    The engineer said "a different DC", not which one; the data centres they are
+    moving away from are the ones they were just offered, and those are recorded.
+    Reading them from evidence keeps this on the deterministic side of the trust
+    boundary - no model is asked what the user meant.
+
+    Returns [] when the previous turn had no candidates, which is the honest
+    answer: there is nothing to move away from. [] means no exclusion the whole
+    way down to the SQL, where an empty NOT IN would exclude everything.
+    """
+    if not _LOCATION_WORD_RE.search(query):
+        return []
+    return sorted({
+        str(c["data_center"]) for c in prior.candidate_scores if c.get("data_center")
+    })
 
 
 def carry_subject(query: str, prior: PriorInvestigation) -> Optional[str]:

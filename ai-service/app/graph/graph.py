@@ -370,6 +370,10 @@ def run_investigation(*, query: str, created_by: int, conversation_id: str | Non
             if resolution.kind == conversation.ABOUT_PREVIOUS and prior is not None
             else []
         ),
+        # "give me from a different DC" re-runs the placement with the data
+        # centres of the rejected shortlist excluded. Empty for every other turn,
+        # and empty means no exclusion - see conversation.excluded_data_centers.
+        exclude_data_centers=resolution.exclude_data_centers,
     )
     state["investigation_id"] = investigation_id
 

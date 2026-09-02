@@ -69,6 +69,16 @@ class InfrastructureRecommendationState(TypedDict, total=False):
     #: results, for the Question path to answer from.
     prior_context_docs: list[dict]
 
+    #: Data centres the engineer has just declined, carried from the previous
+    #: turn so "give me from a different DC" re-runs the placement somewhere
+    #: else instead of returning the shortlist that was rejected.
+    #:
+    #: EMPTY AND ABSENT MEAN THE SAME THING HERE - no exclusion. That has to
+    #: stay true all the way down to the SQL: a list that arrives empty must
+    #: not become NOT IN (), which excludes everything. Same distinction the
+    #: CapacityRequirement bug got wrong in the other direction.
+    exclude_data_centers: list[str]
+
 
 def new_state(
     user_query: str,
@@ -79,6 +89,7 @@ def new_state(
     follow_up_kind: str | None = None,
     prior_investigation_id: int | None = None,
     prior_context_docs: list[dict] | None = None,
+    exclude_data_centers: list[str] | None = None,
 ) -> InfrastructureRecommendationState:
     return InfrastructureRecommendationState(
         user_query=user_query, created_by=created_by, errors=[], candidate_clusters=[], candidate_nodes=[],
@@ -96,4 +107,5 @@ def new_state(
         follow_up_kind=follow_up_kind,
         prior_investigation_id=prior_investigation_id,
         prior_context_docs=prior_context_docs or [],
+        exclude_data_centers=exclude_data_centers or [],
     )
