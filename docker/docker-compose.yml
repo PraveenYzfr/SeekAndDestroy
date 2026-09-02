@@ -167,6 +167,17 @@ services:
       SAD_LLM__PROVIDER: "${SAD_LLM_PROVIDER:?set SAD_LLM_PROVIDER in docker/.env - see docker/.env.example}"
       SAD_LLM__MODEL: "${SAD_LLM_MODEL:-}"
       SAD_LLM__API_KEY: "${SAD_LLM_API_KEY:-}"
+      # PER-PROVIDER CREDENTIALS. api_key above is process-wide, so the moment
+      # a role override points one chain at a different provider the factory
+      # builds that provider's client with the DEFAULT provider's key and gets
+      # a 401 - which reads as a bad key rather than as the design limit it is.
+      # Every role could already choose a different MODEL; none could choose a
+      # different PROVIDER. These give each one its own credential.
+      #
+      # api_key stays as the fallback for any provider without an entry here,
+      # so a single-provider deployment needs no change at all.
+      SAD_LLM__PROVIDER_KEYS__DEEPSEEK: "${SAD_LLM_PROVIDER_KEY_DEEPSEEK:-}"
+      SAD_LLM__PROVIDER_KEYS__GROQ: "${SAD_LLM_PROVIDER_KEY_GROQ:-}"
       SAD_LLM__BASE_URL: "${SAD_LLM_BASE_URL:-}"
       SAD_LLM__PROVIDER_LABEL: "${SAD_LLM_PROVIDER_LABEL:-}"
       SAD_LLM__MAX_OUTPUT_TOKENS: "${SAD_LLM_MAX_OUTPUT_TOKENS:-8192}"
