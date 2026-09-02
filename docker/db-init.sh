@@ -122,6 +122,14 @@ GRANT INSERT, UPDATE, DELETE ON sad.LlmRoleOverride     TO [$APP_LOGIN];
 -- point in time; deleting one is falsifying an audit trail, not tidying up.
 GRANT INSERT ON sad.AnswerEvaluation                    TO [$APP_LOGIN];
 GRANT INSERT ON sad.CallEvaluation                      TO [$APP_LOGIN];
+-- Remediation queue. In the SAME COMMIT as migration 021, deliberately.
+-- 018 created sad.AnswerEvaluation without its grant: SELECT comes from the
+-- schema-wide line above and INSERT from nothing, and the repository
+-- swallows write failures by design so a verdict cannot break a delivered
+-- answer. The platform therefore computed every evaluation, stored none, and
+-- reported itself healthy for a whole deploy. Splitting a migration from its
+-- grant is what makes that possible.
+GRANT INSERT, UPDATE ON sad.RemediationTask             TO [$APP_LOGIN];
 -- Evaluation runs (migration 020). UPDATE on EvalRun only, and only because a
 -- run is written when it STARTS - so that a crashed run leaves a Running row
 -- rather than no evidence it was ever attempted - and finalised when it ends.

@@ -83,6 +83,15 @@ public sealed class AdminController(IAiServiceClient aiServiceClient) : Controll
     /// turn's score, and the calls behind a turn. The three are computed from the
     /// underlying counts rather than from each other - averaging turn rates would
     /// let a one-line reply weigh as much as a full report.</summary>
+    /// <summary>The failures the graph used to drop. Routed in the same commit as
+    /// the AI service endpoint - a route on the service and not on the gateway is
+    /// invisible to everything reaching the site, which is how Model Settings
+    /// shipped able to 404 for its whole life.</summary>
+    [HttpGet("remediation")]
+    public async Task<IActionResult> GetRemediation(
+        [FromQuery] string? status, [FromQuery] int limit, CancellationToken ct) =>
+        Ok(await aiServiceClient.GetRemediationQueueAsync(status, limit <= 0 ? 100 : limit, ct));
+
     [HttpGet("conversations/{conversationId}")]
     public async Task<IActionResult> GetConversationDetail(string conversationId, CancellationToken ct) =>
         Ok(await aiServiceClient.GetConversationDetailAsync(conversationId, ct));

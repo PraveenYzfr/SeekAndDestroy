@@ -40,6 +40,10 @@ public interface IAiServiceClient
     /// verdicts; grades nothing on the fly.</summary>
     Task<JsonNode?> GetInvestigationTranscriptAsync(int investigationId, CancellationToken ct);
     Task<JsonNode?> GetConversationDetailAsync(string conversationId, CancellationToken ct);
+
+    /// <summary>Graph failures that used to be dropped, with how often each
+    /// drop site fires. Read-only - nothing acts on them yet.</summary>
+    Task<JsonNode?> GetRemediationQueueAsync(string? status, int limit, CancellationToken ct);
     Task<JsonNode?> ListConversationsAsync(int limit, CancellationToken ct);
     Task<JsonNode?> GetConversationEvaluationAsync(string conversationId, CancellationToken ct);
 

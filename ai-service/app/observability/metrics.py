@@ -161,3 +161,19 @@ evaluation_persist_failures_total = Counter(
     "Evaluation verdicts that were computed but could not be stored",
     ["table"],
 )
+
+
+#: Failures the graph used to drop, now enqueued - and the ones that could not
+#: be enqueued.
+#:
+#: The "lost" outcome is the point of having a label at all. A queue that
+#: quietly fails to record failures reproduces the exact bug it exists to fix,
+#: and that is not hypothetical: sad.AnswerEvaluation sat empty for hours behind
+#: a missing INSERT grant while every write appeared to succeed, because the
+#: repository swallows write errors by design so a verdict cannot break a
+#: delivered answer.
+remediation_enqueued_total = Counter(
+    "sad_remediation_enqueued_total",
+    "Graph failures enqueued for remediation, by drop site and whether the row was stored",
+    ["site", "outcome"],
+)

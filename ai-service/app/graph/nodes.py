@@ -432,7 +432,11 @@ def _extract_capacity_requirement_via_llm(query: str):
     try:
         return extract_capacity_requirement(llm, query)
     except Exception as exc:  # noqa: BLE001 - extraction failure must not break the pipeline
-        logger.warning("graph.load_application_requirements.llm_extraction_failed", error=str(exc))
+        # The only drop site without the graph state in scope: this helper is
+        # called with just the query. Recorded with what it has rather than not
+        # at all - a failure with no investigation id is not less real than one
+        # with, and this is the site that cost 68 seconds a call for hours.
+        _dropped("graph.load_application_requirements.llm_extraction_failed", {}, exc)
         return None
 
 
@@ -668,7 +672,7 @@ def select_candidate_nodes(state: InfrastructureRecommendationState) -> dict:
         # Node drill-down is an enrichment, not a precondition: a failure here
         # degrades to cluster-only recommendations rather than losing the
         # whole investigation.
-        logger.warning("graph.select_candidate_nodes_failed", error=str(exc))
+        _dropped("graph.select_candidate_nodes_failed", state, exc)
         return {"errors": [f"Node-level selection failed: {exc}"]}
 
     candidate_scores = [to_jsonable(c) for c in scored]
@@ -808,7 +812,7 @@ def retrieve_related_context(state: InfrastructureRecommendationState) -> dict:
         store = get_vector_store()
         results = store.search(effective_query(state), top_k=6)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("graph.retrieve_related_context_failed", error=str(exc))
+        _dropped("graph.retrieve_related_context_failed", state, exc)
         return {"retrieved_context": rule_docs + prior_docs}
     retrieved = [
         {"text": r.document.text, "score": r.score, "entity_type": r.document.entity_type}
@@ -882,6 +886,70 @@ def _narrate_all(items: list, narrate, on_error) -> list[dict]:
         return [r for r in pool.map(one, items) if r is not None]
 
 
+# =============================================================================
+# Failures that used to vanish
+# =============================================================================
+#: Seven except branches in this module log a warning and continue. What they DO
+#: is right - a narration failure must not fail an investigation whose numbers
+#: are already computed - but nothing counted them, nothing stored them, and "how
+#: often does narration fail" was answerable only by grepping container logs on a
+#: production box.
+#:
+#: "Best effort" describes what the code should do about a failure. It does not
+#: decide whether anyone should be told.
+#:
+#: This is the fourth failure of that shape found in a day: Grafana serving an
+#: unauthenticated dashboard behind a 200, containers stuck on old images while
+#: the site returned 200, an empty review screen on a 200, and this.
+
+
+def _dropped(site: str, state: dict, exc: Exception, **extra) -> None:
+    """Log a dropped failure AND enqueue it. Never raises.
+
+    The logger call is kept exactly as it was, event name included, so existing
+    log searches and anything watching those strings keep working. The enqueue is
+    additive.
+
+    Wrapped in its own try/except because observability must not be able to break
+    the thing it is watching - and because this function is called from inside
+    handlers that are themselves already dealing with a failure.
+    """
+    logger.warning(site, error=str(exc), **extra)
+    try:
+        from app.repositories import remediation_repository
+
+        remediation_repository.record(
+            site=site,
+            source="python",
+            investigation_id=state.get("investigation_id") if isinstance(state, dict) else None,
+            conversation_id=state.get("conversation_id") if isinstance(state, dict) else None,
+            detail=f"{type(exc).__name__}: {exc}",
+            **extra,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+#: SAYS "FAILED" FIRST, EVERY TIME.
+#:
+#: Praveen was explicit, and the reason is that the alternatives read as an
+#: answer: "I found limited information" and "based on available evidence" are
+#: what a reader acts on rather than questions. A degraded answer that does not
+#: announce itself is worse than an error, because an error stops somebody.
+#:
+#: Then it says what SURVIVES the failure. The scores and capacity figures come
+#: from the deterministic engines and are unaffected by any narration failure, so
+#: withholding them because the prose broke would throw away the correct part of
+#: the answer. State the failure, then state what stands - never the other way
+#: round.
+def _narration_failed_notice(subject: str) -> str:
+    return (
+        f"The written explanation for {subject} FAILED. "
+        "The scores and capacity numbers are correct - those come from the engine, "
+        "not the model."
+    )
+
+
 def generate_recommendation_explanations(state: InfrastructureRecommendationState) -> dict:
     itype = state["investigation_type"]
     # Two roles in one node: the HOSTING/CAPACITY and RIGHT_SIZING branches
@@ -897,10 +965,33 @@ def generate_recommendation_explanations(state: InfrastructureRecommendationStat
         explanations = _narrate_all(
             top,
             lambda c: explain_candidate(llm, CandidateScore.model_validate(c), app_code),
-            lambda c, exc: logger.warning(
-                "graph.explain_candidate_failed", cluster=c.get("cluster_code"), error=str(exc)
+            lambda c, exc: _dropped(
+                "graph.explain_candidate_failed", state, exc, cluster=c.get("cluster_code")
             ),
         )
+        # A CANDIDATE THAT LOST ITS PROSE SAYS SO, rather than appearing without
+        # any. _narrate_all returns only the successes, so a failed narration
+        # used to leave a shortlisted cluster silently unexplained - the reader
+        # saw two explanations for three options and had no way to tell whether
+        # the third was unremarkable or broken.
+        #
+        # The notice carries the engine's own eligibility and score, because
+        # those are unaffected by a narration failure and withholding them would
+        # discard the correct part of the answer.
+        explained = {e.get("cluster_code") for e in explanations}
+        for c in top:
+            code = c.get("cluster_code")
+            if code in explained:
+                continue
+            explanations.append({
+                "cluster_code": code,
+                "eligibility_status": c.get("eligibility_status"),
+                "overall_score": c.get("overall_score"),
+                "summary": _narration_failed_notice(code or "this cluster"),
+                "key_strengths": [],
+                "key_risks": [],
+                "narration_failed": True,
+            })
         return {"recommendation_explanations": explanations}
 
     if itype == InvestigationType.RIGHT_SIZING:
@@ -912,7 +1003,10 @@ def generate_recommendation_explanations(state: InfrastructureRecommendationStat
         explanations = _narrate_all(
             flagged,
             lambda r: explain_cluster_right_sizing(llm, ClusterRightSizingResult.model_validate(r)),
-            lambda r, exc: logger.warning("graph.explain_rightsizing_failed", error=str(exc)),
+            lambda r, exc: _dropped(
+                "graph.explain_rightsizing_failed", state, exc,
+                cluster=r.get("cluster_code") or r.get("cluster_or_application_code"),
+            ),
         )
         return {"recommendation_explanations": explanations}
 
@@ -948,7 +1042,7 @@ def generate_recommendation_explanations(state: InfrastructureRecommendationStat
             )
             return {"recommendation_explanations": [answer.model_dump()]}
         except Exception as exc:  # noqa: BLE001
-            logger.warning("graph.grounded_qa_failed", error=str(exc))
+            _dropped("graph.grounded_qa_failed", state, exc)
             return {"recommendation_explanations": []}
 
     return {}
@@ -1252,7 +1346,7 @@ def generate_final_report(state: InfrastructureRecommendationState) -> dict:
         report = generate_final_report_chain(llm, investigation_id, title, evidence)
         return {"final_report": report.model_dump()}
     except Exception as exc:  # noqa: BLE001
-        logger.warning("graph.generate_final_report_failed", error=str(exc))
+        _dropped("graph.generate_final_report_failed", state, exc)
         return {
             "final_report": {
                 "investigation_id": investigation_id, "title": title,

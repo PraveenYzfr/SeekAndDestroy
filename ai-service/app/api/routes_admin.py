@@ -513,3 +513,45 @@ def list_conversations(limit: int = 50, current: AuthenticatedEmployee = Depends
             for r in rows
         ]
     }
+
+
+@router.get("/api/admin/remediation")
+def get_remediation_queue(
+    status: str | None = "Queued",
+    limit: int = 100,
+    current: AuthenticatedEmployee = Depends(require_admin),
+):
+    """The failures the graph used to drop, and how often each site fires.
+
+    READ ONLY, DELIBERATELY. Nothing acts on these rows. The triage taxonomy is a
+    guess until there are real failures to check it against, and an agent built
+    on a guessed taxonomy would confidently mis-route fifty cases before anybody
+    noticed. Praveen and 40 want to read ~50 real ones first.
+
+    ``by_site`` is the part that answers the question that needed a log grep on a
+    production box: how often does narration fail, and where. ``tasks`` is the
+    individual cases behind that count - because a rate says how often and cannot
+    say which answer, what the model was given, or whether it is still wrong.
+
+    Pass status=null to see every state rather than only the open queue.
+    """
+    from app.repositories import remediation_repository
+
+    try:
+        return {
+            "by_site": remediation_repository.counts_by_site(),
+            "tasks": remediation_repository.queue(status=status or None, limit=limit),
+            "note": (
+                "Read-only. Nothing acts on these yet - the triage classes are a "
+                "guess until there are real failures to check them against."
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        # Surfaced rather than returned empty. An empty queue and a broken query
+        # look identical to a reader, and the difference is whether the platform
+        # is behaving or the measurement is.
+        raise ProblemDetailsError(
+            status=500,
+            title="Remediation queue could not be read",
+            detail=str(exc)[:500],
+        ) from exc
