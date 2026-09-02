@@ -27,7 +27,11 @@ from app.agents.chains import (
     generate_final_report as generate_final_report_chain,
     parse_investigation_plan,
 )
-from app.agents.llm_factory import get_chat_model, get_chat_model_for_role
+# get_chat_model is deliberately NOT imported. Every call site here uses
+# get_chat_model_for_role, and keeping the unused name in this namespace is
+# what allowed tests to monkeypatch it successfully while binding nothing -
+# monkeypatch.setattr only objects to an attribute that does not exist.
+from app.agents.llm_factory import get_chat_model_for_role
 from app.graph import scope
 from app.agents.mock_llm import MockChatModel
 from app.forecasting.engine import forecast_cluster
