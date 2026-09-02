@@ -1248,7 +1248,7 @@ def main() -> None:
     # references CiIds this module allocates rather than ones the database picks.
     import seed_cmdb
     estate = seed_cmdb.build(CLUSTERS, APPLICATIONS, NODES, rng, ANCHOR_DATE,
-                             NEIGHBORHOOD_INDEX)
+                             NEIGHBORHOOD_INDEX, HOSTING_ROWS)
     seed_cmdb.emit(lines, estate)
     SCENARIOS.update(estate.scenarios)
 

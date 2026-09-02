@@ -226,7 +226,7 @@ def _weighted(rng, pairs):
 # Build
 # =============================================================================
 def build(clusters, applications, nodes, rng, anchor_date,
-          neighborhood_index: dict) -> Estate:
+          neighborhood_index: dict, hosting_rows: list | None = None) -> Estate:
     """Construct the whole CMDB layer.
 
     ``nodes`` are the existing cluster-member hosts. They stay in sad.ClusterNode
@@ -404,14 +404,14 @@ def build(clusters, applications, nodes, rng, anchor_date,
 
     return _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
                           app_ci, cluster_ci, typed_zone, typed_zone_nid,
-                          dc_ci, rng, stamp, old)
+                          dc_ci, rng, stamp, old, hosting_rows or [])
 
 # =============================================================================
 # The virtual layer, the infrastructure estate, and the planted failure domains
 # =============================================================================
 def _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
                    app_ci, cluster_ci, typed_zone, typed_zone_nid,
-                   dc_ci, rng, stamp, old):
+                   dc_ci, rng, stamp, old, hosting_rows):
     """VMs on hosts, applications on VMs, and the shared dependencies that decide
     whether redundancy is real.
 
@@ -473,15 +473,93 @@ def _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
     # former put 1,073 of 1,200 applications on no VM at all - they kept only the
     # cluster shortcut edge, so resiliency could not see them and the estate quietly
     # contained more unplaced applications than placed ones.
+    #
+    # EVERY HOSTING ROW, NOT JUST THE PRIMARY.
+    #
+    # pack_applications emits one row per environment an application runs in, plus
+    # a DR standby in a different data centre for Critical/High Production
+    # workloads - 506 applications have hosting rows in two or more data centres.
+    # This loop used to build a VM only for the single cluster host_cluster_code
+    # or primary_cluster_idx named, so every other row - the DR standby, a
+    # staging copy that happened to land elsewhere - existed in
+    # sad.ApplicationHosting and nowhere in the graph: no VM, no server, no edge.
+    # app.services.resiliency walks the graph, found one data centre, and reported
+    # single-site for an estate that, on the relational side, was not. That is a
+    # statement about this generator, not about the estate.
+    #
+    # A first attempt at this fix widened the VM pool to cover every hosting
+    # cluster combined, then picked distinct HOSTS from that combined pool by a
+    # hash offset - and reached only 78 of 506, because host CIs are allocated
+    # cluster by cluster, so the combined pool is really two contiguous blocks
+    # and a hash offset usually lands entirely inside one of them. Picking
+    # distinct hosts is not the same as picking distinct SITES; only 78
+    # applications got lucky. The fix has to name the sites explicitly.
     by_idx = {c.idx: c.code for c in clusters}
+    dc_by_idx = {c.idx: c.datacenter for c in clusters}
+
+    # Keyed by DATA CENTRE, not by cluster. An application can have a Staging or
+    # Test copy on a different CLUSTER that sits in the SAME data centre as its
+    # primary - that is not a second site, and routing it through the multi-site
+    # branch below would reshuffle which host a perfectly fine single-site
+    # application lands on, for a defect that was never theirs. Only a hosting
+    # row in a data centre not already covered adds a site; the first cluster
+    # seen for a data centre represents it, except the PRIMARY's cluster always
+    # wins for its own data centre even if a non-primary row got there first.
+    placements: dict[int, dict] = {}
+    for row in hosting_rows:
+        app_idx, cluster_idx, is_primary = row[0], row[1], row[8]
+        dc = dc_by_idx.get(cluster_idx)
+        if dc is None:
+            continue
+        entry = placements.setdefault(app_idx, {"primary": None, "dc_cluster": {}})
+        if is_primary:
+            entry["primary"] = cluster_idx
+            entry["dc_cluster"][dc] = cluster_idx
+        else:
+            entry["dc_cluster"].setdefault(dc, cluster_idx)
+
+    def _by_host(pool: list[dict]) -> dict[int, list[dict]]:
+        grouped: dict[int, list[dict]] = {}
+        for vm in pool:
+            grouped.setdefault(vm["host_ci"], []).append(vm)
+        return grouped
+
+    def _pick_hosts(pool: list[dict], seed: str, count: int, exclude: set[int]) -> list[dict]:
+        """``count`` VMs on distinct hosts, never one in ``exclude`` - the same
+        hash-offset spread the original single-cluster version used, so a
+        single-site application is chosen exactly as it always was."""
+        grouped = _by_host(pool)
+        hosts = [h for h in sorted(grouped) if h not in exclude]
+        if not hosts:
+            return []
+        offset = stable_hash(seed) % len(hosts)
+        return [
+            grouped[hosts[(offset + k) % len(hosts)]][k % len(grouped[hosts[(offset + k) % len(hosts)]])]
+            for k in range(min(count, len(hosts)))
+        ]
+
     app_vms: dict[str, list[dict]] = {}
     for a in applications:
-        code = a.host_cluster_code or by_idx.get(getattr(a, "primary_cluster_idx", None) or -1, "")
-        pool = vms_by_cluster.get(code) or []
-        if not pool:
+        entry = placements.get(a.idx)
+        if entry and entry["dc_cluster"]:
+            site_idxs = list(entry["dc_cluster"].values())
+            primary_idx = entry["primary"] if entry["primary"] is not None else site_idxs[0]
+        else:
+            # No packed hosting row at all - should not happen once
+            # pack_applications has run, but this is the same fallback the
+            # single-site version always used, kept for the 40 hand-written
+            # applications and as a safety net.
+            fallback_code = a.host_cluster_code or by_idx.get(getattr(a, "primary_cluster_idx", None) or -1, "")
+            fallback_idx = next((i for i, code in by_idx.items() if code == fallback_code), None)
+            site_idxs = [fallback_idx] if fallback_idx is not None else []
+            primary_idx = fallback_idx
+
+        site_codes = [by_idx[i] for i in site_idxs if i in by_idx]
+        if not site_codes:
             continue
+
         want = 2 if a.criticality in ("Critical", "High") else 1
-        want = min(want + (1 if a.environment == "Production" else 0), 4, len(pool))
+
         # One VM per DISTINCT host, not consecutive VMs.
         #
         # VMs are generated host by host, so slicing a contiguous window put every
@@ -491,13 +569,43 @@ def _build_virtual(e, clusters, applications, nodes, node_ci, server_ci,
         # on everything measures nothing, exactly the defect that made the
         # retrieval golden set unfalsifiable. The distributed control has to be
         # really distributed or it controls for nothing.
-        by_host: dict[int, list[dict]] = {}
-        for vm in pool:
-            by_host.setdefault(vm["host_ci"], []).append(vm)
-        hosts = sorted(by_host)
-        offset = stable_hash(a.code) % len(hosts)
-        chosen = [by_host[hosts[(offset + k) % len(hosts)]][k % len(by_host[hosts[(offset + k) % len(hosts)]])]
-                  for k in range(min(want, len(hosts)))]
+        if len(site_codes) <= 1:
+            # The single-site case, UNCHANGED from before this fix - bit-for-bit,
+            # not just equivalent. 621 of the 1,116 hosted applications take this
+            # branch, and they never had anything wrong with them: rewriting their
+            # VM selection to go through the same code path as the multi-site case
+            # would shuffle which host every one of them lands on for no reason,
+            # for a defect that was never theirs.
+            pool = vms_by_cluster.get(site_codes[0]) if site_codes else None
+            if not pool:
+                continue
+            want = min(want + (1 if a.environment == "Production" else 0), 4, len(pool))
+            chosen = _pick_hosts(pool, a.code, want, set())
+        else:
+            want = want + (1 if a.environment == "Production" else 0)
+            # Never fewer than one VM per site - that IS the fix - and capped so
+            # an application hosted in four environments does not balloon the
+            # estate.
+            want = min(max(want, len(site_codes)), 6)
+
+            chosen = []
+            for code in site_codes:
+                pool = vms_by_cluster.get(code) or []
+                if not pool:
+                    continue
+                chosen.extend(_pick_hosts(pool, f"{a.code}:{code}", 1, set()))
+
+            # Remaining redundancy budget goes to further distinct hosts within
+            # the PRIMARY site.
+            primary_code = by_idx.get(primary_idx) if primary_idx is not None else site_codes[0]
+            remaining = want - len(chosen)
+            if remaining > 0 and primary_code:
+                pool = vms_by_cluster.get(primary_code) or []
+                used_hosts = {vm["host_ci"] for vm in chosen}
+                chosen.extend(_pick_hosts(pool, a.code, remaining, used_hosts))
+
+        if not chosen:
+            continue
         app_vms[a.code] = chosen
         for vm in chosen:
             e.link(vm["ci_id"], app_ci[a.code], 1)
