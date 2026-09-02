@@ -223,6 +223,19 @@ _BREVITY_NUDGE = (
 )
 
 
+def _enforces_schema_natively(llm) -> bool:
+    """Whether this provider can be handed the schema itself rather than asked.
+
+    A capability question, deliberately not a type question. See the note at the
+    call site: naming concrete classes here meant a provider had to be
+    remembered rather than merely capable, and Anthropic was not.
+
+    ``callable`` rather than ``hasattr`` alone so a non-callable attribute of the
+    same name cannot silently route a provider down a path it cannot serve.
+    """
+    return callable(getattr(llm, "bind_response_schema", None))
+
+
 def _invoke_once(llm: BaseChatModel, messages: list):
     """One model call, with a single retry when the BUDGET ran out.
 
@@ -271,7 +284,23 @@ def _invoke(llm: BaseChatModel, system_prompt: str, human_prompt: str, output_mo
     # dropping a required field, which parses as a failure and costs the whole
     # narration. Native enforcement removes that failure mode instead of
     # retrying it.
-    if isinstance(llm, (MockChatModel, GeminiChatModel)):
+    #
+    # ASKED AS A CAPABILITY, NOT A TYPE. This was
+    # `isinstance(llm, (MockChatModel, GeminiChatModel))`, which made the policy
+    # depend on the concrete classes it was meant to be independent of: every
+    # new provider that CAN enforce a schema had to be remembered and added
+    # here, in two places, by someone who knew this line existed.
+    #
+    # Nobody did. Anthropic landed with no entry, so Claude was routed down the
+    # prompt-instructions path and its native structured output went unused -
+    # not by decision, by omission. That path is the one that produced 68-second
+    # calls with a 100% failure rate on CapacityRequirement, because a schema
+    # the model was merely ASKED to follow fails differently from one it cannot
+    # violate.
+    #
+    # Duck-typing it means a provider advertises the capability by implementing
+    # bind_response_schema, and this function never learns another class name.
+    if _enforces_schema_natively(llm):
         bound = llm.bind_response_schema(output_model)
         result = _invoke_once(bound, [SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
         _last_usage.value = getattr(result, "response_metadata", None) or None
@@ -365,7 +394,7 @@ async def _ainvoke(llm: BaseChatModel, system_prompt: str, human_prompt: str, ou
     next await. Anything that awaits between those two points would let
     another investigation overwrite it.
     """
-    if isinstance(llm, (MockChatModel, GeminiChatModel)):
+    if _enforces_schema_natively(llm):
         bound = llm.bind_response_schema(output_model)
         result = await bound.ainvoke(
             [SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)]
