@@ -89,7 +89,7 @@ def _store_for(base_collection: str):
 def build_a(batch_delay: float) -> int:
     """Index the whole corpus. This is the arm that costs money."""
     from app.config import get_settings
-    from app.retrieval import indexer
+    from app.retrieval import pipeline
 
     settings = get_settings()
     settings.retrieval.collection = f"{settings.retrieval.collection}__{ARM_A_SUFFIX}"
@@ -103,7 +103,15 @@ def build_a(batch_delay: float) -> int:
     from app.retrieval import vector_store
 
     vector_store.reset_vector_store_cache()
-    result = indexer.index_all(mode="rebuild")
+
+    # pipeline.execute, not indexer.index_all. index_all() takes no arguments and
+    # indexes into whatever collection the cached store points at; execute() takes
+    # the mode explicitly and checkpoints per batch, so an interrupted run resumes
+    # from its last completed batch rather than paying for the whole corpus twice.
+    def _progress(source: str, written: int, batches: int) -> None:
+        print(f"    {source:<22} {written:>7,} documents  ({batches} batches)", flush=True)
+
+    result = pipeline.execute("rebuild", on_batch=_progress)
     print(json.dumps(result, indent=2, default=str))
     return 0
 
