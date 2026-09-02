@@ -1010,7 +1010,10 @@ def assess_risk_and_confidence(state: InfrastructureRecommendationState) -> dict
     from app.config import get_settings
 
     itype = state["investigation_type"]
-    if itype in (InvestigationType.QUESTION, InvestigationType.FORECAST):
+    if itype in (
+        InvestigationType.QUESTION, InvestigationType.FORECAST,
+        InvestigationType.RIGHT_SIZING, InvestigationType.CONSOLIDATION,
+    ):
         # Informational only - no recommendation is being proposed for approval,
         # so human_review_required stays False. Confidence is a different claim
         # and used to be hard-coded "High" here regardless of what was found.
@@ -1035,10 +1038,24 @@ def assess_risk_and_confidence(state: InfrastructureRecommendationState) -> dict
         # the model's own opinion - GroundedAnswer carries a confidence field and
         # it is deliberately not read here, because a score the model assigns
         # itself is not evidence.
+        #
+        # RIGHT_SIZING and CONSOLIDATION belong here for the same reason as
+        # QUESTION/FORECAST, not by extension of the default branch below: they
+        # have no candidate/host to approve, only a set of clusters already
+        # scored and narrated (capacity_calculations, recommendation_explanations).
+        # Before this, both fell through to the default branch, which reads
+        # candidate_scores - a key RIGHT_SIZING and CONSOLIDATION never populate -
+        # found it empty, and routed to human_review_interrupt anyway. The
+        # reviewer saw "choose one cluster and host, then approve" with nothing
+        # to choose, and every actual finding (which clusters were flagged, why)
+        # sat computed in state and was never reached, because
+        # generate_final_report - the node that reads recommendation_explanations
+        # and capacity_calculations - only runs on the branch this state never took.
         has_evidence = bool(
             state.get("retrieved_context")
             or state.get("forecast_results")
             or state.get("candidate_scores")
+            or state.get("capacity_calculations")
         )
         return {
             "confidence": "Medium" if has_evidence else "Low",

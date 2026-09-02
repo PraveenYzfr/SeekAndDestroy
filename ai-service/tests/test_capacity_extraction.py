@@ -221,6 +221,53 @@ def test_a_scored_recommendation_can_still_be_high():
     assert out["human_review_required"] is True
 
 
+def test_right_sizing_needs_no_human_review():
+    """Live-verified broken: a right-sizing question fell through to the
+    default branch, which reads candidate_scores - a key right-sizing never
+    populates (its results live in capacity_calculations) - found it empty,
+    and required review with nothing to review. The reviewer saw "choose one
+    cluster and host, then approve" with zero options, and the real findings
+    (which clusters were flagged and why) sat computed in state and were
+    never reached, because generate_final_report only runs on the
+    no-review-required branch this state never took."""
+    state = {
+        "investigation_type": InvestigationType.RIGHT_SIZING,
+        "user_query": "which clusters are underutilized?",
+        "candidate_scores": [],
+        "capacity_calculations": {"right_sizing": [{"cluster_code": "atl-03", "classification": "Overprovisioned"}]},
+    }
+    out = nodes.assess_risk_and_confidence(state)
+    assert out["human_review_required"] is False
+    assert out["confidence"] == "Medium"
+
+
+def test_consolidation_needs_no_human_review():
+    state = {
+        "investigation_type": InvestigationType.CONSOLIDATION,
+        "user_query": "consolidate workloads in production",
+        "candidate_scores": [],
+        "capacity_calculations": {"consolidation": [{"application_code": "APP-CRM", "feasible": True}]},
+    }
+    out = nodes.assess_risk_and_confidence(state)
+    assert out["human_review_required"] is False
+    assert out["confidence"] == "Medium"
+
+
+def test_right_sizing_with_no_calculations_at_all_is_low_not_confident():
+    """The honest floor: no capacity_calculations at all (an empty estate, or
+    a failure upstream) must read as Low, not inherit Medium from a key that
+    happens to exist but is empty."""
+    state = {
+        "investigation_type": InvestigationType.RIGHT_SIZING,
+        "user_query": "which clusters are underutilized?",
+        "candidate_scores": [],
+        "capacity_calculations": {},
+    }
+    out = nodes.assess_risk_and_confidence(state)
+    assert out["human_review_required"] is False
+    assert out["confidence"] == "Low"
+
+
 # ---------------------------------------------------------------------------
 # "give me from a different DC" must actually exclude the data centre
 # ---------------------------------------------------------------------------
