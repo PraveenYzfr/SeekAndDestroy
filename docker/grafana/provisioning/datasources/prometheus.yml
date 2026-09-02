@@ -2,6 +2,16 @@ apiVersion: 1
 
 datasources:
   - name: Prometheus
+    # PINNED, not generated. A dashboard panel refers to its datasource by uid,
+    # and without this line Grafana invents one per install - so a dashboard
+    # committed here renders "Datasource prometheus was not found" on any
+    # machine other than the one whose uid it was exported from.
+    #
+    # The original panels sidestepped that by carrying a null datasource, which
+    # means "whatever is default". That works and hides the problem: it silently
+    # binds every panel to whichever datasource happens to be default, so adding
+    # a second one later re-points graphs nobody touched.
+    uid: prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090
