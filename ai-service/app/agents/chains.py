@@ -81,13 +81,52 @@ def explain_candidate(
     return result
 
 
+def _num(value) -> float | None:
+    """Decimal -> float, keeping None as None.
+
+    None means "not measured" and must stay distinguishable from 0.0, which means
+    "measured, and idle". Collapsing them would let a cluster with no telemetry
+    read as a cluster with nothing running on it.
+    """
+    return None if value is None else float(value)
+
+
+def _pct(part, whole) -> float | None:
+    """Allocation as a percentage, or None when there is nothing to divide by."""
+    if part is None or not whole:
+        return None
+    return round(float(part) / float(whole) * 100.0, 2)
+
+
 def explain_cluster_right_sizing(llm: BaseChatModel, result: ClusterRightSizingResult) -> RightSizingExplanation:
+    # The figures the model is being asked to narrate, as VALUES.
+    #
+    # They were reachable only through `rationale`, which is prose the engine
+    # writes. So a model quoting "CPU utilization at 93.98%" was quoting a number
+    # the engine had computed - correctly - out of a sentence, and the grader had
+    # no value to check it against and reported an invented figure.
+    #
+    # That is the harsh half of a fidelity number that could not be defended in
+    # either direction: too generous while any digit in the prompt grounded, too
+    # harsh once only values did. Neither was a model behaving badly; both were
+    # the engine handing over its arithmetic as narrative.
+    #
+    # Passing the snapshot fixes it at the source rather than teaching the grader
+    # to read prose - which is the thing the grader exists NOT to do.
+    snapshot = result.snapshot
     evidence = {
         "cluster_or_application_code": result.cluster_code,
         "classification": result.classification,
         "estimated_monthly_savings": float(result.estimated_monthly_savings),
         "current_node_count": result.current_node_count,
         "recommended_node_count": result.recommended_node_count,
+        "measured_cpu_percent": _num(snapshot.measured_cpu_percent),
+        "measured_memory_percent": _num(snapshot.measured_memory_percent),
+        "measured_storage_percent": _num(snapshot.measured_storage_percent),
+        "allocated_cpu_percent": _pct(snapshot.allocated_cpu_cores, snapshot.effective_cpu_cores),
+        "allocated_memory_percent": _pct(snapshot.allocated_memory_gb, snapshot.effective_memory_gb),
+        "available_cpu_cores": _num(snapshot.available_cpu_cores),
+        "available_memory_gb": _num(snapshot.available_memory_gb),
         "rationale": result.rationale,
         "risks": result.risks,
     }
