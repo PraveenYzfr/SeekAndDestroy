@@ -345,13 +345,30 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     environment:
-      # Anonymous viewing is convenient on a laptop and wrong anywhere else -
-      # Grafana would expose your infrastructure metrics to whoever finds the
-      # port. Set SAD_GRAFANA_ANONYMOUS=false and a real admin password on any
-      # deployed environment.
-      GF_AUTH_ANONYMOUS_ENABLED: "${SAD_GRAFANA_ANONYMOUS:-true}"
+      # ANONYMOUS ACCESS IS OFF BY DEFAULT. It used to default to TRUE, with a
+      # comment saying to turn it off in production - and that comment was the
+      # whole protection. It failed exactly as written protections do:
+      # docker/.env on the deployed box said SAD_GRAFANA_ANONYMOUS=true and
+      # SAD_GRAFANA_ADMIN_PASSWORD=admin, nginx serves Grafana at /grafana/ on
+      # the public origin, and so every infrastructure metric in this estate was
+      # readable by anyone who loaded the URL. No login, no port-forward.
+      #
+      # A default that has to be overridden to be safe is not a default, it is a
+      # trap that fires on whoever forgets. Off is now the default, and the
+      # environment variable can only ever LOOSEN it - which is the direction a
+      # deliberate act should have to travel.
+      GF_AUTH_ANONYMOUS_ENABLED: "${SAD_GRAFANA_ANONYMOUS:-false}"
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
-      GF_SECURITY_ADMIN_PASSWORD: "${SAD_GRAFANA_ADMIN_PASSWORD:-admin}"
+      # NO DEFAULT PASSWORD. ":?" makes compose REFUSE TO START when this is
+      # unset, rather than silently booting with "admin".
+      #
+      # Turning anonymous off while leaving the password at "admin" moves the
+      # door without locking it: the login page appears and the first guess
+      # opens it. Failing to start is loud, immediate, and impossible to ship
+      # past - which is what this needed and a comment was not.
+      GF_SECURITY_ADMIN_PASSWORD: "${SAD_GRAFANA_ADMIN_PASSWORD:?set SAD_GRAFANA_ADMIN_PASSWORD in docker/.env - Grafana is reachable at /grafana/ on the public origin}"
+      # No self-service accounts on a dashboard fronted by a public URL.
+      GF_USERS_ALLOW_SIGN_UP: "false"
       # SERVED UNDER /grafana/ ON THE MAIN SITE, not on a port of its own.
       #
       # The tunnel is token-managed - its routes live in the Cloudflare dashboard

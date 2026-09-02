@@ -118,8 +118,8 @@ Four values must change from their defaults before the host is reachable:
 |---|---|
 | `SAD_AUTH_LOCAL_SIGNING_KEY` | Defaults to a literal string published in this repository. Anyone can mint a valid token for any employee — including one that approves recommendations. |
 | `SAD_QDRANT_API_KEY` | Qdrant has no authentication at all by default. |
-| `SAD_GRAFANA_ANONYMOUS` | Grafana otherwise serves your infrastructure metrics to anyone who finds the port. |
-| `SAD_GRAFANA_ADMIN_PASSWORD` | Defaults to `admin`. |
+| `SAD_GRAFANA_ANONYMOUS` | Off by default. Setting it to `true` publishes every infrastructure metric to anyone who loads `/grafana/` - it is reachable from the internet, not just from the VM. |
+| `SAD_GRAFANA_ADMIN_PASSWORD` | REQUIRED. Compose refuses to start without it. Grafana is served at `/grafana/` on the public origin, so there is no safe default. |
 
 The signing key must be **identical** for ai-service and api-gateway. They
 validate each other's tokens; a mismatch fails closed, with 401s that look
