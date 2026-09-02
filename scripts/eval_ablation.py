@@ -70,8 +70,49 @@ ARM_A_SUFFIX = "ablation_full"
 ARM_B_SUFFIX = "ablation_itsm"
 
 
-def _store_for(base_collection: str):
-    """A vector store bound to a named collection, bypassing the cached singleton."""
+#: One embedded client for the whole process. Qdrant's on-disk mode takes an
+#: exclusive lock on its directory, so a second client against the same path
+#: fails - and both arms live in the same directory as separate collections.
+_EMBEDDED: dict = {}
+
+
+def _embedded_client(path: str):
+    from qdrant_client import QdrantClient
+
+    if "client" not in _EMBEDDED:
+        Path(path).mkdir(parents=True, exist_ok=True)
+        _EMBEDDED["client"] = QdrantClient(path=path)
+        print(f"  embedded Qdrant at {path}")
+    return _EMBEDDED["client"]
+
+
+def _store_for(base_collection: str, qdrant_path: str | None = None):
+    """A vector store bound to a named collection, bypassing the cached singleton.
+
+    With `qdrant_path`, the store is repointed at an EMBEDDED Qdrant instead of a
+    server.
+
+    DO NOT USE THIS FOR THE PAID RUN. I wrote the opposite here first, on the
+    assumption that "on-disk mode" meant vectors land on disk as they are written
+    and an interrupted run keeps what it paid for. Measured, it does not:
+
+        13 minutes of hash-embedding this corpus
+        storage folder: 2 KB, containing meta.json and nothing else
+        process memory: 9.1 GB and still climbing
+
+    qdrant_client's local mode is a pure-Python implementation that holds the
+    whole collection in RAM and serialises on clean shutdown. So it gives the
+    exact opposite of the property I claimed for it - a crash, an OOM or a killed
+    process loses every embedding, which is the only expensive thing here.
+
+    It is fine for a smoke test on a small corpus. For 100,000 chunks at 3,072
+    dimensions it is both the wrong memory profile and the wrong durability
+    story, and the paid run needs a real Qdrant server.
+
+    The client is swapped on the instance rather than added to the settings
+    model, because app/retrieval belongs to another session tonight and a
+    settings field for it should be theirs to add if it is worth keeping.
+    """
     from app.config import get_settings
     from app.retrieval import vector_store
 
@@ -80,13 +121,16 @@ def _store_for(base_collection: str):
     try:
         settings.retrieval.collection = base_collection
         vector_store.reset_vector_store_cache()
-        return vector_store.get_vector_store()
+        store = vector_store.get_vector_store()
+        if qdrant_path:
+            store._client = _embedded_client(qdrant_path)  # noqa: SLF001
+        return store
     finally:
         settings.retrieval.collection = original
         vector_store.reset_vector_store_cache()
 
 
-def build_a(batch_delay: float) -> int:
+def build_a(batch_delay: float, qdrant_path: str | None) -> int:
     """Index the whole corpus. This is the arm that costs money."""
     from app.config import get_settings
     from app.retrieval import pipeline
@@ -103,6 +147,10 @@ def build_a(batch_delay: float) -> int:
     from app.retrieval import vector_store
 
     vector_store.reset_vector_store_cache()
+    if qdrant_path:
+        # Repoint the module-level singleton the pipeline will fetch for itself.
+        store = vector_store.get_vector_store()
+        store._client = _embedded_client(qdrant_path)  # noqa: SLF001
 
     # pipeline.execute, not indexer.index_all. index_all() takes no arguments and
     # indexes into whatever collection the cached store points at; execute() takes
@@ -116,7 +164,7 @@ def build_a(batch_delay: float) -> int:
     return 0
 
 
-def build_b() -> int:
+def build_b(qdrant_path: str | None) -> int:
     """Derive the ITSM-only arm from arm A. No embedding provider is contacted."""
     from qdrant_client.models import PointStruct, SparseVector
 
@@ -125,8 +173,8 @@ def build_b() -> int:
 
     settings = get_settings()
     base = settings.retrieval.collection
-    src = _store_for(f"{base}__{ARM_A_SUFFIX}")
-    dst = _store_for(f"{base}__{ARM_B_SUFFIX}")
+    src = _store_for(f"{base}__{ARM_A_SUFFIX}", qdrant_path)
+    dst = _store_for(f"{base}__{ARM_B_SUFFIX}", qdrant_path)
 
     kept: list[tuple] = []
     dropped = 0
@@ -182,7 +230,7 @@ def build_b() -> int:
     return 0
 
 
-def measure(k: int, top_k: int, cases_per_kind: int) -> int:
+def measure(k: int, top_k: int, cases_per_kind: int, qdrant_path: str | None) -> int:
     from app.config import get_settings
     from app.evaluation import retrieval_golden, retrieval_metrics
 
@@ -199,7 +247,7 @@ def measure(k: int, top_k: int, cases_per_kind: int) -> int:
 
     scores: dict[str, list] = {}
     for arm, collection in arms.items():
-        store = _store_for(collection)
+        store = _store_for(collection, qdrant_path)
         out = []
         for case in cases:
             try:
@@ -265,14 +313,18 @@ def main() -> int:
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--top-k", type=int, default=30)
     ap.add_argument("--cases-per-kind", type=int, default=3)
+    ap.add_argument(
+        "--qdrant-path", default=None,
+        help="use an embedded on-disk Qdrant at this directory instead of a server",
+    )
     args = ap.parse_args()
 
     if args.build_a:
-        return build_a(args.batch_delay)
+        return build_a(args.batch_delay, args.qdrant_path)
     if args.build_b:
-        return build_b()
+        return build_b(args.qdrant_path)
     if args.measure:
-        return measure(args.k, args.top_k, args.cases_per_kind)
+        return measure(args.k, args.top_k, args.cases_per_kind, args.qdrant_path)
     ap.print_help()
     return 1
 
