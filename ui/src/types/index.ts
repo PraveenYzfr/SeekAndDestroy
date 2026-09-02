@@ -289,6 +289,11 @@ export interface ReviewHost {
 export interface ReviewOption {
   cluster_code: string;
   cluster_id: number;
+  /** Which site. A shortlist of three clusters is a choice about DATA CENTRE as
+   *  much as capacity, and the payload used to carry only the cluster code -
+   *  so the reviewer was picking a site from a name. Null when the candidate
+   *  predates the field rather than when the site is unknown. */
+  data_center: string | null;
   eligibility_status: string;
   overall_score: number | null;
   projected_headroom_percent: number | null;

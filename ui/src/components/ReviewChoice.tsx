@@ -236,6 +236,17 @@ export default function ReviewChoice({
                 onChange={() => choose(option)}
               />
               <strong>{option.cluster_code}</strong>
+              {/* The SITE, next to the name. Choosing between three clusters for
+                  a Tier-1 workload is a decision about which data centre it
+                  lands in, and this panel used to show only cluster codes -
+                  atl-03 and den-03 are different sites and nothing said so.
+                  It also makes "give me a different DC" legible: the reviewer
+                  can see what they would be moving away from. */}
+              {option.data_center && (
+                <span className="badge" title="Data centre">
+                  {option.data_center}
+                </span>
+              )}
               <span className={`badge ${isRejected ? "rejected" : "eligible"}`}>
                 {isRejected ? "Not recommended" : "Recommended"}
               </span>

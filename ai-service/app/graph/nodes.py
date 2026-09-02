@@ -1136,6 +1136,16 @@ def _review_option(candidate: dict) -> dict:
     return {
         "cluster_code": candidate.get("cluster_code"),
         "cluster_id": candidate.get("cluster_id"),
+        # WHERE IT IS. A shortlist of three clusters is a choice about SITE as
+        # much as capacity - the reviewer is deciding which data centre a Tier-1
+        # workload lands in - and the payload carried the cluster code alone, so
+        # that decision was being made from a name. atl-03 and den-03 are
+        # different sites and the screen said nothing about it.
+        #
+        # Read from the candidate rather than looked up: placement sets it on
+        # every CandidateScore, so this is the same value the exclusion logic
+        # uses when the reviewer asks for a different DC.
+        "data_center": candidate.get("data_center"),
         "eligibility_status": candidate.get("eligibility_status"),
         "overall_score": candidate.get("overall_score"),
         "projected_headroom_percent": projected.get("projected_headroom_percent"),
