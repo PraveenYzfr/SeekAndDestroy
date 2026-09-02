@@ -337,6 +337,45 @@ def pack_applications(applications, clusters, load_plans, rng, anchor_date):
         pool = by_env.get(environment) or by_env.get("Production") or []
         if not pool:
             return None
+
+        # A hand-written application names its own cluster, and for its PRIMARY
+        # that choice wins over the packer.
+        #
+        # The obvious reading is that the packer should decide. It should not,
+        # because host_cluster_code is already authoritative for two other
+        # models and only the hosting rows ignored it:
+        #
+        #   seed_cmdb.py     places VMs from `a.host_cluster_code or by_idx[...]`
+        #   generate_seed.py derives cluster utilisation from
+        #                    `sum(1 for a in APPLICATIONS if a.host_cluster_code == c.code)`
+        #
+        # So the packer put APP-CRM in Atlanta, Columbus and Dallas while the CI
+        # graph and the utilisation history both had it on den-03, in Denver.
+        # Measured: 42 applications had a graph data centre appearing in NONE of
+        # their hosting rows, and APP-LEDGER had zero overlap between the two.
+        #
+        # That is not a missing DR leg - it is a primary placement that two
+        # halves of the seed disagree about, and every resiliency answer for the
+        # forty flagship applications was computed over the disagreement.
+        #
+        # Only the primary is pinned. Staging, Test and the DR standby still pack
+        # by capacity: host_cluster_code says where the production workload
+        # lives, and nothing about where its copies go.
+        pinned = None
+        if is_primary and getattr(app, "host_cluster_code", ""):
+            pinned = next((c for c in pool if c.code == app.host_cluster_code), None)
+            if pinned is None:
+                # Deliberate placements are few and written by hand, so a name
+                # that does not resolve is a typo rather than a capacity
+                # decision. Packing it elsewhere silently is precisely the
+                # divergence being fixed here.
+                raise ValueError(
+                    f"{app.code} names host_cluster_code={app.host_cluster_code!r}, "
+                    f"which is not an active {environment} cluster. Fix the "
+                    f"application row or clear host_cluster_code; letting the "
+                    f"packer choose is what made the graph and the hosting table "
+                    f"disagree about 42 applications."
+                )
         # Prefer a cluster that still has room under its target and can take the
         # platform. Sorted by remaining room so the estate fills evenly toward
         # its targets rather than overloading whichever cluster is examined first.
@@ -352,7 +391,7 @@ def pack_applications(applications, clusters, load_plans, rng, anchor_date):
             if primary_idx is not None:
                 primary_dc = next((c.datacenter for c in clusters if c.idx == primary_idx), None)
                 eligible = [c for c in eligible if c.datacenter != primary_dc]
-        if not eligible:
+        if pinned is None and not eligible:
             # Nothing under its drawn target can take it. Fall back to the
             # emptiest compatible cluster that still has REAL capacity - an
             # unhosted application is a data bug, but a cluster allocated past
@@ -369,7 +408,11 @@ def pack_applications(applications, clusters, load_plans, rng, anchor_date):
                 return None
             eligible = sorted(eligible, key=lambda c: max(load_plans[c.idx].achieved_cpu_pct,
                                                           load_plans[c.idx].achieved_mem_pct))[:5]
-        cluster = max(eligible, key=lambda c: capacity_left(load_plans[c.idx], cpu, mem))
+        # A pinned primary is placed even when its cluster is over target. The
+        # forty hand-written applications are a small fraction of the estate's
+        # load, and honouring the choice is the point; silently relocating it is
+        # the bug.
+        cluster = pinned or max(eligible, key=lambda c: capacity_left(load_plans[c.idx], cpu, mem))
 
         plan = load_plans[cluster.idx]
         plan.allocated_cpu += cpu
