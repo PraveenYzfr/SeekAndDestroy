@@ -122,6 +122,17 @@ GRANT INSERT, UPDATE, DELETE ON sad.LlmRoleOverride     TO [$APP_LOGIN];
 -- point in time; deleting one is falsifying an audit trail, not tidying up.
 GRANT INSERT ON sad.AnswerEvaluation                    TO [$APP_LOGIN];
 GRANT INSERT ON sad.CallEvaluation                      TO [$APP_LOGIN];
+-- Evaluation runs (migration 020). UPDATE on EvalRun only, and only because a
+-- run is written when it STARTS - so that a crashed run leaves a Running row
+-- rather than no evidence it was ever attempted - and finalised when it ends.
+-- EvalCaseResult is insert-only: a case result is a fact about one execution.
+--
+-- Granted in the SAME commit as the migration that creates the tables. 018
+-- shipped without its grant, every write failed, and the repository swallowed
+-- each failure by design - so the code ran, the table existed, and nothing was
+-- stored or reported. Splitting the two is what made that possible.
+GRANT INSERT, UPDATE ON sad.EvalRun                     TO [$APP_LOGIN];
+GRANT INSERT         ON sad.EvalCaseResult              TO [$APP_LOGIN];
   -- auth.login performs an opportunistic rehash when scrypt parameters change,
   -- which UPDATEs these two columns inside the login request. Without this the
   -- first login after a policy change fails on a *correct* password, and the

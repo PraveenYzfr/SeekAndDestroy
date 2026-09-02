@@ -193,7 +193,19 @@ def main() -> int:
     parser.add_argument("--no-judge", action="store_true", help="deterministic checks only")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--fail-on-hard", action="store_true", help="exit non-zero on any hard-check failure")
+    parser.add_argument("--record", action="store_true",
+                        help="store this run in sad.EvalRun so it can be compared later")
+    parser.add_argument("--baseline", metavar="RUN_ID|last-passing",
+                        help="compare against a previous run; implies --record")
+    parser.add_argument("--fail-on-regression", action="store_true",
+                        help="exit non-zero when a case that passed in the baseline now fails")
+    parser.add_argument("--triggered-by", default=None, help="who or what started this run")
     args = parser.parse_args()
+
+    # A comparison needs both runs stored, so asking for one turns recording on
+    # rather than failing with an argument error. Nobody asks to compare against
+    # a baseline and also wants this run thrown away.
+    record = args.record or bool(args.baseline)
 
     cases = load_cases()
     if args.case:
@@ -202,7 +214,60 @@ def main() -> int:
             print(f"no case with id {args.case!r}", file=sys.stderr)
             return 2
 
-    results = [run_case(c, use_judge=not args.no_judge) for c in cases]
+    repo = None
+    run_id = None
+    baseline_id = None
+    if record:
+        import time as _time
+
+        sys.path.insert(0, str(REPO_ROOT / "ai-service"))
+        from app.repositories import eval_run_repository as repo
+
+        if args.baseline == "last-passing":
+            previous = repo.last_passing("golden")
+            baseline_id = previous["EvalRunId"] if previous else None
+            if baseline_id is None:
+                print("  no previous passing run to use as a baseline", file=sys.stderr)
+        elif args.baseline:
+            baseline_id = int(args.baseline)
+
+        # Opened BEFORE the cases run, so a suite that crashes leaves a Running
+        # row rather than no evidence it was attempted. A run that vanishes on
+        # failure makes a flaky suite look like a suite nobody ran.
+        run_id = repo.start("golden", triggered_by=args.triggered_by, baseline_run_id=baseline_id)
+        print(f"  eval run #{run_id}" + (f", baseline #{baseline_id}" if baseline_id else ""))
+
+    results = []
+    for case in cases:
+        started = _time.perf_counter() if record else 0.0
+        result = run_case(case, use_judge=not args.no_judge)
+        results.append(result)
+        if not record:
+            continue
+        hard = result.get("hard") or []
+        # A case that errored is SKIPPED, not failed. It tells you nothing about
+        # quality, and counting it as a failure reports a measurement that was
+        # never taken - the same distinction the graders make between "did not
+        # apply" and "scored zero".
+        if result.get("error"):
+            outcome = "Skipped"
+        elif any(not h["passed"] for h in hard):
+            outcome = "Failed"
+        else:
+            outcome = "Passed"
+        scores = (result.get("judge") or {}).get("scores") or {}
+        repo.record_case(
+            run_id, case_id=result["id"], kind=result.get("kind"), outcome=outcome,
+            hard_checks=hard, answer_excerpt=result.get("answer"),
+            error=result.get("error"),
+            judge={
+                "relevance": scores.get("relevance"),
+                "groundedness": scores.get("groundedness"),
+                "actionability": scores.get("actionability"),
+                "self_judged": (result.get("judge") or {}).get("self_judged"),
+            },
+            duration_ms=int((_time.perf_counter() - started) * 1000),
+        )
 
     if args.json:
         print(json.dumps({"results": results}, indent=2, default=str))
@@ -244,7 +309,53 @@ def main() -> int:
             )
         print()
 
-    if args.fail_on_hard and any(not h["passed"] for r in results for h in r["hard"]):
+    hard_failures = sum(1 for r in results for h in r["hard"] if not h["passed"])
+
+    comparison = {}
+    status = "Passed"
+    if record:
+        outcomes = [
+            "Skipped" if r.get("error")
+            else ("Failed" if any(not h["passed"] for h in r["hard"]) else "Passed")
+            for r in results
+        ]
+        usable = [r for r in results if (r.get("judge") or {}).get("usable")]
+        excluded = sum(1 for r in results if (r.get("judge") or {}).get("self_judged"))
+        total_hard = sum(len(r["hard"]) for r in results)
+
+        if baseline_id:
+            comparison = repo.compare(run_id, baseline_id)
+        status, reason = repo.verdict_for(comparison, hard_failures=hard_failures)
+
+        repo.finish(
+            run_id, status=status,
+            totals={
+                "total": len(results),
+                "passed": outcomes.count("Passed"),
+                "failed": outcomes.count("Failed"),
+                "skipped": outcomes.count("Skipped"),
+            },
+            hard_rate=(round((total_hard - hard_failures) / total_hard, 4) if total_hard else None),
+            judge_mean=(round(sum(r["judge"]["scores"]["mean"] for r in usable) / len(usable), 2)
+                        if usable else None),
+            judge_excluded=excluded,
+            notes=reason,
+        )
+        print()
+        print(f"  run #{run_id}: {status} - {reason}")
+        if comparison:
+            for label in ("regressed", "fixed", "added", "removed"):
+                if comparison.get(label):
+                    print(f"    {label:<10} {', '.join(comparison[label])}")
+
+    # Two gates, deliberately separate. --fail-on-hard is an absolute floor: a
+    # rule was broken and that is a bug. --fail-on-regression is relative: this
+    # run is worse than a baseline while still inside every absolute limit, which
+    # may be a trade somebody chose to make. Collapsing them into one flag would
+    # force the same response to both.
+    if args.fail_on_hard and hard_failures:
+        return 1
+    if args.fail_on_regression and comparison.get("regressed"):
         return 1
     return 0
 
