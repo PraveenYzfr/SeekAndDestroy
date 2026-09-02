@@ -86,6 +86,9 @@ public sealed class AiServiceClient(HttpClient httpClient, IHttpContextAccessor 
     public Task<JsonNode?> GetForecastAsync(ForecastRequestDto request, CancellationToken ct) =>
         PostAsync("/api/forecast", request, ct);
 
+    public Task<JsonNode?> AskInsightAsync(InsightAskRequestDto request, CancellationToken ct) =>
+        PostAsync("/api/insights/ask", request, ct);
+
     public Task<JsonNode?> CreateInvestigationAsync(CreateInvestigationRequestDto request, CancellationToken ct) =>
         PostAsync("/api/investigations", request, ct);
 

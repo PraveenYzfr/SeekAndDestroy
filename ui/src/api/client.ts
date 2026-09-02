@@ -9,6 +9,7 @@ import type {
   Investigation,
   InfrastructureRecommendation,
   RunInvestigationResult,
+  InsightAnswer,
 } from "@/types";
 
 import { clearSession, getToken, setSession, type LoginResponse } from "@/auth/session";
@@ -179,6 +180,15 @@ export const api = {
     request<{ investigation: Investigation; recommendations: InfrastructureRecommendation[] }>(
       `/investigations/${investigationId}/recommendations`,
     ),
+
+  /** CMDB Insighter: one free-text question, one composed answer. No
+   *  conversation threading yet - each question is independent, unlike
+   *  /investigations. */
+  askInsight: (query: string) =>
+    request<InsightAnswer>("/insights/ask", {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    }),
 };
 
 export { ApiError };

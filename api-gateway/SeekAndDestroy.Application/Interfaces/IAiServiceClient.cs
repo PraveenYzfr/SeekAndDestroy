@@ -16,6 +16,12 @@ public interface IAiServiceClient
     Task<JsonNode?> AnalyzeConsolidationAsync(ConsolidationRequestDto request, CancellationToken ct);
     Task<JsonNode?> GetForecastAsync(ForecastRequestDto request, CancellationToken ct);
 
+    /// <summary>CMDB Insighter: one free-text question, one composed answer.
+    /// See app.insights.router (AI service) for how the question is
+    /// classified and answered - the gateway passes the payload through
+    /// unmodified in both directions.</summary>
+    Task<JsonNode?> AskInsightAsync(InsightAskRequestDto request, CancellationToken ct);
+
     Task<JsonNode?> CreateInvestigationAsync(CreateInvestigationRequestDto request, CancellationToken ct);
     Task<JsonNode?> GetInvestigationAsync(int investigationId, CancellationToken ct);
     Task<JsonNode?> ResumeInvestigationAsync(int investigationId, ResumeInvestigationRequestDto request, CancellationToken ct);

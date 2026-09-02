@@ -367,3 +367,39 @@ export interface ModelProvider {
   models: string[];
   error: string | null;
 }
+
+// ---- CMDB Insighter --------------------------------------------------------
+
+/** A generic result grid - column headers are dimension names or "count",
+ *  rows are plain values in the same order. Deliberately untyped beyond that:
+ *  the columns depend on what the question asked to group by, which is open
+ *  ended by design (see app.insights.whitelist). */
+export interface InsightTable {
+  title: string | null;
+  columns: string[];
+  rows: (string | number | null)[][];
+}
+
+/** One answer from the CMDB Insighter. `intent` says which of the three
+ *  paths answered it - "health" and "impact" are Python-composed and need no
+ *  model call to read; "aggregate" is the narrated SQL-backed path and
+ *  carries `insight` (a called-out pattern, e.g. an inversion) and
+ *  `total_count`, neither of which the other two intents have. */
+export interface InsightAnswer {
+  intent: "health" | "impact" | "aggregate";
+  headline: string;
+  narrative: string;
+  insight?: string;
+  /** What this answer does NOT cover - a filter that narrowed scope, or a
+   *  count that is a floor rather than an exact number. Always state these
+   *  next to the headline, never let a reader assume completeness. */
+  caveats: string[];
+  table: InsightTable | null;
+  /** Findings that are real but should not compete with the headline for
+   *  attention - shown behind a disclosure, same pattern as
+   *  RecommendationComparison's "other options considered". */
+  details?: Record<string, unknown>;
+  filters_applied?: Record<string, unknown>;
+  row_count?: number;
+  total_count?: number;
+}

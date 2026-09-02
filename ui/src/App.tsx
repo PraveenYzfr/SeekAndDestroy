@@ -3,6 +3,7 @@ import { NavLink, Route, Routes } from "react-router-dom";
 import { clearSession, getIdentity, onSessionChange, type Identity } from "@/auth/session";
 import Login from "@/pages/Login";
 import Chat from "@/pages/Chat";
+import Insights from "@/pages/Insights";
 import Dashboard from "@/pages/Dashboard";
 import HostingRecommendation from "@/pages/HostingRecommendation";
 import RecommendationComparison from "@/pages/RecommendationComparison";
@@ -15,6 +16,7 @@ import ModelSettings from "@/pages/ModelSettings";
 
 const NAV = [
   { to: "/", label: "Chat", end: true },
+  { to: "/insights", label: "CMDB Insighter" },
   { to: "/dashboard", label: "Dashboard" },
   { to: "/hosting", label: "Hosting Recommendation" },
   { to: "/compare", label: "Recommendation Comparison" },
@@ -64,6 +66,7 @@ export default function App() {
       <main className="content">
         <Routes>
           <Route path="/" element={<Chat />} />
+          <Route path="/insights" element={<Insights />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/hosting" element={<HostingRecommendation />} />
           <Route path="/compare" element={<RecommendationComparison />} />

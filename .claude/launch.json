@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ai-service",
+      "runtimeExecutable": "D:\\Praveen\\Projects\\SeekandDestroy\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--app-dir", "D:\\Praveen\\Projects\\SeekandDestroy\\ai-service", "--host", "127.0.0.1", "--port", "8088"],
+      "port": 8088
+    },
+    {
+      "name": "gateway",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "api-gateway/SeekAndDestroy.Api", "--urls", "http://127.0.0.1:5090"],
+      "port": 5090
+    },
+    {
+      "name": "ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "ui", "run", "dev"],
+      "port": 5173
+    }
+  ]
+}
