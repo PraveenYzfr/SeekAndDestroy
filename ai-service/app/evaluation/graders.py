@@ -139,10 +139,128 @@ def _evidence_numbers(evidence: Any) -> set[float]:
     return values
 
 
+#: A group larger than this contributes its total and its members' shares, but
+#: not its pairwise sums. 12 members is 66 pairs; 30 would be 435, and past that
+#: the grounded set starts covering enough of the number line to confirm figures
+#: nobody derived.
+_MAX_PAIRWISE_GROUP = 12
+
+#: Groups smaller than this are not groups. A single value has no total to be a
+#: share of, and admitting 100.0 for every scalar in the evidence would ground
+#: "100%" everywhere for nothing.
+_MIN_GROUP = 2
+
+
+def _numeric_groups(evidence: Any) -> list[list[float]]:
+    """Sets of values that belong together, found structurally.
+
+    A summariser adds things up. Which things is not arbitrary - it is whatever
+    the evidence presents as a series: a list of counts, or a list of records
+    sharing a numeric field. Those are the groups a total can honestly come from.
+
+    Deliberately NOT every pair of numbers anywhere in the evidence. A capacity
+    score and an incident count have no sum, and admitting one would ground a
+    figure that means nothing. Grouping by structure is what keeps a derived
+    total checkable rather than merely arithmetically possible.
+    """
+    groups: list[list[float]] = []
+
+    def numeric(node: Any) -> float | None:
+        if isinstance(node, bool):
+            return None
+        if isinstance(node, (int, float)):
+            return float(node)
+        if isinstance(node, str):
+            return _as_float(node.strip())
+        return None
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+            return
+        if not isinstance(node, (list, tuple)):
+            return
+
+        scalars = [n for n in (numeric(v) for v in node) if n is not None]
+        if len(scalars) >= _MIN_GROUP:
+            groups.append(scalars)
+
+        # A list of records: every numeric field that appears across them is a
+        # series. This is the shape c2's criticality breakdown arrives in -
+        # [{"criticality": "Silver", "incidents": 4073}, ...].
+        dicts = [v for v in node if isinstance(v, dict)]
+        if len(dicts) >= _MIN_GROUP:
+            keys = {k for d in dicts for k in d}
+            for key in keys:
+                series = [n for n in (numeric(d.get(key)) for d in dicts) if n is not None]
+                if len(series) >= _MIN_GROUP:
+                    groups.append(series)
+
+        for v in node:
+            walk(v)
+
+    walk(evidence)
+    return groups
+
+
+def _derived_numbers(evidence: Any) -> set[float]:
+    """Figures Python can derive from values the engine produced.
+
+    WHY THIS EXISTS
+    ---------------
+    The rule was "every number in the prose must appear in the evidence". That
+    cannot distinguish an invented figure from a derived one, so it refused both -
+    and deriving is what summarising IS. A narrator that reported Silver 4,073 and
+    Bronze 3,392 as 7,465 combined, 68.9% of the total, was rejected for the two
+    figures it was asked to produce, while both inputs came from the evidence and
+    the arithmetic was correct.
+
+    The fix is to VERIFY the arithmetic rather than refuse it. Python computes the
+    totals, the partial sums and the shares from values it already trusts, and a
+    figure grounds only if it is genuinely one of them. An invented number still
+    fails, because it is not derivable from anything.
+
+    WHAT THIS COSTS, STATED PLAINLY
+    -------------------------------
+    It weakens the guard. A larger grounded set means more chances for a wrong
+    figure to coincide with a right one. The weakening is bounded deliberately:
+    sums come only from values that are structurally a series, pairwise sums are
+    capped at groups of 12, and nothing is derived from digits in prose - see
+    _evidence_numbers, which is where an attacker-writable work note would
+    otherwise get in.
+
+    A cheaper alternative was available and rejected: have Python pre-compute
+    totals into the evidence so the model quotes rather than derives, leaving the
+    guard untouched. That is a cleaner boundary and it needs every call site that
+    might summarise to know in advance which totals a model will want. This keeps
+    the boundary in one place at the cost of a wider grounded set.
+    """
+    derived: set[float] = set()
+    for group in _numeric_groups(evidence):
+        total = sum(group)
+        if total == 0:
+            continue
+        derived.add(total)
+        for value in group:
+            derived.add(value / total * 100.0)
+        if len(group) <= _MAX_PAIRWISE_GROUP:
+            for i in range(len(group)):
+                for j in range(i + 1, len(group)):
+                    pair = group[i] + group[j]
+                    derived.add(pair)
+                    derived.add(pair / total * 100.0)
+    return derived
+
+
 def number_fidelity(prose: str, evidence: Any) -> GradeResult:
     """How many figures in the prose are traceable to the evidence."""
     result = GradeResult("number_fidelity")
+    # Values the engine produced, plus what Python can derive from them. The two
+    # are kept separate above so the security property stays visible: derivation
+    # runs over _evidence_numbers only, never over digits found in prose.
     known = _evidence_numbers(evidence)
+    known |= _derived_numbers(evidence)
 
     for token in _numbers_in(prose):
         value = _as_float(token)

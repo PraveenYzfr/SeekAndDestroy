@@ -32,6 +32,7 @@ from app.prompts.templates import (
     FINAL_REPORT_SYSTEM,
     FORECAST_EXPLANATION_SYSTEM,
     GROUNDED_QA_SYSTEM,
+    REJECTION_ANSWER_SYSTEM,
     INTENT_PARSER_SYSTEM,
     REQUIREMENT_EXTRACTION_SYSTEM,
     RIGHTSIZING_EXPLANATION_SYSTEM,
@@ -154,6 +155,31 @@ def answer_grounded_question(llm: BaseChatModel, question: str, retrieved_contex
     evidence = {"question": question, "records_from_the_estate": retrieved_context}
     human = with_evidence(f"Answer this question using only the evidence: {question}", evidence)
     return run_structured(llm, GROUNDED_QA_SYSTEM, human, GroundedAnswer)
+
+
+def answer_rejection_question(
+    llm: BaseChatModel, question: str, rule_evidence: list[dict], follow_up_options: list[str]
+) -> GroundedAnswer:
+    """Two sentences and a question, not a summary.
+
+    Separate from answer_grounded_question because the constraint is the point.
+    Sharing a prompt and hoping the model infers brevity from short evidence is
+    what was tried first: the evidence went from eleven documents to two and the
+    answer stayed long, because nothing had ever told it to be brief.
+
+    ``follow_up_options`` are computed by services.refinement from the rules that
+    actually failed. The model is told to use only these, so it cannot offer a
+    move that does not follow from the verdict.
+    """
+    evidence = {
+        "question": question,
+        "rules_that_failed": rule_evidence,
+        "follow_up_options": follow_up_options,
+    }
+    human = with_evidence(
+        f"Answer in at most two sentences, then ask one follow-up question: {question}", evidence
+    )
+    return run_structured(llm, REJECTION_ANSWER_SYSTEM, human, GroundedAnswer)
 
 
 def generate_final_report(

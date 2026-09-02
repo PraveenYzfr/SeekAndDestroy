@@ -81,6 +81,22 @@ GROUNDED_QA_SYSTEM = SYSTEM_BASE + (
     "about their estate, which is what they asked."
 )
 
+REJECTION_ANSWER_SYSTEM = SYSTEM_BASE + (
+    "\n\nThe reader asked why one cluster was not chosen for one workload. Answer in AT MOST "
+    "TWO SENTENCES: name the cluster, and state the single most important thing that blocked "
+    "it, with the number that made it fail. Nothing else."
+    "\n\nDo NOT write a summary, an overview, a preamble, a restatement of the question, a "
+    "list of everything that was checked, or a closing paragraph. Do not describe what passed. "
+    "The reader can see the rest by asking."
+    "\n\nThen end with ONE short question offering the next moves, using only the options "
+    "given to you in follow_up_options and no others. Phrase it as a question the reader can "
+    "answer, for example: \"Want me to show clusters with enough free capacity, or the best "
+    "clusters for this application?\""
+    "\n\nWhy so short: the reader did not ask out of curiosity. They asked because they still "
+    "need somewhere to put this workload, and a page of prose about a cluster they cannot use "
+    "delays the answer they actually need."
+)
+
 FINAL_REPORT_SYSTEM = SYSTEM_BASE + (
     "\n\nWrite the final investigation report: an executive summary, the top recommendation, "
     "alternatives considered, risks, next steps, and what human action is required. Use only "

@@ -21,6 +21,7 @@ import structlog
 
 from app.agents.chains import (
     answer_grounded_question,
+    answer_rejection_question,
     explain_candidate,
     explain_cluster_right_sizing,
     extract_capacity_requirement,
@@ -679,6 +680,9 @@ def _rejection_rule_evidence(state: InfrastructureRecommendationState) -> list[d
             ),
             "score": 1.0,
             "entity_type": "eligibility_rule",
+            # Carried structurally so the follow-up options can be built from
+            # the rule that actually failed, without parsing the sentence above.
+            "rule_id": r.get("rule_id"),
         }
         for r in results
     ]
@@ -789,9 +793,34 @@ def generate_recommendation_explanations(state: InfrastructureRecommendationStat
         return {"recommendation_explanations": explanations}
 
     if itype == InvestigationType.QUESTION:
+        context = state.get("retrieved_context", [])
+        # A rejection question gets its own, shorter path. The general grounded-QA
+        # prompt has no length instruction, so it writes an essay - which is why
+        # cutting the evidence from eleven documents to two did not fix the
+        # complaint. Fewer documents just produced a long summary of two
+        # documents; the instruction was the half that mattered.
+        rule_ids = [d.get("rule_id") for d in context if d.get("entity_type") == "eligibility_rule"]
+        rule_ids = [r for r in rule_ids if r]
         try:
+            if rule_ids:
+                from app.services.refinement import rejection_follow_ups
+
+                follow_ups = rejection_follow_ups(rule_ids)
+                answer = answer_rejection_question(
+                    get_chat_model_for_role("grounded_qa"),
+                    state["user_query"],
+                    [d for d in context if d.get("entity_type", "").startswith("eligibility")],
+                    follow_ups,
+                )
+                payload = answer.model_dump()
+                # Offered as data the UI can render as buttons, not only as prose
+                # the model was asked to write. If the model ignores the
+                # instruction the options are still there.
+                payload["follow_ups"] = follow_ups
+                return {"recommendation_explanations": [payload]}
+
             answer = answer_grounded_question(
-                get_chat_model_for_role("grounded_qa"), state["user_query"], state.get("retrieved_context", [])
+                get_chat_model_for_role("grounded_qa"), state["user_query"], context
             )
             return {"recommendation_explanations": [answer.model_dump()]}
         except Exception as exc:  # noqa: BLE001

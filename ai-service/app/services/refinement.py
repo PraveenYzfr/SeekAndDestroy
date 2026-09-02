@@ -255,3 +255,54 @@ def next_steps(
             for o in options
         ],
     }
+
+
+# =============================================================================
+# What to offer after a rejection
+# =============================================================================
+
+#: One follow-up per rule, phrased as a move the engineer can make rather than
+#: a restatement of the failure. Keyed by rule id because the id is the fact -
+#: the reason text is written for a human and will be reworded.
+#:
+#: A rejection answer that stops at "here is why" leaves the reader where they
+#: started. They did not ask out of curiosity; they asked because they still
+#: need somewhere to put the workload.
+_REJECTION_FOLLOW_UPS: dict[str, str] = {
+    "RULE-001": "show clusters in the right environment",
+    "RULE-002": "show clusters on a compatible platform",
+    "RULE-003": "show clusters with enough free capacity",
+    "RULE-004": "show clusters that meet the availability tier",
+    "RULE-005": "show clusters cleared for this data classification",
+    "RULE-006": "show clusters in the required location",
+    "RULE-007": "exclude clusters that are being retired",
+    "RULE-008": "show clusters near this application's dependencies",
+    "RULE-009": "show clusters that keep enough headroom after the move",
+    "RULE-010": "show clusters with enough active nodes for this tier",
+    "RULE-011": "come back after the change freeze lifts",
+    "RULE-012": "show clusters that would add a second failure domain",
+}
+
+#: Always available, whatever failed. "Where SHOULD this go" is the question
+#: behind "why not here", and it is usually the one worth asking next.
+_ALWAYS = "see the best clusters for this application"
+
+
+def rejection_follow_ups(failed_rule_ids: list[str]) -> list[str]:
+    """Concrete next moves for a rejected pair, derived from what actually failed.
+
+    Derived rather than generated. A model asked to suggest next steps will
+    produce plausible ones, including for constraints that were never violated,
+    and the reader has no way to tell which suggestions came from the engine.
+
+    Capped at three. A rejection answer is meant to be short, and a list of
+    seven options is the same wall of text the detailed summary was.
+    """
+    seen: list[str] = []
+    for rule_id in failed_rule_ids:
+        text = _REJECTION_FOLLOW_UPS.get(rule_id)
+        if text and text not in seen:
+            seen.append(text)
+    if _ALWAYS not in seen:
+        seen.append(_ALWAYS)
+    return seen[:3]
