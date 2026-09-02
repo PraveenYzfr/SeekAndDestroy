@@ -198,7 +198,28 @@ class LlmSettings(_Base):
     # reuses this same settings object's provider-specific fields (azure_endpoint/
     # azure_deployment for azure-openai, ollama_base_url for ollama, etc.), so
     # they must already be filled in for any fallback actually to work.
-    fallback_providers: str = ""
+    #: Where narration goes when the primary provider is down.
+    #:
+    #: Defaults to OpenAI at comparable capability. "Comparable" is the point: a
+    #: fallback that is markedly weaker than the primary turns an outage into a
+    #: silent quality drop, which is worse than an error because nobody
+    #: investigates it. gpt-4o is the equal-weight choice against a reasoning
+    #: primary; gpt-4o-mini would be cheaper and would quietly change the answers.
+    #:
+    #: Both are settable on the Model Settings screen, where "fallback" appears
+    #: as a role like any other.
+    fallback_providers: str = "openai"
+    #: The model the FALLBACK provider runs.
+    #:
+    #: This exists because it was missing, and its absence made the whole chain
+    #: inert: build_chat_model() built every fallback provider with
+    #: settings.model, so an OpenAI fallback requested "deepseek-v4-flash" and
+    #: 404d. The backup was guaranteed to fail in exactly the moment it was
+    #: needed, and nothing exercised it because the chain was empty by default.
+    #:
+    #: Empty means "use that provider's own default", which raises for the
+    #: providers whose ids churn rather than guessing one.
+    fallback_model: str = "gpt-4o"
     # Spend/abuse control for real providers: max real (non-mock) chat-model calls
     # allowed per UTC calendar day, process-wide (Redis-backed and thus shared
     # across workers when SAD_CACHE__BACKEND=redis; per-process otherwise). 0 (the

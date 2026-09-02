@@ -53,8 +53,13 @@ def test_fallback_model_raises_once_every_provider_is_exhausted():
 
 
 def test_build_chat_model_returns_plain_model_with_no_fallback_configured(monkeypatch):
-    monkeypatch.setattr(get_settings().llm, "fallback_providers", "")
+    # Order matters, and it only started mattering when the default stopped
+    # being empty: cache_clear() discards the object that was just patched and
+    # rebuilds it from configuration, so patching first undid the patch. Clear,
+    # then patch the instance the factory will actually read.
     get_settings.cache_clear()
+    monkeypatch.setenv("SAD_LLM__FALLBACK_PROVIDERS", "")
+    monkeypatch.setattr(get_settings().llm, "fallback_providers", "")
     model = build_chat_model()
     assert not isinstance(model, FallbackChatModel)
     get_settings.cache_clear()

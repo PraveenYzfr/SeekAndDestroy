@@ -56,7 +56,26 @@ class ModelRole:
     chains: tuple[str, ...]
 
 
+#: The name the fallback occupies on the Model Settings screen.
+#:
+#: Not a chain - nothing routes to it directly. It is listed as a role because
+#: that is the surface where a provider and model are chosen, and a backup nobody
+#: can see or change is a backup nobody checks.
+FALLBACK_ROLE = "fallback"
+
+
 ROLES: tuple[ModelRole, ...] = (
+    ModelRole(
+        name=FALLBACK_ROLE,
+        title="Fallback",
+        description=(
+            "Used when the primary provider fails, for any role. Should be of "
+            "comparable capability to the primary - a markedly weaker fallback "
+            "turns an outage into a quiet drop in answer quality, which nobody "
+            "investigates because nothing errored."
+        ),
+        chains=(),
+    ),
     ModelRole(
         name="planning",
         title="Planning",

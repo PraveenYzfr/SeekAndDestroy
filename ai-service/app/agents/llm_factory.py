@@ -26,6 +26,8 @@ from app.config import get_settings
 
 logger = structlog.get_logger(__name__)
 
+from app.agents.roles import FALLBACK_ROLE
+
 
 def build_chat_model_for_provider(provider: str, model_override: str | None = None) -> BaseChatModel:
     """Build a client for ``provider``, via its registered adapter.
@@ -50,13 +52,43 @@ def build_chat_model_for_provider(provider: str, model_override: str | None = No
 
 
 def build_chat_model() -> BaseChatModel:
+    """The primary provider, with backups behind it.
+
+    Each fallback is built with ITS OWN model. That was the bug: every member of
+    the chain was built with settings.model, so an OpenAI fallback behind a
+    DeepSeek primary requested "deepseek-v4-flash" and 404d. The backup was
+    guaranteed to fail at the exact moment it was needed, and nothing caught it
+    because the chain shipped empty.
+
+    A fallback that cannot be built is SKIPPED rather than fatal - no credential
+    for the backup provider must not take the primary offline too. A chain with
+    nothing constructible degrades to the primary alone, which is where it
+    started.
+    """
     settings = get_settings().llm
-    fallbacks = settings.fallback_provider_list
-    if not fallbacks:
-        return build_chat_model_for_provider(settings.provider)
-    providers = [settings.provider, *fallbacks]
-    models = [(p, build_chat_model_for_provider(p)) for p in providers]
-    return FallbackChatModel(members=models)
+    primary = build_chat_model_for_provider(settings.provider)
+
+    # The Model Settings screen wins over configuration, exactly as it does for
+    # every other role. Without this the fallback would be VISIBLE on that screen
+    # and unchangeable by it, which is worse than not showing it at all.
+    chain: list[tuple[str, str | None]] = []
+    chosen = resolve_role(FALLBACK_ROLE)
+    if chosen.get("source") == "override":
+        chain.append((chosen["provider"], chosen.get("model") or None))
+    else:
+        chain = [(name, settings.fallback_model or None) for name in settings.fallback_provider_list]
+
+    members = [(settings.provider, primary)]
+    for name, model in chain:
+        if name == settings.provider:
+            continue  # a provider is not its own backup
+        try:
+            members.append((name, build_chat_model_for_provider(name, model)))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("llm_factory.fallback_unavailable", provider=name, error=str(exc))
+    if len(members) == 1:
+        return primary
+    return FallbackChatModel(members=members)
 
 
 class FallbackChatModel(BaseChatModel):

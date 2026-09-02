@@ -101,3 +101,30 @@ class TestAzureIsHonestAboutNotListing:
         result = provider_models.list_models("azure-openai", refresh=True)
         assert result["available"] is False
         assert "deployment" in result["error"].lower()
+
+
+class TestCredentialsNeverRender:
+    """A pytest diff printed a live API key into a terminal twice tonight.
+
+    Nothing in the code asked for it - the default pydantic repr shows every
+    field and one of them is a secret, so any traceback, log line or failure
+    diff that formatted a client leaked it. The fix is in the objects rather
+    than in a rule about writing assertions, because the leak came from output
+    nobody wrote.
+    """
+
+    @pytest.mark.parametrize("factory", ["http", "anthropic", "gemini"])
+    def test_the_key_is_redacted(self, factory):
+        secret = "sk-DO-NOT-PRINT-THIS"
+        if factory == "http":
+            from app.agents.http_chat_model import HttpChatModel
+            client = HttpChatModel(base_url="http://x", model="m", api_key=secret, provider_name="p")
+        elif factory == "anthropic":
+            from app.agents.anthropic_chat_model import AnthropicChatModel
+            client = AnthropicChatModel(api_key=secret, model="m")
+        else:
+            from app.agents.gemini_chat_model import GeminiChatModel
+            client = GeminiChatModel(api_key=secret, model="m")
+        assert secret not in repr(client)
+        assert secret not in str(client)
+        assert client.api_key == secret, "redaction must not break the credential"

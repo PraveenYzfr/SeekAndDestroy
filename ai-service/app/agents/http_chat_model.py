@@ -131,6 +131,24 @@ class HttpChatModel(BaseChatModel):
             llm_output=meta,
         )
 
+    def __repr_args__(self):
+        """Never render the credential.
+
+        A pytest assertion printed a live API key into a terminal - twice - by
+        formatting one of these objects in a failure diff. Nothing in the code
+        asked for that; the default repr shows every field, and one of the fields
+        is a secret.
+
+        Redacting here rather than in the tests is the fix that holds: the leak
+        came from a diff nobody wrote, so a rule about how to write assertions
+        would not have prevented it. Anything that formats this object - a
+        traceback, a log line, a debugger - is now safe by construction.
+        """
+        return [
+            (k, "***redacted***" if k == "api_key" and v else v)
+            for k, v in super().__repr_args__()
+        ]
+
     def _generate(
         self,
         messages: list[BaseMessage],
