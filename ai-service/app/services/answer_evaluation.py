@@ -252,7 +252,7 @@ def _judge(question: str, prose: str, investigation_id: int | None) -> dict:
     """
     from app.evaluation.judge import judge_answer
 
-    evidence = _evidence_for(investigation_id)
+    evidence, author = _evidence_and_author_for(investigation_id)
     if evidence is None:
         # No recoverable evidence means groundedness is unanswerable, and a
         # judge asked anyway will answer confidently from nothing. Recorded as
@@ -261,7 +261,26 @@ def _judge(question: str, prose: str, investigation_id: int | None) -> dict:
         return {"JudgeError": "evidence for the answer could not be recovered"}
 
     try:
-        verdict = judge_answer(question, prose, evidence)
+        # The author is passed, and until now it was NOT - judge_answer was
+        # called with the evidence alone. Its contract says that means
+        # self-judging "cannot be determined; it is then reported as False", so
+        # every verdict in production came back self_judged=False whatever model
+        # wrote the answer.
+        #
+        # Two consequences, and the second is the bad one. The disclosure this
+        # platform makes a point of - that a model grading its own work grades it
+        # high - was never made on a real answer. And the exclusion built to act
+        # on it never fired, so same-model verdicts were exported as though they
+        # were independent.
+        #
+        # Read from the AUDIT ROW rather than by re-resolving the role, because
+        # the role can be repointed between an answer being written and this
+        # grading it. The audit row records the model that actually answered.
+        verdict = judge_answer(
+            question, prose, evidence,
+            author_provider=author.get("provider"),
+            author_model=author.get("model"),
+        )
     except Exception as exc:  # noqa: BLE001 - judge_answer already swallows, this is belt and braces
         _count_failure("exception")
         return {"JudgeError": str(exc)[:500]}
@@ -288,29 +307,44 @@ def _judge(question: str, prose: str, investigation_id: int | None) -> dict:
     }
 
 
-def _evidence_for(investigation_id: int | None) -> Any | None:
-    """The evidence the final narration was given, recovered from its audit row."""
+def _evidence_and_author_for(investigation_id: int | None) -> tuple[Any | None, dict]:
+    """The evidence the final narration was given, and WHO wrote it.
+
+    Both come from the same audit row on purpose. The evidence is what the
+    answer must be grounded in; the author is the model that was given that
+    evidence. Taking them from different places would let the judge be compared
+    against a model that never saw this evidence, which is how self-judging goes
+    undetected.
+
+    The author is recorded rather than re-derived from the role. resolve_role
+    answers "what would run now", and roles get repointed - so grading a report
+    written an hour ago against the CURRENT reporting model would compare the
+    judge to a model that did not write it.
+    """
     if not investigation_id:
-        return None
+        return None, {}
     from app.evaluation.graders import evidence_from_prompt
     from app.repositories.base import T, fetch_all
 
     try:
         rows = fetch_all(
-            f"SELECT TOP (12) InputJson FROM {T('AgentAuditLog')} "
+            f"SELECT TOP (12) InputJson, Provider, ModelIdentity FROM {T('AgentAuditLog')} "
             f"WHERE InvestigationId = :id AND InputJson IS NOT NULL "
             f"ORDER BY AuditId DESC",
             {"id": int(investigation_id)},
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("answer_evaluation.evidence_read_failed", error=str(exc)[:200])
-        return None
+        return None, {}
 
     for row in rows:
         evidence = evidence_from_prompt(row.get("InputJson"))
         if evidence is not None:
-            return evidence
-    return None
+            return evidence, {
+                "provider": row.get("Provider"),
+                "model": row.get("ModelIdentity"),
+            }
+    return None, {}
 
 
 # ---------------------------------------------------------------------------

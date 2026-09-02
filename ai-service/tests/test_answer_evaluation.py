@@ -84,7 +84,7 @@ class TestMissingIsNotZero:
         must leave NULLs, not zeros: an average that counts an outage as a bad
         answer reports a quality collapse that never happened."""
         monkeypatch.setattr(
-            answer_evaluation, "_evidence_for", lambda _id: {"clusters": [{"code": "c1"}]}
+            answer_evaluation, "_evidence_and_author_for", lambda _id: ({"clusters": [{"code": "c1"}]}, {})
         )
         monkeypatch.setattr(
             "app.evaluation.judge.judge_answer",
@@ -108,7 +108,7 @@ class TestMissingIsNotZero:
         anyway answers confidently from nothing. Recorded as a failure with a
         reason rather than as a low score."""
         called = []
-        monkeypatch.setattr(answer_evaluation, "_evidence_for", lambda _id: None)
+        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: (None, {}))
         monkeypatch.setattr(
             "app.evaluation.judge.judge_answer", lambda *a, **k: called.append(1)
         )
@@ -161,7 +161,7 @@ class TestMissingIsNotZero:
         eventually probe wrong, and the KeyError lands far from the cause."""
         from app.repositories import answer_evaluation_repository as repo
 
-        monkeypatch.setattr(answer_evaluation, "_evidence_for", lambda _id: {"e": 1})
+        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: ({"e": 1}, {}))
         monkeypatch.setattr(
             "app.evaluation.judge.judge_answer",
             lambda *a, **k: JudgeResult(
@@ -177,7 +177,7 @@ class TestMissingIsNotZero:
 
 class TestSelfJudgingIsDisclosedNotExported:
     def test_self_judged_verdict_is_stored(self, captured, no_audit, monkeypatch):
-        monkeypatch.setattr(answer_evaluation, "_evidence_for", lambda _id: {"e": 1})
+        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: ({"e": 1}, {}))
         monkeypatch.setattr(
             "app.evaluation.judge.judge_answer",
             lambda *a, **k: JudgeResult(
@@ -219,7 +219,7 @@ class TestNothingCanBreakTheCaller:
     def test_a_database_failure_does_not_raise(self, no_audit, monkeypatch):
         """The answer has already been returned to the user. Losing a verdict is
         strictly better than turning a completed investigation into an error."""
-        monkeypatch.setattr(answer_evaluation, "_evidence_for", lambda _id: {"e": 1})
+        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: ({"e": 1}, {}))
         monkeypatch.setattr(
             "app.evaluation.judge.judge_answer",
             lambda *a, **k: JudgeResult(
@@ -286,3 +286,69 @@ class TestRepositoryDecoding:
         assert repo.ungrounded_tokens(row) == []
         row.UngroundedJson = json.dumps(["999", "12.5"])
         assert repo.ungrounded_tokens(row) == ["999", "12.5"]
+
+
+class TestTheJudgeIsToldWhoWroteTheAnswer:
+    """The gap every other test in this file passed straight over.
+
+    judge_answer was called with the evidence alone. Its contract says that
+    means self-judging "cannot be determined; it is then reported as False", so
+    in production every verdict came back independent no matter which model
+    wrote the answer - and the exclusion built on top of it could never fire.
+
+    Sixteen tests passed throughout, because every one of them supplied
+    self_judged directly on a canned JudgeResult instead of letting the real
+    call decide it. A fake that answers the question under test cannot fail.
+    """
+
+    def test_the_author_from_the_audit_row_reaches_the_judge(self, captured, monkeypatch):
+        seen: dict = {}
+
+        def _spy(question, answer, evidence, *, author_provider=None, author_model=None):
+            seen["provider"] = author_provider
+            seen["model"] = author_model
+            return JudgeResult(
+                verdict=_verdict(), judge_provider="deepseek",
+                judge_model="deepseek-v4-flash", self_judged=False,
+            )
+
+        monkeypatch.setattr(
+            "app.repositories.base.fetch_all",
+            lambda *a, **k: [{
+                "AuditId": 9, "ToolName": "FinalRecommendationReport",
+                "InputJson": '<<<with_evidence>>>{"clusters": []}',
+                "OutputJson": "{}",
+                "Provider": "deepseek", "ModelIdentity": "deepseek-v4-flash",
+            }],
+        )
+        monkeypatch.setattr(
+            answer_evaluation, "_evidence_and_author_for",
+            lambda _id: ({"clusters": []}, {"provider": "deepseek", "model": "deepseek-v4-flash"}),
+        )
+        monkeypatch.setattr("app.evaluation.judge.judge_answer", _spy)
+
+        answer_evaluation.evaluate(
+            question="where?",
+            result={"investigation_id": 1, "final_report": {"summary": "Coventry."}},
+        )
+        assert seen == {"provider": "deepseek", "model": "deepseek-v4-flash"}, (
+            "the judge must be told who wrote the answer, or self-judging is "
+            "undetectable and same-model verdicts export as independent"
+        )
+
+    def test_the_author_is_read_not_re_resolved(self, monkeypatch):
+        """A role can be repointed between an answer being written and this
+        grading it. Re-resolving would compare the judge against a model that
+        did not write the report."""
+        monkeypatch.setattr(
+            "app.repositories.base.fetch_all",
+            lambda *a, **k: [{
+                "InputJson": '<<<with_evidence>>>{"a": 1}',
+                "Provider": "groq", "ModelIdentity": "gpt-oss-20b",
+            }],
+        )
+        monkeypatch.setattr(
+            "app.evaluation.graders.evidence_from_prompt", lambda _s: {"a": 1}
+        )
+        _, author = answer_evaluation._evidence_and_author_for(1)
+        assert author == {"provider": "groq", "model": "gpt-oss-20b"}
