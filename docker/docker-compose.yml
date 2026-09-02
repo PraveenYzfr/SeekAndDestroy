@@ -132,6 +132,10 @@ services:
       retries: 5
 
   ai-service:
+    networks:
+      default:
+      hub:
+        aliases: ["ai-service"]
     profiles: ["core"]
     build:
       context: ../ai-service
@@ -221,6 +225,10 @@ services:
   # write vectors into a collection nothing searches, and nothing would error.
   # ---------------------------------------------------------------------------
   ai-indexer:
+    networks:
+      default:
+      hub:
+        aliases: ["ai-indexer"]
     profiles: ["core"]
     build:
       context: ../ai-service
@@ -245,6 +253,10 @@ services:
     stop_grace_period: 60s
 
   api-gateway:
+    networks:
+      default:
+      hub:
+        aliases: ["api-gateway"]
     profiles: ["core"]
     build:
       context: ../api-gateway
@@ -276,6 +288,10 @@ services:
       - "host.docker.internal:host-gateway"
 
   ui:
+    networks:
+      default:
+      hub:
+        aliases: ["ui"]
     profiles: ["core"]
     build:
       context: ../ui
@@ -319,6 +335,41 @@ services:
       - grafana_data:/var/lib/grafana
     depends_on:
       - prometheus
+
+# =============================================================================
+# THE hub NETWORK - WHY THIS BLOCK EXISTS
+# =============================================================================
+# This file describes a self-contained stack: its own sqlserver, qdrant and
+# redis. Production does not run that stack. It runs THESE app containers
+# against the shared hub-* infrastructure on an external network called `hub`,
+# and the compose-defined databases are unused duplicates.
+#
+# That drift was being papered over by hand after every deploy, and each of the
+# three failures below was the same missing declaration:
+#
+#   the public URL 502s          cloudflared dials http://ui:80. A recreated
+#                                container is not on hub and has no `ui` alias,
+#                                so the tunnel resolves nothing.
+#   chat answers came back empty ai-service could not resolve `qdrant`, and
+#                                get_vector_store FELL BACK to an in-memory
+#                                store - an EMPTY index. 96,937 embedded
+#                                documents were unreachable and every retrieval
+#                                returned nothing, silently, as "no results".
+#   a deploy took the stack down `compose up ai-service` started the duplicate
+#                                sqlserver through depends_on. It has no SA
+#                                password, failed the password policy, and took
+#                                its dependents with it.
+#
+# Declaring the attachment here makes it survive a rebuild. The manual
+# `docker network connect --alias` after every deploy is no longer load-bearing,
+# and neither is remembering to run it.
+#
+# `external: true` is deliberate: hub is owned by the infra stack in ~/infra and
+# must not be created, modified or removed by this file.
+networks:
+  default:
+  hub:
+    external: true
 
 volumes:
   mssql_data:

@@ -96,6 +96,17 @@ echo "==> 6. re-apply grants - the reset dropped all of them"
 ( cd "$HOME/infra" && sudo docker compose up db-provision )
 
 echo "==> 7. recreate the vector collection"
+# GUARDED. This step is correct ONLY when the seed above replaced the corpus:
+# vectors are keyed to row ids, so an old index over a new estate mixes two
+# estates in one collection. It is catastrophic in every other case.
+#
+# Running this script for a CODE deploy drops a complete, current index and
+# forces a two-hour, billed re-embed. That nearly happened tonight at 92%
+# through a 96,936-document run, and what stopped it was a teammate reading
+# the script - not the script. SKIP_REINDEX=1 makes the safe case expressible.
+if [ "${SKIP_REINDEX:-0}" = "1" ]; then
+    echo "    SKIP_REINDEX=1 - leaving the existing collection alone"
+else
 COLL=$(run -d SeekandDestroy -h -1 -W -Q \
   "SET NOCOUNT ON; SELECT TOP 1 CollectionName FROM sad.IndexRun WHERE CollectionName IS NOT NULL ORDER BY RunId DESC" \
   | tr -d '[:space:]')
@@ -104,10 +115,28 @@ if [ -n "${COLL:-}" ]; then
         -s -X DELETE "http://hub-qdrant:6333/collections/$COLL" >/dev/null
     echo "    dropped $COLL"
 fi
+fi
 
 echo "==> 8. rebuild and restart the services whose code changed"
-( cd "$REPO/docker" && sudo docker compose build ai-service ai-indexer api-gateway \
-  && sudo docker compose up -d ai-service ai-indexer api-gateway )
+# ui IS IN THIS LIST. It was not, and nothing said so - every UI change shipped
+# tonight went out by luck or not at all. nginx.conf and the built bundle are
+# baked in at image build time, so a restart ships nothing.
+#
+# --no-deps IS LOAD-BEARING. Production runs THESE containers against the shared
+# hub-* infrastructure; the sqlserver/qdrant/redis defined in this compose file
+# are unused duplicates. Without --no-deps, `up ai-service` follows depends_on,
+# starts the duplicate sqlserver, which has no SA password, fails the password
+# policy and takes its dependents down with it. That is not hypothetical - it
+# took production down tonight.
+#
+# nginx -t runs against the NEW image BEFORE anything restarts. A config that
+# fails to parse takes the whole front end down. The compose network is needed
+# for the test: proxy_pass names api-gateway, which does not resolve on a bare
+# `docker run`.
+( cd "$REPO/docker" \
+  && sudo docker compose build ai-service ai-indexer api-gateway ui \
+  && sudo docker run --rm --network hub docker-ui:latest nginx -t \
+  && sudo docker compose up -d --no-deps ai-service ai-indexer api-gateway ui )
 
 echo "==> 9. VERIFY BY QUERY - an exit code is not evidence"
 run -d SeekandDestroy -h -1 -W -Q "SET NOCOUNT ON;
