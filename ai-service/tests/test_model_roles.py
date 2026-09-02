@@ -86,7 +86,15 @@ class TestResolution:
         repo.set_override("narration", "mock", "seek-and-destroy-mock", "E1001")
         by_role = {r["role"]: r for r in resolve_all_roles()}
         assert by_role["narration"]["source"] == "override"
-        assert all(by_role[r.name]["source"] == "config" for r in roles.ROLES if r.name != "narration")
+        # Asserts no OTHER role became an OVERRIDE - not that they are all
+        # "config". They are not: the judge resolves to judge_default so it is
+        # never the author of what it grades. Pinning the literal string made
+        # this test fail on a new resolution layer that had not touched
+        # narration at all, which is the opposite of what it exists to check.
+        assert all(
+            by_role[r.name]["source"] != "override"
+            for r in roles.ROLES if r.name != "narration"
+        )
 
     def test_reset_returns_the_role_to_config(self):
         repo.set_override("reporting", "mock", "seek-and-destroy-mock", "E1001")
@@ -176,3 +184,60 @@ class TestAdminGate:
         others = [e for e in employee_repository.list_active(limit=50) if e.EmployeeNumber != "E1001"]
         assert others, "seed data has only one employee - cannot verify the default"
         assert all(e.IsAdmin is False for e in others)
+
+
+class TestTheJudgeIsIndependentByDefault:
+    """The judge graded answers written by its own model, so every verdict it
+    produced was self-judged, excluded from every headline score, and worth
+    nothing. It ran on every answer and emitted zero usable output.
+
+    Not a corner case - it was the default. Every role resolves to
+    SAD_LLM__PROVIDER unless something says otherwise.
+    """
+
+    def test_the_judge_does_not_share_a_model_with_the_authors(self):
+        judge = resolve_role("judge")
+        authors = [
+            r for r in resolve_all_roles()
+            if r["role"] != "judge"
+            and (r["provider"], r["model"]) == (judge["provider"], judge["model"])
+        ]
+        assert authors == [], (
+            "the judge shares a model with " + ", ".join(a["role"] for a in authors)
+            + " - every verdict on those roles' answers is self-judged and discarded"
+        )
+
+    def test_the_judge_default_says_which_layer_decided(self):
+        assert resolve_role("judge")["source"] == "judge_default"
+
+    def test_the_admin_screen_still_outranks_it(self):
+        """An operator who deliberately points the judge somewhere has made a
+        choice, and a default must not quietly undo it."""
+        repo.set_override("judge", "mock", "seek-and-destroy-mock", "E1001")
+        resolved = resolve_role("judge")
+        assert resolved["source"] == "override"
+        assert resolved["provider"] == "mock"
+
+    def test_the_judges_fallback_is_independent_too(self):
+        """A fallback landing back on the primary model would restore exactly
+        the self-judging this prevents - and only when the judge's own provider
+        is down, which is the moment nobody checks where verdicts came from."""
+        assert resolve_role("judge.fallback")["source"] == "judge_default"
+
+    def test_no_other_role_is_affected(self):
+        for name in ("narration", "reporting", "extraction", "grounded_qa", "summarization"):
+            assert resolve_role(name)["source"] != "judge_default"
+
+    def test_a_provider_with_no_credential_falls_through_rather_than_breaking(
+        self, monkeypatch
+    ):
+        """Grading must never be able to break a delivered answer. A judge
+        pointed at a provider with no key would raise inside the grading path,
+        so an unusable default degrades to the config answer with a warning."""
+        from app.config.settings import get_settings
+
+        settings = get_settings().llm
+        monkeypatch.setattr(settings, "judge_provider", "anthropic", raising=False)
+        monkeypatch.setattr(settings, "judge_model", "claude-x", raising=False)
+        monkeypatch.setattr(type(settings), "key_for", lambda self, p: "", raising=False)
+        assert resolve_role("judge")["source"] != "judge_default"

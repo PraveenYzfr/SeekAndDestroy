@@ -251,6 +251,35 @@ class LlmSettings(_Base):
     #: deliberately, so recovery does not require finding who set what.
     force_single: str = ""
 
+    # -- The judge, kept independent of the authors ------------------------
+    #: The judge grades answers written by the other roles. If it runs on the
+    #: same model as the role that WROTE an answer, its verdict is self-judged:
+    #: stored for disclosure, excluded from every headline score, and therefore
+    #: worth nothing.
+    #:
+    #: That is not a corner case, it is the default. Every role resolves to
+    #: SAD_LLM__PROVIDER unless something says otherwise, so out of the box the
+    #: judge was always the author and every verdict it ever produced was
+    #: discarded. The feature ran, cost a call per answer, and emitted nothing.
+    #:
+    #: So the judge gets its own default, resolved ABOVE the tier and base config
+    #: and BELOW the admin screen - see llm_factory.resolve_role. Independence is
+    #: the requirement here, not capability: the judge needs to be a DIFFERENT
+    #: model, not a better one, and a cheap fast one is ideal because it runs off
+    #: the request path.
+    #:
+    #: Blank disables the default and lets the judge fall through to the tier or
+    #: base config, which is the old self-judging behaviour - available
+    #: deliberately, for anyone who wants one provider for everything.
+    #: Verified against the account's own /models listing rather than written
+    #: from memory. The first value here was llama-3.3-70b-versatile, which this
+    #: Groq account does not serve - a real judge call returned 404 and the
+    #: verdict came back as an error, which the platform records as "judge
+    #: unavailable" rather than as anything alarming. A judge configured to a
+    #: model that does not exist fails exactly like a judge nobody configured.
+    judge_provider: str = "groq"
+    judge_model: str = "openai/gpt-oss-20b"
+
     # -- Answer evaluation -------------------------------------------------
     #: Grade every delivered answer and keep the verdict. Off means the platform
     #: still refuses a narration that drifts - that guard is not a setting - but

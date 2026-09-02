@@ -167,6 +167,19 @@ def reset_chat_model_cache() -> None:
 # =============================================================================
 
 
+def _is_judge_role(role_name: str) -> bool:
+    """The judge role, and its fallback.
+
+    Both, because a fallback that lands back on the primary model would restore
+    exactly the self-judging this exists to prevent - and it would do it only
+    when the judge's own provider was down, which is the moment nobody is
+    looking at where verdicts came from.
+    """
+    from app.agents.roles import primary_role_name
+
+    return primary_role_name(role_name) == "judge"
+
+
 def resolve_role(role_name: str, overrides: dict | None = None) -> dict:
     """Which provider and model a role runs on, and which layer decided.
 
@@ -209,7 +222,35 @@ def resolve_role(role_name: str, overrides: dict | None = None) -> dict:
             source="override", updated_by=row.get("UpdatedBy"), updated_at=row.get("UpdatedAt"),
         ).as_dict()
 
-    # 3. Tier slot. Both halves must be set - a provider with no model would
+    # 3. The judge's own default, so it is not the author of what it grades.
+    #
+    #    BELOW the override on purpose: the admin screen still wins, because an
+    #    operator who deliberately points the judge somewhere has made a choice
+    #    and this must not quietly undo it. ABOVE the tier and base config,
+    #    because those are what made every verdict self-judged - the judge
+    #    inherited the same model as every other role and its output was
+    #    discarded, silently, on every request.
+    #
+    #    Credentials are checked here rather than at call time. A judge pointed
+    #    at a provider with no key would raise inside the grading path, and
+    #    grading must never be able to break a delivered answer - so an
+    #    unusable default falls through to the tier/config answer with a warning
+    #    rather than producing a model nobody can call.
+    if _is_judge_role(role_name) and settings.judge_provider and settings.judge_model:
+        if settings.key_for(settings.judge_provider):
+            return tiers.Resolution(
+                role=role_name, tier=tier, provider=settings.judge_provider,
+                model=settings.judge_model, source="judge_default",
+            ).as_dict()
+        logger.warning(
+            "llm_factory.judge_default_unusable",
+            provider=settings.judge_provider,
+            detail="no credential for the configured judge provider; falling back. "
+                   "The judge may now be the author of what it grades, and its "
+                   "verdicts will be excluded as self-judged.",
+        )
+
+    # 4. Tier slot. Both halves must be set - a provider with no model would
     #    silently pair a new provider with the previous provider's model name.
     slot_provider = settings.cheap_provider if tier == tiers.CHEAP else settings.costly_provider
     slot_model = settings.cheap_model if tier == tiers.CHEAP else settings.costly_model
@@ -218,7 +259,7 @@ def resolve_role(role_name: str, overrides: dict | None = None) -> dict:
             role=role_name, tier=tier, provider=slot_provider, model=slot_model, source="tier",
         ).as_dict()
 
-    # 4. Base configuration.
+    # 5. Base configuration.
     return tiers.Resolution(
         role=role_name, tier=tier, provider=settings.provider, model=settings.model, source="config",
     ).as_dict()
