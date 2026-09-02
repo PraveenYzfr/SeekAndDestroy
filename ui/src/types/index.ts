@@ -342,6 +342,20 @@ export interface RunInvestigationResult {
         detail: string;
       }[];
     };
+    /** Present only when this run excluded a data center - an ordinary
+     *  first ask has nothing to report here. See
+     *  app/services/refinement.py::data_center_choice: grouped from this
+     *  run's own eligible candidates, never a fresh query, so it reflects
+     *  exactly what the shortlist above already shows. On this estate a
+     *  Tier-1 workload typically spans two data centers, so
+     *  has_genuine_alternative:false after one exclusion is the common
+     *  case, not a rare one - render that as a plain statement, not an
+     *  empty picker. */
+    data_center_choice?: {
+      excluded_data_centers: string[];
+      available_data_centers: { data_center: string; eligible_count: number }[];
+      has_genuine_alternative: boolean;
+    } | null;
   };
   final_report?: {
     title: string;

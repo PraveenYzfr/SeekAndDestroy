@@ -1005,6 +1005,23 @@ def build_review_payload(state: InfrastructureRecommendationState | dict) -> dic
             state.get("requirement") or {},
             shown=len(top),
         ),
+        # Only present when this run actually excluded something - an
+        # ordinary first ask has nothing to say about "what did we rule
+        # out", and next_steps already stays quiet the same way when the
+        # shortlist speaks for itself. When it IS present: on this estate a
+        # Tier-1 workload typically has two DCs and three eligible clusters
+        # total (verified against production, see 22492b3's deploy notes),
+        # so after one exclusion this is usually a choice of one DC or
+        # none - has_genuine_alternative:false is the common outcome here,
+        # not an edge case, and a caller should say so plainly rather than
+        # render an empty picker.
+        "data_center_choice": (
+            refinement.data_center_choice(
+                state.get("candidate_scores") or [], state.get("exclude_data_centers")
+            )
+            if state.get("exclude_data_centers")
+            else None
+        ),
     }
 
 

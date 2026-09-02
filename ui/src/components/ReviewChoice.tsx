@@ -143,6 +143,44 @@ export default function ReviewChoice({
     <div>
       <p>{eligible.length === 0 && steps ? "Nothing here can take this workload." : payload.message}</p>
 
+      {/* Only present when this run actually excluded a data center - see
+          app/services/refinement.py::data_center_choice. On this estate a
+          Tier-1 workload typically spans two DCs and three eligible
+          clusters total, so after one exclusion "nothing else has room" is
+          the common outcome, not a rare one - stated plainly rather than
+          left to an empty options list to imply. */}
+      {payload.data_center_choice && (
+        <div className="explain-box" style={{ marginBottom: 10 }}>
+          <strong>Data centre choice</strong>
+          <p style={{ fontSize: 13, margin: "6px 0 0" }}>
+            Excluding {payload.data_center_choice.excluded_data_centers.join(", ")}:{" "}
+            {payload.data_center_choice.has_genuine_alternative ? (
+              payload.data_center_choice.available_data_centers.length === 1 ? (
+                <>
+                  only <strong>{payload.data_center_choice.available_data_centers[0].data_center}</strong> still has
+                  eligible capacity ({payload.data_center_choice.available_data_centers[0].eligible_count} cluster
+                  {payload.data_center_choice.available_data_centers[0].eligible_count === 1 ? "" : "s"}).
+                </>
+              ) : (
+                <>these data centres still have eligible capacity:</>
+              )
+            ) : (
+              <>no data centre still has eligible capacity for this workload.</>
+            )}
+          </p>
+          {payload.data_center_choice.has_genuine_alternative &&
+            payload.data_center_choice.available_data_centers.length > 1 && (
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                {payload.data_center_choice.available_data_centers.map((dc) => (
+                  <li key={dc.data_center}>
+                    {dc.data_center} — {dc.eligible_count} eligible cluster{dc.eligible_count === 1 ? "" : "s"}
+                  </li>
+                ))}
+              </ul>
+            )}
+        </div>
+      )}
+
       {/* The next move, when there is one worth offering. This is a search: with
           a usable shortlist `sufficient` is true and none of this renders - the
           reader picks one and leaves. When it is not, a choice beats an
