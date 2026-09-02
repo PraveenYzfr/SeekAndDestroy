@@ -22,6 +22,15 @@ public interface IAiServiceClient
     /// unmodified in both directions.</summary>
     Task<JsonNode?> AskInsightAsync(InsightAskRequestDto request, CancellationToken ct);
 
+    /// <summary>Model administration - which model serves which role, and
+    /// what each provider currently offers. Pass-through in both directions:
+    /// the AI service owns the role list and decides whether the caller is an
+    /// administrator, by re-reading IsAdmin from the database.</summary>
+    Task<JsonNode?> GetModelRolesAsync(CancellationToken ct);
+    Task<JsonNode?> GetModelProvidersAsync(bool refresh, CancellationToken ct);
+    Task<JsonNode?> SetModelRoleAsync(string roleName, ModelRoleAssignmentDto request, CancellationToken ct);
+    Task<JsonNode?> ClearModelRoleAsync(string roleName, CancellationToken ct);
+
     Task<JsonNode?> CreateInvestigationAsync(CreateInvestigationRequestDto request, CancellationToken ct);
     Task<JsonNode?> GetInvestigationAsync(int investigationId, CancellationToken ct);
     Task<JsonNode?> ResumeInvestigationAsync(int investigationId, ResumeInvestigationRequestDto request, CancellationToken ct);

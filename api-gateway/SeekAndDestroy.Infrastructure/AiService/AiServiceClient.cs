@@ -68,6 +68,28 @@ public sealed class AiServiceClient(HttpClient httpClient, IHttpContextAccessor 
         return string.IsNullOrWhiteSpace(text) ? null : JsonNode.Parse(text);
     }
 
+    /// <summary>PUT and DELETE exist only for the model-role overrides. Both
+    /// carry the caller's own token and surface the AI service's status
+    /// verbatim, exactly as PostAsync and GetAsync do - a 403 for a non-admin
+    /// must reach the screen as a 403, not as a generic gateway failure.</summary>
+    private async Task<JsonNode?> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(method, path);
+        if (body is not null)
+        {
+            request.Content = JsonContent.Create(body, options: RequestOptions);
+        }
+        request.Headers.Authorization = CallerAuthorizationHeader();
+        using var response = await httpClient.SendAsync(request, ct);
+        var text = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            logger.LogWarning("AI service {Path} returned {Status}: {Body}", path, (int)response.StatusCode, text);
+            throw new AiServiceException((int)response.StatusCode, text);
+        }
+        return string.IsNullOrWhiteSpace(text) ? null : JsonNode.Parse(text);
+    }
+
     public Task<JsonNode?> GetHostingRecommendationsAsync(HostingRecommendationRequestDto request, CancellationToken ct) =>
         PostAsync("/api/hosting/recommendations", request, ct);
 
@@ -88,6 +110,18 @@ public sealed class AiServiceClient(HttpClient httpClient, IHttpContextAccessor 
 
     public Task<JsonNode?> AskInsightAsync(InsightAskRequestDto request, CancellationToken ct) =>
         PostAsync("/api/insights/ask", request, ct);
+
+    public Task<JsonNode?> GetModelRolesAsync(CancellationToken ct) =>
+        GetAsync("/api/admin/model-roles", ct);
+
+    public Task<JsonNode?> GetModelProvidersAsync(bool refresh, CancellationToken ct) =>
+        GetAsync(refresh ? "/api/admin/model-providers?refresh=true" : "/api/admin/model-providers", ct);
+
+    public Task<JsonNode?> SetModelRoleAsync(string roleName, ModelRoleAssignmentDto request, CancellationToken ct) =>
+        SendAsync(HttpMethod.Put, $"/api/admin/model-roles/{Uri.EscapeDataString(roleName)}", request, ct);
+
+    public Task<JsonNode?> ClearModelRoleAsync(string roleName, CancellationToken ct) =>
+        SendAsync(HttpMethod.Delete, $"/api/admin/model-roles/{Uri.EscapeDataString(roleName)}", null, ct);
 
     public Task<JsonNode?> CreateInvestigationAsync(CreateInvestigationRequestDto request, CancellationToken ct) =>
         PostAsync("/api/investigations", request, ct);
