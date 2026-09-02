@@ -199,7 +199,8 @@ def compare(run_id: int, baseline_run_id: int) -> dict:
     }
 
 
-def verdict_for(comparison: dict, *, hard_failures: int) -> tuple[str, str]:
+def verdict_for(comparison: dict, *, hard_failures: int,
+                grader_failures: int = 0, judge_failures: int = 0) -> tuple[str, str]:
     """The status and the reason, decided in one place.
 
     Failed and Regressed are kept distinct on purpose. Failed means a rule that
@@ -210,7 +211,21 @@ def verdict_for(comparison: dict, *, hard_failures: int) -> tuple[str, str]:
     """
     if hard_failures:
         return "Failed", f"{hard_failures} hard check(s) failed"
+    # Deterministic graders, at the thresholds in app.evaluation.thresholds:
+    # number and entity fidelity at 100%, completeness below 85%. A fabricated
+    # figure is a wrong answer, not a degraded one, so it fails a run outright.
+    if grader_failures:
+        return "Failed", f"{grader_failures} case(s) failed a deterministic grader"
+    # Judge failures are counted and REPORTED, never fatal. One model's opinion
+    # of another's work is grounds for a retry, not for stopping a deploy - and
+    # the case it catches (figures correct, answer useless) is one the graders
+    # cannot see at all. See the 2x2 in thresholds.combine.
     if comparison.get("regressed"):
         names = ", ".join(comparison["regressed"][:5])
         return "Regressed", f"{len(comparison['regressed'])} case(s) worse than baseline: {names}"
+    if judge_failures:
+        return "Passed", (
+            f"no hard failures and nothing worse than baseline; "
+            f"{judge_failures} case(s) queued for remediation on judge score"
+        )
     return "Passed", "no hard failures and nothing worse than baseline"

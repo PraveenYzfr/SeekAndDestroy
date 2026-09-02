@@ -208,7 +208,22 @@ class LlmSettings(_Base):
     #:
     #: Both are settable on the Model Settings screen, where "fallback" appears
     #: as a role like any other.
-    fallback_providers: str = "openai"
+    #: Three legs, not one. The chain was deepseek -> openai, and a real
+    #: right-sizing report failed with:
+    #:
+    #:     deepseek returned no content (finish_reason=length, 25582 chars of
+    #:       reasoning)
+    #:     openai 429 Too Many Requests
+    #:     all LLM providers failed: ['deepseek', 'openai']
+    #:
+    #: Two independent failures, and the chain had nothing left. The user got
+    #: "Report narration unavailable" on an investigation whose findings were
+    #: computed correctly - five explanations sat in the response, unnarrated.
+    #:
+    #: A two-leg chain survives ONE provider having a bad moment. Rate limits and
+    #: reasoning overflows are not rare enough for that, and they are independent
+    #: causes, so they co-occur at exactly the rate you would expect.
+    fallback_providers: str = "openai,groq,gemini"
     #: The model the FALLBACK provider runs.
     #:
     #: This exists because it was missing, and its absence made the whole chain
@@ -219,7 +234,36 @@ class LlmSettings(_Base):
     #:
     #: Empty means "use that provider's own default", which raises for the
     #: providers whose ids churn rather than guessing one.
+    #: The model for a fallback leg whose provider is not named in
+    #: fallback_models below. Kept for compatibility with a single-provider
+    #: chain; on a multi-provider chain it is almost always wrong.
     fallback_model: str = "gpt-4o"
+
+    #: Per-provider fallback models, because ONE model name cannot serve a chain
+    #: of different providers.
+    #:
+    #: This was the shape of a bug already fixed once for the primary: every
+    #: chain member was built with settings.model, so an OpenAI backup behind a
+    #: DeepSeek primary asked OpenAI for "deepseek-v4-flash" and 404d - the
+    #: backup guaranteed to fail at the moment it was needed. Widening the chain
+    #: to groq and gemini reintroduces exactly that, because a single
+    #: fallback_model of "gpt-4o" is a 404 on both.
+    #:
+    #: Every value here was checked against the provider's own /models listing
+    #: rather than written from memory. I set the judge to
+    #: llama-3.3-70b-versatile earlier tonight on recall alone; Groq does not
+    #: serve it, and a real call returned 404.
+    #:
+    #: SAD_LLM__FALLBACK_MODELS__GROQ=... overrides one leg.
+    fallback_models: dict[str, str] = {
+        "openai": "gpt-4o",
+        "groq": "openai/gpt-oss-20b",
+        "gemini": "gemini-3.5-flash",
+    }
+
+    def fallback_model_for(self, provider: str) -> str:
+        """The model this leg should request. Never another leg's."""
+        return self.fallback_models.get(provider) or self.fallback_model
     # Spend/abuse control for real providers: max real (non-mock) chat-model calls
     # allowed per UTC calendar day, process-wide (Redis-backed and thus shared
     # across workers when SAD_CACHE__BACKEND=redis; per-process otherwise). 0 (the

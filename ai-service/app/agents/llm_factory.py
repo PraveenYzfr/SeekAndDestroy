@@ -71,7 +71,13 @@ def build_chat_model() -> BaseChatModel:
     # The Model Settings screen wins over configuration, exactly as it does for
     # every other role. Without this the fallback would be VISIBLE on that screen
     # and unchangeable by it, which is worse than not showing it at all.
-    chain = [(name, settings.fallback_model or None) for name in settings.fallback_provider_list]
+    # Each leg gets ITS OWN model. A single fallback_model across a chain of
+    # different providers is the same defect that made the first OpenAI backup
+    # ask for "deepseek-v4-flash": a backup that 404s at the moment it is needed.
+    chain = [
+        (name, settings.fallback_model_for(name) or None)
+        for name in settings.fallback_provider_list
+    ]
 
     members = [(settings.provider, primary)]
     for name, model in chain:
