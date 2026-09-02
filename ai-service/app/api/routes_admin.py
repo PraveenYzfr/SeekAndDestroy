@@ -397,3 +397,85 @@ def get_conversation_evaluation(
         for r in rows
     ]
     return {"conversation_id": conversation_id, "graders": graders}
+
+
+@router.get("/api/admin/conversations/{conversation_id}")
+def get_conversation_detail(
+    conversation_id: str, current: AuthenticatedEmployee = Depends(require_admin)
+):
+    """One conversation at all three levels, in one payload.
+
+        session   one score per grader for the whole conversation
+        turns     what was asked, what came back, and that exchange's score
+        calls     the individual model calls behind a turn, each with its verdict
+
+    THEY ARE NOT THE SAME NUMBER AND MUST NOT BE DERIVED FROM EACH OTHER. The
+    session figure sums grounded and total across every call; averaging the turn
+    rates instead would let a one-sentence reply weigh as much as a full report.
+    The turn figure does the same over its own calls. Only the call level is a
+    raw measurement - the two above it are aggregates, and each is computed from
+    the counts rather than from the level below's rate.
+
+    WHY THE TURN LEVEL EXISTS AT ALL. A conversation-wide score hides which
+    exchange was the bad one, and that is precisely what someone opening this is
+    looking for. "This conversation scored 0.91" is not actionable; "turn three
+    scored 0.55 and here is the figure it invented" is.
+
+    The assistant text is the one-line summary ConversationTurn stores - history
+    exists to resolve references rather than to re-read reports, and the full
+    report stays on the Investigation row. ``investigation_id`` on a turn is the
+    way through to it, and to that turn's calls.
+    """
+    from app.repositories import call_evaluation_repository as ce
+
+    def _rate(grounded, total):
+        # None, not 0.0, when nothing was measurable. Zero is a score; "there was
+        # nothing to score" is not.
+        return round(grounded / total, 4) if total else None
+
+    session = [
+        {
+            "grader": r["Grader"], "grounded": r["Grounded"], "total": r["Total"],
+            "calls": r["Calls"], "rate": _rate(r["Grounded"], r["Total"]),
+            "mixed_grader_versions": r.get("MinVersion") != r.get("MaxVersion"),
+        }
+        for r in ce.rollup_for_conversation(conversation_id)
+    ]
+
+    per_investigation: dict[int, list[dict]] = {}
+    for r in ce.rollup_by_investigation(conversation_id):
+        per_investigation.setdefault(r["InvestigationId"], []).append({
+            "grader": r["Grader"], "grounded": r["Grounded"], "total": r["Total"],
+            "calls": r["Calls"], "rate": _rate(r["Grounded"], r["Total"]),
+        })
+
+    turns = []
+    pending_question = None
+    for t in ce.turns_for_conversation(conversation_id):
+        if t["Role"] == "User":
+            pending_question = t["Message"]
+            continue
+        # An assistant turn closes the exchange the preceding user turn opened.
+        turns.append({
+            "turn_id": t["TurnId"],
+            "asked": pending_question,
+            "answered": t["Message"],
+            "investigation_id": t.get("InvestigationId"),
+            "at": t.get("CreatedAt"),
+            "scores": per_investigation.get(t.get("InvestigationId"), []),
+        })
+        pending_question = None
+
+    return {
+        "conversation_id": conversation_id,
+        "session": session,
+        "turns": turns,
+        # Said plainly rather than left to be inferred from empty lists. A turn
+        # with no scores may simply not have been graded yet, and silence reads
+        # as "nothing was wrong".
+        "note": (
+            "" if session else
+            "No stored verdicts for this conversation yet. Run an evaluation from "
+            "Model Settings - it grades recorded calls and spends nothing."
+        ),
+    }

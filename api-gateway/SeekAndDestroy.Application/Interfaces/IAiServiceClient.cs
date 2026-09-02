@@ -35,6 +35,13 @@ public interface IAiServiceClient
     /// model and spends nothing.</summary>
     Task<JsonNode?> GetEvaluationAsync(int limit, CancellationToken ct);
 
+    /// <summary>Every model call in one investigation with its stored grade,
+    /// and the per-grader rollup for a whole conversation. Reads recorded
+    /// verdicts; grades nothing on the fly.</summary>
+    Task<JsonNode?> GetInvestigationTranscriptAsync(int investigationId, CancellationToken ct);
+    Task<JsonNode?> GetConversationDetailAsync(string conversationId, CancellationToken ct);
+    Task<JsonNode?> GetConversationEvaluationAsync(string conversationId, CancellationToken ct);
+
     Task<JsonNode?> CreateInvestigationAsync(CreateInvestigationRequestDto request, CancellationToken ct);
     Task<JsonNode?> GetInvestigationAsync(int investigationId, CancellationToken ct);
     Task<JsonNode?> ResumeInvestigationAsync(int investigationId, ResumeInvestigationRequestDto request, CancellationToken ct);

@@ -62,6 +62,29 @@ public sealed class AdminController(IAiServiceClient aiServiceClient) : Controll
     public async Task<IActionResult> GetEvaluation([FromQuery] int limit, CancellationToken ct) =>
         Ok(await aiServiceClient.GetEvaluationAsync(limit <= 0 ? 5000 : limit, ct));
 
+    /// <summary>The full model exchange for one investigation - prompt, output,
+    /// model and latency - with each grader's stored verdict beside it.
+    ///
+    /// Added at the same time as the AI service endpoint rather than after,
+    /// because a route that exists on the service and not on the gateway is
+    /// invisible to every caller that goes through the site. That is exactly how
+    /// Model Settings shipped able to 404 for its whole life.</summary>
+    [HttpGet("investigations/{investigationId:int}/transcript")]
+    public async Task<IActionResult> GetTranscript(int investigationId, CancellationToken ct) =>
+        Ok(await aiServiceClient.GetInvestigationTranscriptAsync(investigationId, ct));
+
+    /// <summary>One conversation at all three levels: the session score, each
+    /// turn's score, and the calls behind a turn. The three are computed from the
+    /// underlying counts rather than from each other - averaging turn rates would
+    /// let a one-line reply weigh as much as a full report.</summary>
+    [HttpGet("conversations/{conversationId}")]
+    public async Task<IActionResult> GetConversationDetail(string conversationId, CancellationToken ct) =>
+        Ok(await aiServiceClient.GetConversationDetailAsync(conversationId, ct));
+
+    [HttpGet("conversations/{conversationId}/evaluation")]
+    public async Task<IActionResult> GetConversationEvaluation(string conversationId, CancellationToken ct) =>
+        Ok(await aiServiceClient.GetConversationEvaluationAsync(conversationId, ct));
+
     [HttpPut("model-roles/{roleName}")]
     public async Task<IActionResult> SetModelRole(string roleName, [FromBody] ModelRoleAssignmentDto request, CancellationToken ct) =>
         Ok(await aiServiceClient.SetModelRoleAsync(roleName, request, ct));

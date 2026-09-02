@@ -149,3 +149,56 @@ def rollup_for_conversation(conversation_id: str) -> list[dict]:
         {"conversation_id": conversation_id},
         max_rows=100,
     )
+
+
+def rollup_by_investigation(conversation_id: str) -> list[dict]:
+    """Per-grader sums for each investigation in a conversation.
+
+    The TURN level. A conversation is a sequence of exchanges and each one got
+    its own answer, so a single conversation-wide figure hides which exchange was
+    the bad one - which is the thing a reader is looking for when they open this
+    at all.
+
+    Grouped by investigation because that is what a turn maps to: one user
+    message, one pipeline run, one answer handed back.
+    """
+    return fetch_all(
+        f"""
+        SELECT  e.InvestigationId,
+                e.Grader,
+                SUM(e.Grounded) AS Grounded,
+                SUM(e.Total)    AS Total,
+                COUNT(*)        AS Calls
+        FROM    {T('CallEvaluation')} e
+        WHERE   e.InvestigationId IN (
+                    SELECT DISTINCT t.InvestigationId
+                    FROM {T('ConversationTurn')} t
+                    WHERE t.ConversationId = :conversation_id
+                      AND t.InvestigationId IS NOT NULL
+                )
+        GROUP BY e.InvestigationId, e.Grader
+        ORDER BY e.InvestigationId, e.Grader
+        """,
+        {"conversation_id": conversation_id},
+        max_rows=1000,
+    )
+
+
+def turns_for_conversation(conversation_id: str) -> list[dict]:
+    """The exchange itself: what was asked, what came back, and which run it was.
+
+    ConversationTurn stores a one-line assistant summary rather than the full
+    report - history exists to resolve references, not to re-read reports, and
+    the report stays on the Investigation row. So this returns the summary and
+    the investigation id, and a caller wanting the full text follows the latter.
+    """
+    return fetch_all(
+        f"""
+        SELECT  t.TurnId, t.Role, t.Message, t.InvestigationId, t.CreatedAt
+        FROM    {T('ConversationTurn')} t
+        WHERE   t.ConversationId = :conversation_id
+        ORDER BY t.TurnId
+        """,
+        {"conversation_id": conversation_id},
+        max_rows=500,
+    )
