@@ -101,6 +101,37 @@ _CONTINUATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: "GIVE ME FROM A DIFFERENT DC" - THE SAME REQUEST WITH ONE CONSTRAINT CHANGED.
+#:
+#: This is what an engineer says after rejecting a shortlist, and until now
+#: nothing here matched it. It names no application, quotes no cluster code,
+#: contains no referential pronoun, does not open with "and"/"what about", and
+#: is not a question - so looks_like_follow_up returned None, the message became
+#: a brand-new investigation, and "different data centre" went to the vector
+#: index as a search phrase.
+#:
+#: What came back was three incidents that happened to mention a dependency in
+#: another data centre, narrated as a report. Every fact in it was true and the
+#: whole answer was worthless: the engineer asked for somewhere else to put a
+#: workload and got an incident history for upstream timeouts.
+#:
+#: Asking for an ALTERNATIVE is the signal, and it only means anything against a
+#: previous result - "another" and "different" are comparatives with nothing to
+#: compare to on a first message, which is why this is a follow-up pattern and
+#: not a classifier keyword.
+_RESCOPE_RE = re.compile(
+    r"\b(?:different|another|other|alternative|elsewhere|somewhere\s+else|else)\b",
+    re.IGNORECASE,
+)
+
+#: Which dimension is being re-scoped, when it is a location. Only used to
+#: decide what to EXCLUDE from the re-run - a re-scope that names no dimension
+#: still re-runs the placement, it just excludes nothing.
+_LOCATION_WORD_RE = re.compile(
+    r"\b(?:dc|dcs|data\s*cent(?:er|re)s?|site|sites|region|regions|location|locations|campus)\b",
+    re.IGNORECASE,
+)
+
 #: A bare prepositional fragment - "in staging?", "with 128 GB RAM". Only a
 #: continuation when it is the *whole* message: "in production, which clusters
 #: are underutilized?" is a complete question that happens to start with a
@@ -108,6 +139,13 @@ _CONTINUATION_RE = re.compile(
 #: question into a placement request for an application nobody mentioned.
 _FRAGMENT_RE = re.compile(r"^\s*(?:in|with|without|for|on|at|under|using)\b", re.IGNORECASE)
 _FRAGMENT_MAX_WORDS = 5
+
+#: "what other DCs?" is a re-scope; "which clusters are underutilized in
+#: another region?" is a question that happens to contain "another". Six
+#: words is the line, for the same reason _FRAGMENT_MAX_WORDS exists: a
+#: follow-up that leans on context is short, because the context is doing
+#: the work the words would otherwise have to do.
+_RESCOPE_QUESTION_MAX_WORDS = 6
 
 
 @dataclass(frozen=True)
@@ -217,6 +255,33 @@ def looks_like_follow_up(query: str) -> Optional[str]:
         fragment = bool(_FRAGMENT_RE.match(text)) and len(text.split()) <= _FRAGMENT_MAX_WORDS
         if fragment or _CONTINUATION_RE.search(text):
             return INHERIT_SUBJECT
+
+        # ASKING FOR AN ALTERNATIVE, IN EITHER GRAMMAR.
+        #
+        #     "give me from a different DC"   an instruction
+        #     "what other options?"           a question
+        #     "what other DCs?"               a question
+        #
+        # All three mean the same thing and all three used to fall through to a
+        # fresh investigation. The instruction form became a vector search and
+        # answered with incident history; the question forms did not even get
+        # that far - they reached the scope guard and were told "I answer
+        # infrastructure questions only", which is the worst of the three,
+        # because asking for other data centres IS an infrastructure question
+        # and the platform had the answer sitting in the previous turn.
+        #
+        # The question form needs a length bound that the instruction form does
+        # not. "which clusters are underutilized in another region?" contains
+        # "another" and is nonetheless a complete, self-contained query about
+        # the estate; carrying a subject into it would turn a right-sizing
+        # question into a placement re-run for an application nobody named.
+        # A re-scope question is short and has no clause of its own, so the
+        # same word bound _FRAGMENT_RE already relies on separates them.
+        if _RESCOPE_RE.search(text):
+            if not _QUESTION_START_RE.search(text):
+                return INHERIT_SUBJECT
+            if len(text.split()) <= _RESCOPE_QUESTION_MAX_WORDS:
+                return INHERIT_SUBJECT
 
     if referential:
         return ABOUT_PREVIOUS

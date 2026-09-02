@@ -311,18 +311,42 @@ def load_application_requirements(state: InfrastructureRecommendationState) -> d
                     availability_tier=extracted.availability_tier,
                     data_classification=extracted.data_classification,
                 )
+            # A dimension the engineer never mentioned comes back as null, and
+            # null is resolved HERE rather than being forbidden in the contract.
+            # The regex path has always defaulted-and-declared; this one used to
+            # reject the model's honest null instead, pay for a repair retry, and
+            # fall through to regex - which then applied these very same defaults.
+            # Same numbers, two wasted model calls and 68 seconds later.
+            stated = {
+                "cpu_cores": extracted.cpu_cores,
+                "memory_gb": extracted.memory_gb,
+                "storage_gb": extracted.storage_gb,
+            }
+            assumed = [name for name, value in stated.items() if value is None]
+            resolved = {
+                name: (value if value is not None else _CAPACITY_DEFAULTS[name])
+                for name, value in stated.items()
+            }
+            if assumed:
+                logger.info("graph.capacity_extraction_defaulted", fields=assumed, method="llm")
+
             req = HostingRequirement(
                 environment=environment, platform=platform, os_requirement="Any",
-                cpu_cores=extracted.cpu_cores, memory_gb=extracted.memory_gb, storage_gb=extracted.storage_gb,
-                growth_percent=extracted.expected_growth_percent, availability_tier=tier,
+                cpu_cores=resolved["cpu_cores"], memory_gb=resolved["memory_gb"],
+                storage_gb=resolved["storage_gb"],
+                growth_percent=extracted.expected_growth_percent or 0.0, availability_tier=tier,
                 data_classification=classification, preferred_location=extracted.preferred_location,
                 criticality="Medium",
             )
             return {
                 "capacity_requirements": {
-                    "cpu_cores": extracted.cpu_cores, "memory_gb": extracted.memory_gb,
-                    "storage_gb": extracted.storage_gb, "extraction_method": "llm",
+                    **resolved,
+                    "extraction_method": "llm",
                     "coerced_fields": coerced,
+                    # Same key the regex path emits, for the same reason: a
+                    # reviewer must be able to tell a figure the engineer gave
+                    # from one the platform supplied on their behalf.
+                    "assumed_defaults": assumed,
                 },
                 "requirement": to_jsonable(req),
             }

@@ -83,3 +83,70 @@ def test_capacity_extraction_falls_back_to_regex_on_llm_failure(monkeypatch):
     result = nodes.load_application_requirements(state)
     assert result["capacity_requirements"]["extraction_method"] == "regex"
     assert result["capacity_requirements"]["cpu_cores"] == 4.0
+
+
+# ---------------------------------------------------------------------------
+# The contract used to reject the model's correct answer
+# ---------------------------------------------------------------------------
+# Production, nine calls, 100% failure, 68s average. The payload below is the
+# real one, copied verbatim from sad.AgentAuditLog for the query Praveen was
+# actually running - "Where can I host a Tier-1 production Java app needing 32
+# cores and 128 GB?". It states no storage and no data classification, because
+# the question does not mention either, so the model returned null for both.
+#
+# CapacityRequirement declared them non-nullable, so pydantic rejected it. The
+# repair retry in app.agents.structured then asked the model to fix JSON that
+# was never malformed; it returned the same object, was rejected again, and the
+# whole extraction fell through to regex - which supplied _CAPACITY_DEFAULTS,
+# the exact numbers the LLM path would have used. Two model calls, a minute of
+# latency, and an identical result.
+
+
+def test_unstated_dimensions_parse_as_null_rather_than_failing():
+    """The real production completion must parse. This is the regression."""
+    payload = (
+        '{"environment": "production", "cpu_cores": 32, "memory_gb": 128, '
+        '"storage_gb": null, "platform": "Java", "availability_tier": "Tier-1", '
+        '"data_classification": null, "preferred_location": null, '
+        '"expected_growth_percent": 0.0, "required_by_days": null}'
+    )
+    parsed = CapacityRequirement.model_validate_json(payload)
+    assert parsed.cpu_cores == 32
+    assert parsed.memory_gb == 128
+    # Null survives as null. It is NOT defaulted here - the contract's job is to
+    # carry "not stated" faithfully, and inventing 500 GB at parse time would
+    # make an assumed figure indistinguishable from a stated one.
+    assert parsed.storage_gb is None
+    assert parsed.data_classification is None
+
+
+def test_defaults_for_unstated_dimensions_are_declared_not_hidden(monkeypatch):
+    """Resolution happens in the graph node, and says what it assumed."""
+    monkeypatch.setattr(nodes, "get_chat_model_for_role", lambda role: _FakeRealChatModel())
+    extracted = CapacityRequirement(
+        environment="production", cpu_cores=32.0, memory_gb=128.0, storage_gb=None,
+        platform="Java", availability_tier="Tier-1", data_classification=None,
+    )
+    monkeypatch.setattr(nodes, "extract_capacity_requirement", lambda llm, query: extracted)
+    state = {
+        "user_query": "Where can I host a Tier-1 production Java app needing 32 cores and 128 GB?",
+        "investigation_type": InvestigationType.CAPACITY,
+    }
+    result = nodes.load_application_requirements(state)
+    caps = result["capacity_requirements"]
+
+    # The extraction now SUCCEEDS - this is the whole point. Previously this
+    # query produced extraction_method "regex" after two failed model calls.
+    assert caps["extraction_method"] == "llm"
+    assert caps["cpu_cores"] == 32.0
+    assert caps["memory_gb"] == 128.0
+
+    # Storage was never stated, so it is defaulted AND declared.
+    assert caps["storage_gb"] == nodes._CAPACITY_DEFAULTS["storage_gb"]
+    assert caps["assumed_defaults"] == ["storage_gb"]
+    assert "cpu_cores" not in caps["assumed_defaults"]
+
+    # A null classification lands on the documented fallback rather than
+    # exploding - _coerce_enum already accepted None, which is why the contract
+    # was the only thing standing in the way.
+    assert result["requirement"]["data_classification"] == "Internal"

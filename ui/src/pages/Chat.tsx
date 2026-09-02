@@ -224,7 +224,7 @@ export default function Chat() {
 
   return (
     <div className="chat-page">
-      <h2>Chat</h2>
+      <h2>Migration Analysis</h2>
       <p className="subtitle">
         Ask about hosting, capacity, right-sizing, forecasts or trade-offs in plain language.
       </p>

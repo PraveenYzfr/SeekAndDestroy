@@ -15,7 +15,7 @@ import RecommendationApproval from "@/pages/RecommendationApproval";
 import ModelSettings from "@/pages/ModelSettings";
 
 const NAV = [
-  { to: "/", label: "Chat", end: true },
+  { to: "/", label: "Migration Analysis", end: true },
   { to: "/insights", label: "CMDB Insighter" },
   { to: "/dashboard", label: "Dashboard" },
   { to: "/hosting", label: "Hosting Recommendation" },

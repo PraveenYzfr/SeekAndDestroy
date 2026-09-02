@@ -31,17 +31,50 @@ class ApplicationHostingRequirement(BaseModel):
 
 
 class CapacityRequirement(BaseModel):
-    """A raw Scenario-B "new space" requirement extracted from free text."""
+    """A raw Scenario-B "new space" requirement extracted from free text.
 
-    environment: str
-    cpu_cores: float
-    memory_gb: float
-    storage_gb: float
-    platform: str
-    availability_tier: str
-    data_classification: str
+    EVERY DIMENSION IS OPTIONAL, BECAUSE THE ENGINEER IS NOT OBLIGED TO STATE IT.
+
+    These fields were required and non-nullable, which sounds like strictness and
+    behaved as the opposite. "Where can I host a Tier-1 production Java app
+    needing 32 cores and 128 GB?" says nothing about storage or data
+    classification, so the model correctly returned null for both - and pydantic
+    rejected its own perfectly good answer:
+
+        storage_gb          Input should be a valid number, input_value=None
+        data_classification Input should be a valid string, input_value=None
+
+    The rejection then triggered the repair retry in app.agents.structured, which
+    asked the model to fix JSON that was never malformed. It returned the same
+    correct object, was rejected again, and the whole extraction fell through to
+    regex. Measured in production: nine calls, 100% failure, 68s average and 101s
+    worst - two full model calls burned per investigation to arrive at an answer
+    the FIRST one already had.
+
+    A contract that forbids null does not make the value known. It only moves the
+    invention somewhere less visible: either the model fabricates a number to
+    satisfy the schema - which is far worse than null, because a fabricated 500 GB
+    is indistinguishable from a stated one - or extraction fails and the platform
+    defaults it anyway, having paid twice for nothing.
+
+    So null is now sayable. app.graph.nodes resolves each missing dimension
+    against _CAPACITY_DEFAULTS and records it in ``assumed_defaults``, exactly as
+    the regex path has always done, which keeps the guarantee that matters: a
+    reviewer approving 8 cores can see that nobody asked for 8.
+    """
+
+    environment: Optional[str] = None
+    cpu_cores: Optional[float] = None
+    memory_gb: Optional[float] = None
+    storage_gb: Optional[float] = None
+    platform: Optional[str] = None
+    availability_tier: Optional[str] = None
+    data_classification: Optional[str] = None
     preferred_location: Optional[str] = None
-    expected_growth_percent: float = 0.0
+    # Nullable for the same reason as the rest: a model asked for growth
+    # nobody mentioned should be able to say "not stated" rather than pick
+    # 0.0 and have it read as a deliberate flat-growth assumption.
+    expected_growth_percent: Optional[float] = None
     required_by_days: Optional[int] = None
 
 
