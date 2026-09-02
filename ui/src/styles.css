@@ -141,6 +141,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .error-box { background: rgba(239,90,111,0.1); border: 1px solid var(--red); color: var(--red); padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
 
+/* Two notices that are not errors.
+   info-box states a fact the reader needs before comparing rows - which data
+   centres a shortlist spans. warn-box is for a fact that should change the
+   decision without being a failure: every recommendation in one building is a
+   correct result and a risk, and error-box red would have overstated it into
+   looking like something went wrong. */
+.info-box { background: rgba(79,140,255,0.08); border: 1px solid rgba(79,140,255,0.35); color: var(--text); padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
+.warn-box { background: rgba(242,184,75,0.1); border: 1px solid var(--amber); color: var(--amber); padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
+
 .explain-box { background: #101625; border-left: 3px solid var(--accent); padding: 10px 12px; margin-top: 8px; font-size: 13px; }
 
 .rule-fail { color: var(--red); font-size: 12px; }

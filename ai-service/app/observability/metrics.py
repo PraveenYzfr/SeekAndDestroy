@@ -118,3 +118,26 @@ judge_score = Histogram(
 judge_failures_total = Counter(
     "sad_judge_failures_total", "Judge invocations that failed, by reason", ["reason"]
 )
+
+
+#: Verdicts that were PRODUCED and deliberately not exported.
+#:
+#: This exists because the exclusion rule silently ate every score. Every role
+#: defaults to the same model, so the judge is the author, every verdict is
+#: self-judged, and judge_score is never observed at all - leaving the dashboard
+#: panels empty and indistinguishable from a judge that was never wired up.
+#:
+#: Excluding a self-graded score from the headline is right: a model grades its
+#: own work high, and averaging that with independent verdicts produces a line
+#: nobody can read. Excluding it INVISIBLY is not - "no data" and "47 verdicts,
+#: all disqualified" call for completely different actions, and the panel showed
+#: the same thing for both.
+#:
+#: So the exclusion is now counted. An empty judge panel beside a rising
+#: exclusion count says exactly what is wrong and what to do about it: point the
+#: judge role at a different provider.
+judge_excluded_total = Counter(
+    "sad_judge_excluded_total",
+    "Judge verdicts produced but excluded from headline scores, by reason",
+    ["reason"],
+)

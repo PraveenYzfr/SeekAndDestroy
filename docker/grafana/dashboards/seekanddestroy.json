@@ -316,7 +316,7 @@
       "id": 26,
       "type": "timeseries",
       "title": "Judge scores by dimension",
-      "description": "The LLM judge, kept separate from the deterministic graders on purpose. Graders are arithmetic; the judge is an opinion. Averaging them gives a 'quality score' that cannot be acted on, because a drop could be a fabricated figure or a model being less chatty and only one of those is an incident. p10 matters more than p50 - it is the bad tail.",
+      "description": "The LLM judge, kept separate from the deterministic graders on purpose. Graders are arithmetic; the judge is an opinion. Averaging them gives a 'quality score' that cannot be acted on, because a drop could be a fabricated figure or a model being less chatty and only one of those is an incident. p10 matters more than p50 - it is the bad tail.\n\nEMPTY? Check 'Judge verdicts excluded' to the right. Every role defaults to the same model, which makes the judge the author of what it is grading - those verdicts are stored and disqualified, never averaged in. Point the judge role at a different provider on Model Settings and this fills in.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -399,6 +399,68 @@
           "expr": "sum by (provider) (rate(sad_llm_fallback_total[15m]))",
           "legendFormat": "{{provider}}",
           "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "type": "timeseries",
+      "title": "Judge verdicts excluded",
+      "description": "Verdicts the judge PRODUCED and that were deliberately not scored. Rising here with an empty scores panel to the left is not a broken judge - it is a judge grading its own output, which is disqualified by design because a model scores its own work high.\n\nThis panel exists because the exclusion used to be silent, and 'no data' looked identical to 'every verdict disqualified'. Those need opposite responses.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 66
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (reason) (rate(sad_judge_excluded_total[15m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "stat",
+      "title": "Judge coverage",
+      "description": "Share of produced verdicts that actually counted. 0% with traffic means the judge is not independent of the authors and no quality opinion is reaching the dashboard at all.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 66
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(rate(sad_judge_score_count[1h])) / clamp_min(sum(rate(sad_judge_score_count[1h])) + 3 * sum(rate(sad_judge_excluded_total[1h])), 0.0001)",
+          "legendFormat": "independent"
         }
       ]
     }

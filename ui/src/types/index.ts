@@ -121,6 +121,12 @@ export interface NodeCandidateScore {
 export interface CandidateScore {
   cluster_id: number;
   cluster_code: string;
+  /** Which data centre this cluster sits in. Set on every CandidateScore by
+   *  placement, and until now rendered only on the review screen - so the
+   *  ranked results table compared clusters across eight sites while showing
+   *  nothing about site at all. `atl-03` and `den-03` are different buildings
+   *  and the table said only the names. */
+  data_center: string | null;
   eligibility_status: "Eligible" | "Rejected";
   rule_results: RuleResult[];
   subscores: SubScores | null;

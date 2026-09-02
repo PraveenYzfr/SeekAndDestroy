@@ -338,17 +338,32 @@ def _observe(values: dict) -> None:
             if score is not None:
                 fidelity_score.labels(grader=grader).observe(float(score))
 
+        # A self-judged verdict is stored but not exported: a model grades its
+        # own work high, and averaging that with independent verdicts produces a
+        # line nobody can read.
+        #
+        # It IS counted, though. Excluding silently was a mistake - every role
+        # defaults to the same model, so in a default configuration the judge is
+        # always the author, every verdict is disqualified, and the panels sat
+        # empty looking exactly like a judge that had never been wired up. "No
+        # data" and "47 verdicts, all disqualified" need different responses.
+        self_judged = bool(values.get("JudgeSelfJudged"))
+        scored = False
         for column, dimension in (
             ("JudgeRelevance", "relevance"),
             ("JudgeGroundedness", "groundedness"),
             ("JudgeActionability", "actionability"),
         ):
             score = values.get(column)
-            # A self-judged verdict is not exported. It is stored, because the
-            # disclosure is the point, but averaging it into a dashboard series
-            # alongside independent verdicts produces a line nobody can read.
-            if score is not None and not values.get("JudgeSelfJudged"):
+            if score is None:
+                continue
+            scored = True
+            if not self_judged:
                 judge_score.labels(dimension=dimension).observe(float(score))
+        if scored and self_judged:
+            from app.observability.metrics import judge_excluded_total
+
+            judge_excluded_total.labels(reason="self_judged").inc()
     except Exception:  # noqa: BLE001
         pass
 
