@@ -361,21 +361,49 @@ def excluded_data_centers(query: str, prior: PriorInvestigation) -> list[str]:
     reason never stated and never shown. "what other DCs?" names the dimension,
     so the exclusion is what was asked for.
 
-    Derived from the previous shortlist rather than parsed out of the sentence.
-    The engineer said "a different DC", not which one; the data centres they are
-    moving away from are the ones they were just offered, and those are recorded.
-    Reading them from evidence keeps this on the deterministic side of the trust
-    boundary - no model is asked what the user meant.
+    TWO CASES, IN PRIORITY ORDER - AND THE SECOND ONE USED TO BE WRONG.
 
-    Returns [] when the previous turn had no candidates, which is the honest
-    answer: there is nothing to move away from. [] means no exclusion the whole
-    way down to the SQL, where an empty NOT IN would exclude everything.
+    1. This turn's own text NAMES a data centre this run actually recorded
+       (either eligible or rejected). Exact substring match against the real
+       recorded value, never a guessed shape ("City-DCn") - the rejection-flow
+       button in Chat.tsx always produces text naming the one site the
+       engineer actually objected to ("...not in the Atlanta-DC1 data
+       center."), and that is the PRIMARY way this feature is reached. When a
+       specific site is named, only that site is excluded.
+
+    2. No data centre is named ("give me from a different DC" - Praveen's own
+       original phrasing). The honest fallback is the data centres of what
+       was actually OFFERED - the ELIGIBLE candidates, never the rejected
+       ones too. ``prior.candidate_scores`` is eligible + REJECTED, from
+       app.services.placement.discover_candidate_clusters's full scan of
+       every cluster matching the requirement's environment and platform -
+       for a common combination that can be most of the estate, most of it
+       rejected for reasons (wrong tier, wrong classification, no capacity)
+       that have nothing to do with location. A FIRST VERSION OF THIS
+       FUNCTION USED THE WHOLE POOL, LIVE-VERIFIED BROKEN: excluding
+       "Atlanta-DC1" on a 3-eligible/2-DC shortlist for APP-CRM excluded all
+       eight data centres in the estate and returned zero candidates, every
+       time, for any request - because some rejected cluster from nearly
+       every data centre always turned up in that pool.
+
+    Returns [] when neither case applies - the previous turn had no eligible
+    candidates at all, so there is nothing honest to move away from. []
+    means no exclusion the whole way down to the SQL, where an empty NOT IN
+    would exclude everything.
     """
     if not _LOCATION_WORD_RE.search(query):
         return []
-    return sorted({
-        str(c["data_center"]) for c in prior.candidate_scores if c.get("data_center")
-    })
+    text = query.lower()
+    known = {str(c["data_center"]) for c in prior.candidate_scores if c.get("data_center")}
+    named = {dc for dc in known if dc.lower() in text}
+    if named:
+        return sorted(named)
+    eligible = {
+        str(c["data_center"])
+        for c in prior.candidate_scores
+        if c.get("data_center") and c.get("eligibility_status") == "Eligible"
+    }
+    return sorted(eligible)
 
 
 def carry_subject(query: str, prior: PriorInvestigation) -> Optional[str]:

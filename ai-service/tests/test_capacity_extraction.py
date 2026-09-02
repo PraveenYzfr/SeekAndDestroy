@@ -281,9 +281,54 @@ def test_the_location_gate_matches_a_real_data_centre_name():
     inside "DC1" - no word boundary between C and 1 - so the click meant to
     trigger the whole feature would have excluded nothing, silently."""
     prior = _prior_offering("Denver-DC1", "Atlanta-DC1")
-    assert excluded_data_centers("Show other options, but not in Denver-DC1.", prior) == [
-        "Atlanta-DC1", "Denver-DC1",
-    ]
+    assert excluded_data_centers("Show other options, but not in Denver-DC1.", prior) == ["Denver-DC1"]
+
+
+def test_naming_one_data_centre_excludes_only_that_one():
+    """A reviewer who named ONE site meant that one, not every site they were
+    shown - the live-verified bug this replaces: an earlier version treated
+    any location-flavoured text as license to exclude the WHOLE previous
+    pool (including candidates rejected for reasons that had nothing to do
+    with location), which on a real request excluded all eight data centres
+    in the estate from a single-site objection and returned nothing."""
+    prior = PriorInvestigation(
+        investigation_id=1, investigation_type="Hosting", user_query="find hosting for APP-CRM",
+        application_code="APP-CRM",
+        candidate_scores=[
+            {"cluster_code": "atl-03", "data_center": "Atlanta-DC1", "eligibility_status": "Eligible"},
+            {"cluster_code": "den-03", "data_center": "Denver-DC1", "eligibility_status": "Eligible"},
+            {"cluster_code": "den-p096", "data_center": "Denver-DC1", "eligibility_status": "Eligible"},
+            # The pool a broad environment/platform scan turns up: rejected
+            # for reasons unrelated to location, spanning data centres the
+            # engineer was never offered anything in.
+            {"cluster_code": "phx-01", "data_center": "Phoenix-DC1", "eligibility_status": "Rejected"},
+            {"cluster_code": "cmh-02", "data_center": "Columbus-DC1", "eligibility_status": "Rejected"},
+        ],
+    )
+    assert excluded_data_centers(
+        "Show other options, but not in the Atlanta-DC1 data center.", prior
+    ) == ["Atlanta-DC1"]
+
+
+def test_generic_rescope_with_no_named_dc_falls_back_to_eligible_only_never_the_rejected_pool():
+    """The exact reproduction of the live bug, at the scale that triggered
+    it: "give me from a different DC" with nothing named must exclude the
+    data centres that were actually OFFERED (eligible), never the ones a
+    broad environment/platform scan rejected clusters in for unrelated
+    reasons. A version that used the whole pool here would return every one
+    of the five data centres below and starve the very next request."""
+    prior = PriorInvestigation(
+        investigation_id=1, investigation_type="Hosting", user_query="find hosting for APP-CRM",
+        application_code="APP-CRM",
+        candidate_scores=[
+            {"cluster_code": "atl-03", "data_center": "Atlanta-DC1", "eligibility_status": "Eligible"},
+            {"cluster_code": "den-03", "data_center": "Denver-DC1", "eligibility_status": "Eligible"},
+        ] + [
+            {"cluster_code": f"rej-{i}", "data_center": dc, "eligibility_status": "Rejected"}
+            for i, dc in enumerate(["Phoenix-DC1", "Columbus-DC1", "Dallas-DC1"])
+        ],
+    )
+    assert excluded_data_centers("give me from a different DC", prior) == ["Atlanta-DC1", "Denver-DC1"]
 
 
 def test_plurals_and_synonyms_all_open_the_gate():
