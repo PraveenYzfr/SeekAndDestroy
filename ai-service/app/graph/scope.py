@@ -82,6 +82,7 @@ _VOCABULARY = frozenset(
     host hosting hosted place placed placement provision provisioned deploy deployed
     deployment migrate migrated migration move moved relocate relocated
     cluster clusters node nodes server servers host hosts vm vms hypervisor bare-metal baremetal
+    zone platform resilience
     capacity headroom utilization utilisation utilized utilised overprovisioned underutilized
     underutilised right-size right-sized rightsize rightsizing rightsized
     consolidate consolidated consolidating consolidation reclaim reclaimed
@@ -137,6 +138,33 @@ OUT_OF_SCOPE_REPLY = (
 )
 
 
+def _is_domain_word(token: str) -> bool:
+    """Whole-token membership, tolerant of a plural.
+
+    The vocabulary listed some plurals and not others - `cluster clusters`,
+    `node nodes`, but `dc` with no `dcs`, `site` with no `sites`, `region` with
+    no `regions`. That inconsistency is worse than a short list, because the list
+    LOOKS complete: nobody reads it and thinks "the plurals are missing".
+
+    What it cost: "what other DCs?" contained no recognised domain word, so the
+    scope guard refused it as a question about something other than this estate.
+    Asking which data centres are available is the most infrastructure question
+    there is, and it was answered with "I answer infrastructure questions only".
+
+    Stripping a trailing s (and es) fixes the class rather than the instances,
+    so the next word added to the vocabulary does not need its plural remembered.
+    Safe because this only ever tests membership in a curated set - an
+    over-eager stem cannot admit a word that is not in it. "as" stems to "a",
+    which is in no vocabulary; "hosts" stems to "host", which is the point.
+    """
+    word = token.lower()
+    if word in _VOCABULARY:
+        return True
+    if word.endswith("es") and word[:-2] in _VOCABULARY:
+        return True
+    return word.endswith("s") and word[:-1] in _VOCABULARY
+
+
 def has_estate_signal(query: str) -> bool:
     """True when the query mentions anything this platform knows about.
 
@@ -156,7 +184,7 @@ def has_estate_signal(query: str) -> bool:
     # Whole tokens, not substrings. "actor" contains no domain word, but a
     # substring check would find "app" inside "happening" and "node" inside
     # "anode" - quietly disabling the whole gate in a way no test would notice.
-    return any(token.lower() in _VOCABULARY for token in _TOKEN.findall(text))
+    return any(_is_domain_word(token) for token in _TOKEN.findall(text))
 
 
 def out_of_scope_reply(query: str) -> str | None:

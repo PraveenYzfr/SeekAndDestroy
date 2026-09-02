@@ -138,3 +138,58 @@ class TestMatchingIsNotAccidental:
     def test_case_does_not_matter(self):
         assert scope.has_estate_signal("WHY WAS ATL-03 REJECTED") is True
         assert scope.has_estate_signal("app-analytics") is True
+
+
+# =============================================================================
+# Plurals - the gap that refused "what other DCs?"
+# =============================================================================
+#
+# The vocabulary listed some plurals and not others: `cluster clusters`,
+# `node nodes`, but `dc` with no `dcs` and `site` with no `sites`. That is worse
+# than a short list, because the list looks complete - nobody reads it and
+# thinks "the plurals are missing".
+#
+# Found in production: Praveen rejected a recommendation, asked for another data
+# centre, and was told "I answer infrastructure questions only".
+
+
+class TestPluralsAreNotOutOfScope:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "what other DCs?",
+            "give me from a different DC",
+            "other regions?",
+            "which zones?",
+            "what platforms are available",
+            "other sites",
+            "different racks",
+            "which tiers?",
+        ],
+    )
+    def test_a_plural_estate_word_is_in_scope(self, query):
+        assert scope.has_estate_signal(query), f"{query!r} was refused as off-topic"
+
+    def test_the_singular_still_works(self):
+        assert scope.has_estate_signal("which DC?")
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "who is the best actor in India?",
+            "what is the weather",
+            "tell me a joke",
+            "what is 2+2",
+            "how are the markets today",
+        ],
+    )
+    def test_off_topic_is_still_refused(self, query):
+        """Stemming must not become a way for anything to pass. It only ever
+        tests membership in a curated set, so an over-eager stem cannot admit a
+        word that is not in it."""
+        assert not scope.has_estate_signal(query)
+
+    def test_stemming_does_not_invent_matches(self):
+        """"as" stems to "a", "is" stems to "i" - neither is in any vocabulary.
+        The stem is only ever a lookup, never a guess."""
+        assert not scope.has_estate_signal("as is was")
