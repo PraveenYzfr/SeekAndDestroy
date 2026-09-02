@@ -180,7 +180,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(sad_narration_drift_total{outcome=\"drift\"}[15m])) / clamp_min(sum(rate(sad_narration_drift_total[15m])), 0.0001)",
+          "expr": "(sum(rate(sad_narration_drift_total{outcome=\"drift\"}[15m])) or vector(0))\n  / clamp_min(sum(rate(sad_narration_drift_total[15m])), 0.0001)",
           "legendFormat": "drift rate",
           "refId": "A"
         }
