@@ -485,3 +485,70 @@ export interface EvaluationResult {
   models: EvaluationModel[];
   flagged: { audit_id: number; schema: string; property: string; ungrounded: string[] }[];
 }
+
+/** Answer quality, at the three levels it is measured. None is derived from the
+ *  level below's RATE - each sums grounded and total over its own calls, because
+ *  averaging rates lets a one-line reply weigh as much as a full report. */
+export interface GraderScore {
+  grader: string;
+  grounded: number;
+  total: number;
+  calls?: number;
+  /** null when nothing was measurable. Zero is a score; "nothing to score" is not. */
+  rate: number | null;
+  mixed_grader_versions?: boolean;
+}
+
+export interface ConversationTurnScore {
+  turn_id: number;
+  asked: string | null;
+  answered: string | null;
+  investigation_id: number | null;
+  at: string | null;
+  scores: GraderScore[];
+}
+
+export interface ConversationDetail {
+  conversation_id: string;
+  session: GraderScore[];
+  turns: ConversationTurnScore[];
+  note: string;
+}
+
+export interface ConversationSummary {
+  conversation_id: string;
+  started_at: string | null;
+  last_activity_at: string | null;
+  turns: number;
+  number_fidelity: number | null;
+  figures_checked: number;
+}
+
+export interface TranscriptGrade {
+  grader: string;
+  grounded: number;
+  total: number;
+  rate: number | null;
+  ungrounded: string | null;
+  grader_version: string;
+}
+
+export interface TranscriptCall {
+  audit_id: number;
+  graph_node: string | null;
+  schema: string;
+  model: string | null;
+  provider: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  success: boolean | null;
+  prompt: string | null;
+  output: string | null;
+  grades: TranscriptGrade[];
+}
+
+export interface InvestigationTranscript {
+  investigation_id: number;
+  calls: TranscriptCall[];
+  note: string;
+}

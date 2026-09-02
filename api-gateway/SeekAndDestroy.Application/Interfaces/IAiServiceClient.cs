@@ -40,6 +40,7 @@ public interface IAiServiceClient
     /// verdicts; grades nothing on the fly.</summary>
     Task<JsonNode?> GetInvestigationTranscriptAsync(int investigationId, CancellationToken ct);
     Task<JsonNode?> GetConversationDetailAsync(string conversationId, CancellationToken ct);
+    Task<JsonNode?> ListConversationsAsync(int limit, CancellationToken ct);
     Task<JsonNode?> GetConversationEvaluationAsync(string conversationId, CancellationToken ct);
 
     Task<JsonNode?> CreateInvestigationAsync(CreateInvestigationRequestDto request, CancellationToken ct);

@@ -73,6 +73,12 @@ public sealed class AdminController(IAiServiceClient aiServiceClient) : Controll
     public async Task<IActionResult> GetTranscript(int investigationId, CancellationToken ct) =>
         Ok(await aiServiceClient.GetInvestigationTranscriptAsync(investigationId, ct));
 
+    /// <summary>Conversations to inspect, worst first - the reason to open the
+    /// list is to find a bad answer, not the newest one.</summary>
+    [HttpGet("conversations")]
+    public async Task<IActionResult> ListConversations([FromQuery] int limit, CancellationToken ct) =>
+        Ok(await aiServiceClient.ListConversationsAsync(limit <= 0 ? 50 : limit, ct));
+
     /// <summary>One conversation at all three levels: the session score, each
     /// turn's score, and the calls behind a turn. The three are computed from the
     /// underlying counts rather than from each other - averaging turn rates would

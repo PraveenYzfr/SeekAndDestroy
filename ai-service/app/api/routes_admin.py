@@ -479,3 +479,37 @@ def get_conversation_detail(
             "Model Settings - it grades recorded calls and spends nothing."
         ),
     }
+
+
+@router.get("/api/admin/conversations")
+def list_conversations(limit: int = 50, current: AuthenticatedEmployee = Depends(require_admin)):
+    """Conversations to inspect, WORST FIRST.
+
+    Sorted by number fidelity ascending, not by recency. The reason to open this
+    list is to find a bad answer; ordering by time puts the newest conversation
+    on top whether or not anything is wrong with it, and buries the one worth
+    reading.
+
+    Ungraded conversations sort last. They have no score - which is not the same
+    as scoring zero, and putting them at the top would fill the screen with
+    conversations nobody has measured.
+    """
+    from app.repositories import call_evaluation_repository as ce
+
+    rows = ce.recent_conversations(limit=limit)
+    return {
+        "conversations": [
+            {
+                "conversation_id": r["ConversationId"],
+                "started_at": r.get("StartedAt"),
+                "last_activity_at": r.get("LastActivityAt"),
+                "turns": r.get("Turns"),
+                "number_fidelity": (
+                    round(r["NumberGrounded"] / r["NumberTotal"], 4)
+                    if r.get("NumberTotal") else None
+                ),
+                "figures_checked": r.get("NumberTotal") or 0,
+            }
+            for r in rows
+        ]
+    }

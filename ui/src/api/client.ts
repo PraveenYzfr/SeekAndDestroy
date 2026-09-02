@@ -1,4 +1,11 @@
-import type { EvaluationResult, ModelProvider, ModelRole } from "../types";
+import type {
+  ConversationDetail,
+  ConversationSummary,
+  EvaluationResult,
+  InvestigationTranscript,
+  ModelProvider,
+  ModelRole,
+} from "../types";
 import type {
   CmdbApplication,
   InfrastructureCluster,
@@ -79,6 +86,21 @@ export const api = {
    *  and spends nothing, which is why an admin screen can run it on demand. */
   getEvaluation: (limit = 5000) =>
     request<EvaluationResult>(`/admin/evaluation?limit=${limit}`),
+
+  /** Conversations to inspect, WORST FIRST - the reason to open this list is to
+   *  find a bad answer, not the newest one. */
+  getConversations: (limit = 50) =>
+    request<{ conversations: ConversationSummary[] }>(`/admin/conversations?limit=${limit}`),
+
+  /** One conversation at all three levels: session, turn, and the calls behind
+   *  a turn (via investigation_id). */
+  getConversationDetail: (conversationId: string) =>
+    request<ConversationDetail>(`/admin/conversations/${conversationId}`),
+
+  /** Every model call in one turn - prompt, output, model - with its stored
+   *  grade. Reads recorded verdicts; grades nothing on the fly. */
+  getTranscript: (investigationId: number) =>
+    request<InvestigationTranscript>(`/admin/investigations/${investigationId}/transcript`),
 
   setModelRole: (role: string, provider: string, model: string) =>
     request<{ role: string; provider: string; model: string; unverified: boolean }>(

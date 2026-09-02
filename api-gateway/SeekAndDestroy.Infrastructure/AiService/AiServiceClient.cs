@@ -135,6 +135,9 @@ public sealed class AiServiceClient(HttpClient httpClient, IHttpContextAccessor 
     public Task<JsonNode?> GetConversationDetailAsync(string conversationId, CancellationToken ct) =>
         GetAsync($"/api/admin/conversations/{Uri.EscapeDataString(conversationId)}", ct);
 
+    public Task<JsonNode?> ListConversationsAsync(int limit, CancellationToken ct) =>
+        GetAsync($"/api/admin/conversations?limit={limit}", ct);
+
     public Task<JsonNode?> CreateInvestigationAsync(CreateInvestigationRequestDto request, CancellationToken ct) =>
         PostAsync("/api/investigations", request, ct);
 

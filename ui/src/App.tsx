@@ -12,6 +12,7 @@ import ApplicationPlacement from "@/pages/ApplicationPlacement";
 import CapacityForecast from "@/pages/CapacityForecast";
 import InvestigationDetail from "@/pages/InvestigationDetail";
 import RecommendationApproval from "@/pages/RecommendationApproval";
+import AnswerQuality from "@/pages/AnswerQuality";
 import ModelSettings from "@/pages/ModelSettings";
 
 const NAV = [
@@ -29,6 +30,10 @@ const NAV = [
   // worse than no link. The server enforces it regardless - require_admin
   // re-reads IsAdmin per request, so hiding this is a courtesy, not the gate.
   { to: "/model-settings", label: "Model Settings", adminOnly: true },
+  //: Admin-only for the same reason as Model Settings, and one more: the
+  //: transcripts contain the prompts, which carry the evidence the engine
+  //: assembled - incident text and estate capacity.
+  { to: "/answer-quality", label: "Answer Quality", adminOnly: true },
 ];
 
 export default function App() {
@@ -88,6 +93,7 @@ export default function App() {
           <Route path="/forecast" element={<CapacityForecast />} />
           <Route path="/investigations" element={<InvestigationDetail />} />
           <Route path="/approvals" element={<RecommendationApproval />} />
+          <Route path="/answer-quality" element={<AnswerQuality />} />
           <Route path="/model-settings" element={<ModelSettings />} />
         </Routes>
       </main>

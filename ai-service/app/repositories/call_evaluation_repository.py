@@ -202,3 +202,42 @@ def turns_for_conversation(conversation_id: str) -> list[dict]:
         {"conversation_id": conversation_id},
         max_rows=500,
     )
+
+
+def recent_conversations(limit: int = 50) -> list[dict]:
+    """Conversations to choose from, worst score first.
+
+    Ordered by number_fidelity ascending rather than by recency, because the
+    reason to open this screen is to find a bad answer. A list sorted by time
+    puts the most recent conversation first whether or not anything is wrong with
+    it, and the one worth reading is then somewhere below the fold.
+
+    Conversations with no stored verdicts sort last rather than first: an
+    ungraded conversation has no score, and NULL is not zero.
+    """
+    return fetch_all(
+        f"""
+        SELECT  c.ConversationId,
+                c.StartedAt,
+                c.LastActivityAt,
+                (SELECT COUNT(*) FROM {T('ConversationTurn')} t
+                  WHERE t.ConversationId = c.ConversationId)              AS Turns,
+                nf.Grounded                                               AS NumberGrounded,
+                nf.Total                                                  AS NumberTotal
+        FROM    {T('Conversation')} c
+        OUTER APPLY (
+            SELECT  SUM(e.Grounded) AS Grounded, SUM(e.Total) AS Total
+            FROM    {T('CallEvaluation')} e
+            JOIN    {T('ConversationTurn')} t2 ON t2.InvestigationId = e.InvestigationId
+            WHERE   t2.ConversationId = c.ConversationId
+              AND   e.Grader = 'number_fidelity'
+        ) nf
+        ORDER BY
+            CASE WHEN nf.Total IS NULL OR nf.Total = 0 THEN 1 ELSE 0 END,
+            CASE WHEN nf.Total > 0 THEN CAST(nf.Grounded AS FLOAT) / nf.Total END ASC,
+            c.LastActivityAt DESC
+        OFFSET 0 ROWS FETCH NEXT :limit ROWS ONLY
+        """,
+        {"limit": limit},
+        max_rows=200,
+    )
