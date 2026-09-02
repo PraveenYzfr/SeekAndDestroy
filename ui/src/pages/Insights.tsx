@@ -13,14 +13,26 @@ interface InsightMessage {
   error?: string;
 }
 
-/** Every example is answerable by a different one of the three intents
- *  (app.insights.router) - a reader trying all three sees the shape of what
- *  this screen can do, not just one path through it. */
+/** Two examples, both portfolio-level and neither naming one specific
+ *  identifier.
+ *
+ *  A third one used to name a specific cluster ("what breaks if atl-03
+ *  fails?") to demonstrate impact analysis. Dropped: naming one real
+ *  identifier as the example makes it read as though the system already
+ *  knows something is wrong with THAT entity specifically, which is not
+ *  true and is a bad thing to imply - the same reason Chat.tsx's own
+ *  buildExamples() avoids naming an existing application. Impact analysis
+ *  still works from free text (name any real cluster, server or
+ *  application) - it is just not a one-click button here.
+ *
+ *  A per-application health lookup was considered and rejected: in an
+ *  estate of thousands of applications, nobody's primary use of this
+ *  screen is checking on ONE named app - the portfolio-level questions
+ *  below are what an enterprise reader actually opens this for. */
 function buildExamples(): string[] {
   return [
-    "How many Sev1 incidents and what are the root causes?",
-    "How healthy is our CMDB?",
-    "What breaks if atl-03 fails?",
+    "How many Sev1 incidents this quarter, and are there any common root causes?",
+    "Which business service has the most incidents overall, and is that the same one hit hardest by Sev1s?",
   ];
 }
 
@@ -86,7 +98,7 @@ export default function Insights() {
     <div className="chat-page">
       <h2>CMDB Insighter</h2>
       <p className="subtitle">
-        Ask about incidents, changes, problems, CMDB health, or what breaks if something fails.
+        Ask about incidents, changes, problems, infrastructure health, or what breaks if something fails.
       </p>
 
       {messages.length > 0 && (
@@ -118,7 +130,7 @@ export default function Insights() {
       <div className="chat-input-bar">
         <textarea
           rows={2}
-          placeholder="Ask about incidents, CMDB health, or impact..."
+          placeholder="Ask about incidents, infrastructure health, or impact..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}

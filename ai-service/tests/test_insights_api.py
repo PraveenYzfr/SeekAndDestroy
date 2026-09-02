@@ -58,3 +58,23 @@ def test_ask_impact_question_with_a_real_ci_returns_200(auth_headers):
     body = response.json()
     assert body["intent"] == "impact"
     assert body["details"]["affected_cis"] >= 0
+
+
+def test_ask_business_service_leader_question_returns_200(auth_headers):
+    """The approved Insights.tsx example question - a fixed comparison
+    routed to business_service_impact.volume_vs_severity_leader() rather
+    than the generic aggregate path, specifically because the aggregate
+    path was observed live to trip deepseek-v4-flash's reasoning-overflow
+    failure on this exact compound question. Asserted as a third,
+    no-LLM-call intent for the same reason health/impact are: it needs no
+    mock provider and must never depend on one being reachable."""
+    response = client.post(
+        "/api/insights/ask",
+        json={"query": "Which business service has the most incidents overall, and is that the same one hit hardest by Sev1s?"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "business_service_leader"
+    assert "headline" in body and body["headline"]
+    assert isinstance(body["caveats"], list)

@@ -389,13 +389,12 @@ export interface InsightTable {
   rows: (string | number | null)[][];
 }
 
-/** One answer from the CMDB Insighter. `intent` says which of the three
- *  paths answered it - "health" and "impact" are Python-composed and need no
- *  model call to read; "aggregate" is the narrated SQL-backed path and
- *  carries `insight` (a called-out pattern, e.g. an inversion) and
- *  `total_count`, neither of which the other two intents have. */
+/** One answer from the CMDB Insighter. `intent` says which path answered it -
+ *  "health", "impact" and "business_service_leader" are Python-composed and
+ *  need no model call to read; "aggregate" is the narrated SQL-backed path
+ *  and carries `total_count`, which the other three do not. */
 export interface InsightAnswer {
-  intent: "health" | "impact" | "aggregate";
+  intent: "health" | "impact" | "business_service_leader" | "aggregate";
   headline: string;
   narrative: string;
   insight?: string;

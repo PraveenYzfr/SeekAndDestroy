@@ -9,7 +9,7 @@ a model: mapping a question onto a constrained query spec
 (app.insights.narrator) - never deciding what to compute, and never
 producing a number.
 
-THREE INTENTS, EACH BACKED BY WORK ALREADY BUILT AND TESTED
+FOUR INTENTS, EACH BACKED BY WORK ALREADY BUILT AND TESTED
 -------------------------------------------------------------
   health    app.insights.cmdb_health - completeness, staleness, orphans,
             duplicates, coverage. Answered with a Python-composed narrative,
@@ -19,10 +19,22 @@ THREE INTENTS, EACH BACKED BY WORK ALREADY BUILT AND TESTED
             Same reasoning: the answer is a count, a depth and a
             true/false ceiling flag, not something that benefits from an
             LLM's phrasing.
+  business_service_leader
+            app.insights.business_service_impact.volume_vs_severity_leader -
+            "which service has the most incidents overall, and is that the
+            one hit hardest by SevNs" is a fixed two-number comparison, not
+            an open-ended aggregation - routed here instead of the generic
+            path below for the same reason health/impact are: a comparison
+            this well-defined does not need an LLM to decide what to
+            compute, and this question was observed live to trigger
+            deepseek-v4-flash's reasoning-overflow failure on the
+            two-LLM-call aggregate path (16-17k reasoning chars, twice in a
+            row) - a well-defined question should not depend on a
+            reasoning model choosing to stop reasoning.
   aggregate anything else - the general NL-to-query-spec-to-SQL-to-narrated
-            pipeline (severity by root cause, incidents by business
-            service, and so on). This is the one path that calls an LLM
-            twice, because the question's shape is not fixed in advance.
+            pipeline (severity by root cause, changes by close code, and so
+            on). This is the one path that calls an LLM twice, because the
+            question's shape is not fixed in advance.
 """
 
 from __future__ import annotations
@@ -31,10 +43,11 @@ import re
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from app.insights import cmdb_health, impact_analysis
+from app.insights import business_service_impact, cmdb_health, impact_analysis
 from app.insights.narrator import narrate
 from app.insights.query_builder import run_query
 from app.insights.spec_parser import parse_query_spec
+from app.insights.whitelist import SEVERITY_SYNONYMS
 
 # No trailing \b: "healthy", "duplicates", "orphaned" must all match their
 # root word. A trailing boundary here is exactly the kind of regex-vs-domain
@@ -54,6 +67,18 @@ _HEALTH_WORDS = re.compile(
 _IMPACT_WORDS = re.compile(
     r"\b(blast radius|what breaks|what happens if|impact of|impact analysis|"
     r"fail|die|goes down|affected)",
+    re.IGNORECASE,
+)
+
+# Fires only on the compound comparison shape ("most incidents overall, and
+# is that the same one hit hardest by Sev1s") - a plain "incidents by
+# business service" question has no comparison word and correctly falls
+# through to the generic aggregate path instead, since that IS an open
+# group-by with no fixed second half to compute.
+_BUSINESS_SERVICE_WORDS = re.compile(r"business service", re.IGNORECASE)
+_LEADER_COMPARISON_WORDS = re.compile(
+    r"\b(most incidents|hit hardest|hardest hit|hit the hardest|highest|leader|"
+    r"top service|same (one|service))\b",
     re.IGNORECASE,
 )
 
@@ -152,6 +177,101 @@ def _health_narrative(report: dict) -> dict:
     }
 
 
+def _extract_severity(question: str) -> str:
+    """Which severity a business-service-leader comparison means, found the
+    same way app.insights.whitelist.normalize_severity maps a filter value -
+    reusing SEVERITY_SYNONYMS rather than a second hand-written mapping, so
+    the two never drift apart. Searched as a substring (longest key first,
+    so "sev1" cannot shadow "severity1" or vice versa) rather than matched as
+    an exact filter value, since this is free text, not a validated filter.
+
+    Defaults to Sev1 when no severity is named - every version of this
+    question seen so far (and the approved example on the Insights screen)
+    names one explicitly, but a reader asking "which service is hit
+    hardest" with no severity at all should get the platform's own default
+    top severity rather than an error demanding they repeat themselves.
+    """
+    text = question.lower()
+    for key in sorted(SEVERITY_SYNONYMS, key=len, reverse=True):
+        if key in text:
+            return SEVERITY_SYNONYMS[key]
+    return "Sev1"
+
+
+def _business_service_leader_payload(result: dict) -> dict:
+    """Python-composed narrative over
+    business_service_impact.volume_vs_severity_leader() - same reasoning as
+    _health_narrative and _impact_payload: the shape of this answer (two
+    named leaders and whether they match) is fixed in advance, so templating
+    it costs nothing and cannot invent a number the SQL did not produce.
+    """
+    top_severity = result["top_severity"]
+    overall = result["overall_leader"]
+    overall_count = result["overall_leader_count"]
+    filtered = result["filtered_leader"]
+    filtered_count = result["filtered_leader_count"]
+
+    if overall is None:
+        return {
+            "intent": "business_service_leader",
+            "headline": "No incidents resolve to a business service yet.",
+            "narrative": "",
+            "caveats": [
+                "Business service is only known for an incident whose application has a service "
+                "relationship recorded - none currently do."
+            ],
+            "table": None,
+            "details": result,
+            "row_count": 0,
+        }
+
+    headline = f"{overall} has the most incidents overall, with {overall_count:,}."
+    insight = ""
+
+    if filtered is None:
+        narrative = (
+            f"No {top_severity} incidents resolve to a business service, so no {top_severity} "
+            f"leader can be named."
+        )
+    elif result["leader_changes"]:
+        narrative = (
+            f"{filtered} is hit hardest by {top_severity}s, with {filtered_count:,} - a different "
+            f"service from the one with the most incidents overall."
+        )
+        insight = (
+            f"{overall} dominates the overall incident count, but {filtered} is where {top_severity} "
+            f"severity actually concentrates - the busiest service by volume is not the one at "
+            f"greatest {top_severity} risk."
+        )
+    else:
+        narrative = (
+            f"{filtered} is also hit hardest by {top_severity}s, with {filtered_count:,} - the same "
+            f"service that leads overall."
+        )
+
+    return {
+        "intent": "business_service_leader",
+        "headline": headline,
+        "narrative": narrative,
+        "insight": insight,
+        "caveats": [
+            "Business service is only known for incidents whose application has a service "
+            "relationship recorded - incidents with no such relationship are excluded from this "
+            "comparison, not counted as zero."
+        ],
+        "table": {
+            "title": f"Overall vs. {top_severity} leader",
+            "columns": ["scope", "business_service", "count"],
+            "rows": [
+                ["overall", overall, overall_count],
+                [top_severity, filtered, filtered_count],
+            ],
+        },
+        "details": result,
+        "row_count": 2,
+    }
+
+
 def _impact_payload(ci_name: str, result: dict) -> dict:
     if result["hit_depth_ceiling"]:
         headline = f"At least {result['affected_cis']} configuration items would be affected if {ci_name} fails."
@@ -198,6 +318,11 @@ def answer_free_text(spec_llm: BaseChatModel, narrator_llm: BaseChatModel, quest
 
     if _HEALTH_WORDS.search(question):
         return _health_narrative(cmdb_health.health_report())
+
+    if _BUSINESS_SERVICE_WORDS.search(question) and _LEADER_COMPARISON_WORDS.search(question):
+        severity = _extract_severity(question)
+        result = business_service_impact.volume_vs_severity_leader(severity)
+        return _business_service_leader_payload(result)
 
     spec = parse_query_spec(spec_llm, question)
     result = run_query(spec)
