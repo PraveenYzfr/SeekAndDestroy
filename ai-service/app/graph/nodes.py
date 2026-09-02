@@ -35,6 +35,7 @@ from app.agents.llm_factory import get_chat_model_for_role
 from app.graph import scope
 from app.agents.mock_llm import MockChatModel
 from app.forecasting.engine import forecast_cluster
+from app.agents import query_capability
 from app.graph.state import InfrastructureRecommendationState
 from app.config import get_settings
 from app.models.enums import (
@@ -178,11 +179,45 @@ def quick_reply(query: str) -> str | None:
     if classify_investigation_type(text) != InvestigationType.QUESTION:
         return None
 
-    looks_infra = any(w in lower for w in _INFRA_INTENT_WORDS)
     has_app_code = bool(_APP_CODE_RE.search(text.upper()))
     has_quantity = bool(_RESOURCE_QUANTITY_RE.search(lower))
+
+    # Asked for something the CMDB does not record, or asked to place something
+    # without saying what. Checked before the length heuristic below because it
+    # is a fact rather than a guess, and because the heuristic misses exactly
+    # the queries this catches.
+    #
+    # "give me best dc for java apps" reached the full graph and returned a
+    # report that read as a retrieval miss - "the evidence does not include any
+    # record of which clusters host Java applications" - for something no amount
+    # of retrieval could ever produce: there is no runtime-language column. It
+    # then listed five unrelated applications, which is the retriever's top-k
+    # showing through a refusal.
+    #
+    # The guard below SHOULD have caught it and did not, by one word: it fires
+    # at six and that query is seven. Same query without "java" was handled
+    # correctly. See app.agents.query_capability for why the length test was
+    # the wrong instrument.
+    capability = query_capability.capability_reply(
+        text, has_app_code=has_app_code, has_quantity=has_quantity
+    )
+    if capability is not None:
+        return capability
+
+    # Datacentre vocabulary belongs in the infra check too - "dc" is how people
+    # write it and it appeared in none of _INFRA_INTENT_WORDS, so the example
+    # query only registered as infrastructure-shaped at all because "apps"
+    # contains "app".
+    looks_infra = any(w in lower for w in _INFRA_INTENT_WORDS) or any(
+        w in lower for w in query_capability.DATACENTRE_WORDS
+    )
     # Infrastructure-shaped, but with nothing to compute against. Short and
     # specific beats a full investigation that can only report emptiness.
+    #
+    # The length test survives HERE, narrowed to what it is actually good at:
+    # a brief infrastructure fragment with no placement verb ("capacity?",
+    # "cluster for us"). It is not load-bearing for placement any more - that is
+    # decided above by intent - so a long placement request no longer escapes.
     if looks_infra and not has_app_code and not has_quantity and len(text.split()) <= 6:
         return (
             "I need a bit more to work with. Either name the application "
