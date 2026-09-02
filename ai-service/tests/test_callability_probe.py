@@ -129,3 +129,35 @@ def test_no_models_means_no_calls():
     adapter = _Adapter({})
     assert providers.callable_models(adapter, object(), []) == ([], 0)
     assert adapter.probed == []
+
+
+# ---------------------------------------------------------------------------
+# 400 is a statement about the REQUEST, not the model
+# ---------------------------------------------------------------------------
+# Fifty-one gpt-5.x ids sat in the account's catalogue and none reached the
+# dropdown, because HttpChatModel always sent max_tokens and gpt-5 rejects it:
+#
+#   gpt-5 + max_tokens             400 "'max_tokens' is not supported with this
+#                                  model. Use 'max_completion_tokens' instead."
+#   gpt-5 + max_completion_tokens  200
+#
+# The probe read that 400 as "model does not exist" and cached it for a day. A
+# 400 means we asked wrongly; only 401/403/404 say anything about the model.
+
+
+def test_a_bad_request_is_not_evidence_the_model_is_missing():
+    adapter = _Adapter({"gpt-5": _HttpError(400)})
+    models, _ = providers.callable_models(adapter, object(), ["gpt-5"])
+    assert models == []
+    # Re-probed rather than written off, so a fixed request shape is picked up.
+    providers.callable_models(adapter, object(), ["gpt-5"])
+    assert adapter.probed == ["gpt-5", "gpt-5"]
+
+
+def test_only_auth_and_absence_are_permanent():
+    for status in (401, 403, 404):
+        providers.reset_callability_cache()
+        adapter = _Adapter({"m": _HttpError(status)})
+        providers.callable_models(adapter, object(), ["m"])
+        providers.callable_models(adapter, object(), ["m"])
+        assert adapter.probed == ["m"], f"{status} should be cached once"

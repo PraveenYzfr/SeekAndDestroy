@@ -479,7 +479,7 @@ _callable_cache: dict[str, tuple[float, list[str], list[str]]] = {}
 #: way every time. A rate limit or a timeout does not. Caching those alike would
 #: remove a working model from the dropdown for a day because of one bad minute -
 #: so they are cached separately and transient verdicts are simply not cached.
-_HARD_STATUSES = frozenset({400, 401, 403, 404, 422})
+_HARD_STATUSES = frozenset({401, 403, 404})
 
 
 def _probe(adapter: Any, settings: Any, model: str) -> str:
