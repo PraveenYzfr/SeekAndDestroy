@@ -8,6 +8,15 @@ global:
 rule_files:
   - /etc/prometheus/alerts.yml
 
+# WHERE A FIRING ALERT GOES. Without this block Prometheus evaluates every rule
+# correctly and notifies nobody - the result lives in its own memory and is
+# visible only on a page you had to already be looking at. Seven rules were
+# defined and all seven fired into that.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   - job_name: ai-service
     metrics_path: /metrics

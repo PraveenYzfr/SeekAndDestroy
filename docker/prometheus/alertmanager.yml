@@ -1,0 +1,79 @@
+#  Where a firing alert actually goes.
+#
+#  Prometheus evaluates rules and holds the result in its own memory. Without an
+#  Alertmanager it notifies nobody: seven rules were defined, all of them
+#  correct, and every one fired into a page you had to already be looking at.
+#
+#  This gives them somewhere to land - grouped, deduplicated and silenceable at
+#  http://127.0.0.1:9093 - and a place to plug a real receiver into.
+#
+#  NO CREDENTIALS ARE COMMITTED HERE. The Slack and email receivers below read
+#  from environment variables, and both are commented out because a receiver
+#  configured with a blank URL fails at load and takes the whole Alertmanager
+#  down, which is worse than the silence it was meant to fix. Fill in
+#  docker/.env, uncomment one, restart.
+
+global:
+  # How long a firing alert stays "firing" after Prometheus stops sending it.
+  # Longer than the 1m rule interval, so a single missed scrape does not read as
+  # a resolution.
+  resolve_timeout: 5m
+
+route:
+  # Group by alertname AND severity. Without severity in the key, a warning and
+  # a page for the same rule collapse into one notification and the more urgent
+  # one inherits the quieter one's timing.
+  group_by: ["alertname", "severity"]
+
+  # Wait this long before sending the first notification for a new group, so a
+  # burst of related alerts arrives as one message rather than five.
+  group_wait: 30s
+  group_interval: 5m
+
+  # How long before re-notifying about something still firing. Four hours is
+  # deliberately long: these alerts describe quality drift and degraded
+  # providers, not outages. An alert that repeats every ten minutes gets muted
+  # by the person receiving it, and a muted alert is worse than no alert.
+  repeat_interval: 4h
+
+  receiver: default
+
+  routes:
+    # Quality alerts are grouped away from availability ones. They are read at
+    # different times by different people - a fidelity regression is a Monday
+    # morning question, a provider failing over is a now question.
+    - matchers: [alertname=~"Hallucination.*|Fidelity.*|Judge.*|Evaluation.*"]
+      receiver: default
+      group_by: ["alertname"]
+      repeat_interval: 12h
+
+receivers:
+  # The default does nothing except hold the alert in the UI. That is not a
+  # placeholder for a real receiver, it is the honest state until credentials
+  # exist: alerts are visible, deduplicated and acknowledgeable at :9093, and
+  # nothing pretends to have delivered them anywhere.
+  - name: default
+
+  # - name: slack
+  #   slack_configs:
+  #     - api_url: "$SAD_ALERT_SLACK_WEBHOOK"
+  #       channel: "#seekanddestroy-alerts"
+  #       title: "{{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})"
+  #       text: "{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}"
+
+  # - name: email
+  #   email_configs:
+  #     - to: "$SAD_ALERT_EMAIL"
+  #       from: "alerts@sad.praveenyzfr.com"
+  #       smarthost: "$SAD_ALERT_SMTP_HOST"
+  #       auth_username: "$SAD_ALERT_SMTP_USER"
+  #       auth_password: "$SAD_ALERT_SMTP_PASSWORD"
+
+inhibit_rules:
+  # A judge that is not producing verdicts at all makes every judge-score alert
+  # meaningless - they would be reporting on data that stopped arriving. Suppress
+  # the downstream ones so the page says "the instrument is broken" rather than
+  # "quality collapsed", which is the wrong thing to go and investigate.
+  - source_matchers: [alertname="JudgeNotProducingVerdicts"]
+    target_matchers: [alertname=~"Judge.*"]
+    equal: ["severity"]

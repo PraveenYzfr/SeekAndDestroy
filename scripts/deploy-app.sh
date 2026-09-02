@@ -121,7 +121,7 @@ echo "==> 5. observability, if it is running"
 # change silently does not land, which looks exactly like a config that does not
 # work.
 if sudo docker ps --format '{{.Names}}' | grep -q prometheus; then
-    ( cd "$REPO/docker" && sudo docker compose --profile observability up -d prometheus grafana )
+    ( cd "$REPO/docker" && sudo docker compose --profile observability up -d prometheus grafana alertmanager )
     echo "    prometheus + grafana recreated with current config"
 else
     echo "    not running - skipped (start with --profile observability)"

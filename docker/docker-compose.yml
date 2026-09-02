@@ -335,6 +335,24 @@ services:
     # just retries scraping until a target exists; a target being down shows
     # up as "down" in Prometheus, which is normal, not an error.
 
+  alertmanager:
+    profiles: ["observability"]
+    image: prom/alertmanager:latest
+    networks:
+      default:
+      hub:
+        aliases: ["alertmanager"]
+    # Loopback only, like prometheus and grafana. Alertmanager has no auth and
+    # its API can silence alerts - anyone who reaches it can switch off the
+    # monitoring. Exposing it on a public path is the Grafana mistake again.
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    # No depends_on prometheus: this profile must work standalone, and
+    # Alertmanager receiving nothing is a normal state rather than an error.
+
   grafana:
     networks:
       default:
@@ -429,5 +447,6 @@ volumes:
   mssql_data:
   qdrant_storage:
   redis_data:
+  alertmanager_data:
   prometheus_data:
   grafana_data:
