@@ -53,6 +53,19 @@ export default function App() {
               {item.label}
             </NavLink>
           ))}
+          {/* Grafana is not a React route - it is a separate application served
+              by nginx at /grafana/ on this same origin, so it needs a plain
+              anchor rather than a NavLink. Routing it through the router would
+              render the SPA's own 404.
+
+              Admin-only for the same reason Model Settings is: these are
+              infrastructure metrics and spend figures, not something every
+              authenticated employee should read. */}
+          {identity.is_admin && (
+            <a href="/grafana/" target="_blank" rel="noreferrer">
+              Metrics &amp; Dashboards
+            </a>
+          )}
         </nav>
         <div className="signed-in-as">
           <div className="stat-label">Signed in as</div>

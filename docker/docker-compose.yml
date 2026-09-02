@@ -344,6 +344,20 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "${SAD_GRAFANA_ANONYMOUS:-true}"
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
       GF_SECURITY_ADMIN_PASSWORD: "${SAD_GRAFANA_ADMIN_PASSWORD:-admin}"
+      # SERVED UNDER /grafana/ ON THE MAIN SITE, not on a port of its own.
+      #
+      # The tunnel is token-managed - its routes live in the Cloudflare dashboard
+      # rather than in this repository - so a second hostname is not something a
+      # deploy can create. nginx already fronts everything on sad.praveenyzfr.com,
+      # so the dashboards go behind the same origin as the app.
+      #
+      # Both variables are required and they fail differently. ROOT_URL alone
+      # makes Grafana generate correct links while still refusing to serve them;
+      # SERVE_FROM_SUB_PATH alone makes it serve the paths while generating links
+      # that drop the prefix. Half of this configuration produces a page that
+      # loads and then breaks on the first click.
+      GF_SERVER_ROOT_URL: "${SAD_GRAFANA_ROOT_URL:-https://sad.praveenyzfr.com/grafana/}"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/etc/grafana/dashboards:ro
