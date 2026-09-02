@@ -141,6 +141,14 @@ GRANT INSERT, UPDATE ON sad.RemediationTask             TO [$APP_LOGIN];
 -- stored or reported. Splitting the two is what made that possible.
 GRANT INSERT, UPDATE ON sad.EvalRun                     TO [$APP_LOGIN];
 GRANT INSERT         ON sad.EvalCaseResult              TO [$APP_LOGIN];
+-- Human feedback (migration 022). UPDATE because a person may change their mind:
+-- the row is updated rather than duplicated, which is what UQ_AnswerFeedback
+-- enforces. No DELETE - a rating is what somebody thought at a point in time,
+-- and removing one is editing the only ground truth this platform has.
+GRANT INSERT, UPDATE ON sad.AnswerFeedback              TO [$APP_LOGIN];
+-- PromotedCaseId is added to RemediationTask by the same migration; the table's
+-- existing INSERT/UPDATE grant covers it.
+
   -- auth.login performs an opportunistic rehash when scrypt parameters change,
   -- which UPDATEs these two columns inside the login request. Without this the
   -- first login after a policy change fails on a *correct* password, and the
