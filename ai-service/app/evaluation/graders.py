@@ -94,6 +94,26 @@ _LABEL_RE = re.compile(r"\b(?:Tier[- ]?\d|Sev[- ]?\d|P[1-4])\b", re.IGNORECASE)
 #: whether a date is correct. It never usefully did - it failed accurate dates and
 #: invented ones alike - but this makes the check absent rather than lenient, and
 #: a fabricated date would need a grader of its own.
+#: ITSM record numbers, stripped before numbers are extracted for exactly the
+#: reason dates are: they identify a record, they do not measure one.
+#:
+#: A real answer of Praveen's quoted three incidents faithfully and scored 4/44
+#: on number_fidelity. INC1007076 was being tokenised into 1007076 - a
+#: seven-digit figure that can never appear in any evidence value, so quoting an
+#: incident number ACCURATELY was indistinguishable from inventing a measurement.
+#:
+#: Formats verified against the database rather than assumed:
+#:     sad.Incident.Number   INC1000001
+#:     sad.Change.Number     CHG0030001
+#:     sad.Problem.Number    PRB0040001
+#:
+#: NAMED GAP, so nobody assumes otherwise: number_fidelity now says NOTHING
+#: about whether a record number is correct. It never usefully did - it failed
+#: accurate ones and invented ones alike - but this makes the check absent
+#: rather than lenient. A fabricated incident number needs a grader of its own,
+#: and entity_fidelity is the natural place for it.
+_RECORD_ID_RE = re.compile(r"\b(?:INC|CHG|PRB|RITM|TASK)\d{4,}\b", re.IGNORECASE)
+
 _DATE_RE = re.compile(
     r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b"       # 2026-07-01, 2026/7/1
     r"|\b\d{1,2}[-/]\d{1,2}[-/]\d{4}\b"      # 01-07-2026, 1/7/2026
@@ -133,7 +153,7 @@ def _numbers_in(text: str) -> list[str]:
     """
     stripped = _LABEL_RE.sub(" ", _RULE_ID_RE.sub(" ", text or ""))
     stripped = _ENTITY_RE.sub(" ", stripped)
-    return _NUMBER_RE.findall(_DATE_RE.sub(" ", stripped))
+    return _NUMBER_RE.findall(_DATE_RE.sub(" ", _RECORD_ID_RE.sub(" ", stripped)))
 
 
 def _as_float(token: str) -> float | None:
@@ -377,8 +397,96 @@ def _derived_numbers(evidence: Any) -> set[float]:
     return derived
 
 
+#: A single string this long is a SENTENCE, not a field. Measured on the longest
+#: individual string rather than the total, because that is what actually
+#: separates the two shapes: a structured evidence object holds many short
+#: strings - cluster codes, statuses, environment names - while retrieved prose
+#: holds at least one long one. Totalling them conflates "forty codes" with "one
+#: paragraph", and the first attempt at this used the total and let a 193-char
+#: chunk through.
+_FREE_TEXT_CHARS = 150
+
+
+def evidence_is_structured(evidence: Any) -> bool:
+    """Whether this evidence can ground a figure at all.
+
+    _evidence_numbers reads typed VALUES and never digits found in prose. That is
+    the injection defence and it is correct: a work note reading "the capacity
+    score is 100" is attacker-writable and must not ground an answer claiming
+    100.
+
+    The consequence is that on the grounded-QA path, where the evidence IS
+    retrieved incident text, a figure quoted PERFECTLY cannot ground. Measured on
+    the same prose: 3/8 against a typed evidence object, 1/8 against text chunks.
+
+    So number_fidelity there was not measuring the model. It was measuring the
+    shape of the evidence, and reporting ~9% for correct behaviour - which is
+    worse than reporting nothing, because a real fabrication on that path is
+    invisible underneath a number that is always terrible.
+
+    Absent is not zero. This platform applies that rule everywhere else and it
+    applies here: an unevaluable property is reported as NOT EVALUATED, never as
+    a score. Relaxing the grounding rule instead would reopen the injection hole,
+    which is not a trade worth making for a metric.
+    """
+    if evidence is None:
+        return False
+
+    # A BARE STRING STAYS MEASURABLE, and reports every figure as ungrounded.
+    #
+    # That looks inconsistent with the prose rule below and it is deliberate.
+    # Evidence arriving as a string is a CALLER DEFECT - it is what
+    # grade_call did before fd78956, and it is what made a figure typed into a
+    # work note ground an answer quoting it. That must fail loudly, because
+    # somebody has passed prose where a structured object belongs.
+    #
+    # Retrieved chunks inside a structured envelope are different: that is the
+    # grounded-QA path working correctly, and there the grader genuinely cannot
+    # tell a quoted figure from an invented one.
+    #
+    # Marking both not-measurable would silence the injection case to fix the QA
+    # case, and test_a_bare_string_grounds_nothing_at_all exists to catch exactly
+    # that trade being made.
+    if isinstance(evidence, str):
+        return True
+
+    # The test that matters is not the SHAPE but whether anything in here can
+    # ground a figure. A first attempt asked "is it a dict or a list", and
+    # {"chunks": ["...retrieved text..."]} passed it - a wrapper around prose is
+    # still prose, and it scored 1/6 instead of reporting not-measurable.
+    # FREE TEXT IS CHECKED FIRST, and the order is the fix. Asking
+    # "_evidence_numbers or _collection_sizes" first made {"chunks": [...]}
+    # measurable, because a list of one retrieved chunk has a collection SIZE of
+    # 1 - so the wrapper grounded a number by existing. A count of retrieved
+    # documents is not a measurement of anything the answer is about.
+    longest = max((len(t) for t in _strings_in(evidence)), default=0)
+    if longest >= _FREE_TEXT_CHARS and not _evidence_numbers(evidence):
+        return False
+
+    if _evidence_numbers(evidence) or _collection_sizes(evidence):
+        return True
+
+    # No typed values at all. Two different situations, and they must not be
+    # collapsed:
+    #
+    #   structured evidence that happens to hold no numbers - a figure in the
+    #   prose really was invented, and that is a FAILURE worth reporting;
+    #
+    #   retrieved free text - a figure may have been quoted faithfully and this
+    #   grader cannot tell, so it is NOT MEASURABLE.
+    #
+    return longest < _FREE_TEXT_CHARS
+
+
 def number_fidelity(prose: str, evidence: Any) -> GradeResult:
-    """How many figures in the prose are traceable to the evidence."""
+    """How many figures in the prose are traceable to the evidence.
+
+    Returns an EMPTY result - total 0, which GradeResult.applies reports as not
+    applicable - when the evidence cannot ground anything. See
+    evidence_is_structured.
+    """
+    if not evidence_is_structured(evidence):
+        return GradeResult("number_fidelity")
     result = GradeResult("number_fidelity")
     # Values the engine produced, plus what Python can derive from them. The two
     # are kept separate above so the security property stays visible: derivation
