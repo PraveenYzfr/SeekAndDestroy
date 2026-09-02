@@ -301,3 +301,99 @@ def _as_float(value) -> float | None:
     keep, one layer before anybody sees it.
     """
     return None if value is None else float(value)
+
+
+@router.get("/api/admin/investigations/{investigation_id}/transcript")
+def get_transcript(investigation_id: int, current: AuthenticatedEmployee = Depends(require_admin)):
+    """The full model exchange for one investigation, with the score beside it.
+
+    Every call, in order: the prompt that was sent, the output that came back,
+    the model that produced it, how long it took - and what each grader made of
+    it. sad.AgentAuditLog has held the exchange all along; what was missing was
+    a way to read it with the verdict attached.
+
+    ADMIN ONLY, and not because scores are sensitive. The prompts are: they carry
+    the evidence the engine assembled, which includes incident text and estate
+    capacity. That is the same reason routes_system.ready is not exposed.
+
+    Grades come from sad.CallEvaluation, so this shows what was ACTUALLY recorded
+    rather than re-grading on read. Re-grading here would quietly answer a
+    different question - "what would today's rules say" instead of "what did we
+    conclude" - and the two diverged three times in one night.
+    """
+    from app.repositories import call_evaluation_repository
+
+    rows = call_evaluation_repository.for_investigation(investigation_id)
+    calls: dict[int, dict] = {}
+    for r in rows:
+        call = calls.setdefault(r["AuditId"], {
+            "audit_id": r["AuditId"],
+            "graph_node": r.get("GraphNode"),
+            "schema": str(r.get("ToolName") or "").removeprefix("llm:"),
+            "model": r.get("ModelIdentity"),
+            "provider": r.get("Provider"),
+            "started_at": r.get("StartedAt"),
+            "completed_at": r.get("CompletedAt"),
+            "success": r.get("Success"),
+            "prompt": r.get("InputJson"),
+            "output": r.get("OutputJson"),
+            "grades": [],
+        })
+        call["grades"].append({
+            "grader": r["Grader"],
+            "grounded": r["Grounded"],
+            "total": r["Total"],
+            # The denominator travels with the rate, here as everywhere.
+            "rate": float(r["Rate"]) if r["Rate"] is not None else None,
+            "ungrounded": r.get("UngroundedJson"),
+            "grader_version": r.get("GraderVersion"),
+            "graded_at": r.get("CreatedAt"),
+        })
+    return {
+        "investigation_id": investigation_id,
+        "calls": list(calls.values()),
+        # Stated rather than left to be inferred from an empty list. A grading
+        # pass may simply not have run yet, and "no verdicts" reads as "nothing
+        # was wrong" if nobody says which it is.
+        "note": (
+            "Verdicts appear once an evaluation run has graded these calls. "
+            "Run one from Model Settings; it grades recorded calls and spends nothing."
+            if not calls else ""
+        ),
+    }
+
+
+@router.get("/api/admin/conversations/{conversation_id}/evaluation")
+def get_conversation_evaluation(
+    conversation_id: str, current: AuthenticatedEmployee = Depends(require_admin)
+):
+    """One score per grader for a whole conversation.
+
+    Sums grounded and total across the conversation's calls rather than
+    averaging the per-call rates. Those are different numbers: a call with two
+    figures and a call with two hundred count equally in a mean of rates, so one
+    short narration can outweigh an entire report. Summing gives the rate over
+    figures actually written, which is the claim being made.
+
+    MinVersion and MaxVersion are returned because a conversation can span a
+    grader change, and a single figure covering two rule sets is not one
+    measurement. When they differ, the number is a mixture and should be read as
+    one.
+    """
+    from app.repositories import call_evaluation_repository
+
+    rows = call_evaluation_repository.rollup_for_conversation(conversation_id)
+    graders = [
+        {
+            "grader": r["Grader"],
+            "grounded": r["Grounded"],
+            "total": r["Total"],
+            "calls": r["Calls"],
+            "rate": (round(r["Grounded"] / r["Total"], 4) if r["Total"] else None),
+            "grader_version_min": r.get("MinVersion"),
+            "grader_version_max": r.get("MaxVersion"),
+            "mixed_grader_versions": r.get("MinVersion") != r.get("MaxVersion"),
+        }
+        for r in rows
+    ]
+    return {"conversation_id": conversation_id, "graders": graders}

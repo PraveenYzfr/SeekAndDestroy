@@ -97,6 +97,11 @@ class ModelScorecard:
         default_factory=lambda: defaultdict(lambda: defaultdict(_Totals))
     )
     flagged: list[dict] = field(default_factory=list)
+    #: Every (call, grader) verdict from this run, for persistence. Held
+    #: separately from `flagged`, which is a capped sample for reading - a
+    #: stored record has to be complete or the rate it supports is not
+    #: re-derivable from it.
+    graded_calls: list[dict] = field(default_factory=list)
 
     def record(self, row: dict, *, cached: bool, schema: str) -> None:
         self.calls += 1
@@ -118,6 +123,19 @@ class ModelScorecard:
         for grade in grade_call(row["InputJson"], row["OutputJson"], schema):
             self.totals[grade.name].add(grade.grounded, grade.total)
             self.by_schema[schema][grade.name].add(grade.grounded, grade.total)
+            # Kept per call as well as summed, so the run can be PERSISTED rather
+            # than only reported. Until now every grading pass recomputed these
+            # numbers, printed them and discarded them - which meant no history,
+            # no way to say which call produced a bad figure, and no way to
+            # compare a score against one taken before a grader changed.
+            self.graded_calls.append({
+                "audit_id": row["AuditId"],
+                "investigation_id": row.get("InvestigationId"),
+                "grader": grade.name,
+                "grounded": grade.grounded,
+                "total": grade.total,
+                "ungrounded": list(grade.ungrounded),
+            })
             if grade.ungrounded:
                 self.flagged.append({
                     "audit_id": row["AuditId"], "schema": schema,
@@ -189,7 +207,7 @@ def _scan(investigation_id: int | None, limit: int):
             params["before_id"] = before_id
 
         rows = fetch_all(
-            f"SELECT TOP (:batch) AuditId, ToolName, InputJson, OutputJson, Success, "
+            f"SELECT TOP (:batch) AuditId, InvestigationId, ToolName, InputJson, OutputJson, Success, "
             f"DATEDIFF(millisecond, StartedAt, CompletedAt) AS DurationMs "
             f"FROM {T('AgentAuditLog')} WHERE {' AND '.join(where)} ORDER BY AuditId DESC",
             params,
@@ -220,8 +238,28 @@ def evaluate(*, investigation_id: int | None = None, limit: int = 20_000) -> dic
         card = scorecards.setdefault(model, ModelScorecard(model=model))
         card.record(row, cached=cached, schema=schema)
 
-    logger.info("evaluation.completed", rows=total_rows, models=len(scorecards))
+    # PERSIST BEFORE RETURNING. Every previous grading pass computed these
+    # numbers and threw them away, so there was no history, no way to attribute a
+    # bad figure to the call that produced it, and no way to compare a score
+    # against one taken before the graders changed.
+    #
+    # Best-effort: storing a verdict must never fail the run that produced it -
+    # the same rule the answer-level table follows. But the count is REPORTED, so
+    # "graded 40, stored 0" is visible rather than a silence that reads as
+    # success. That exact silence hid a missing INSERT grant for hours.
+    stored = 0
+    try:
+        from app.repositories import call_evaluation_repository
+
+        stored = call_evaluation_repository.record_many(
+            [g for c in scorecards.values() for g in c.graded_calls]
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("evaluation.persist_failed", error=str(exc)[:300])
+
+    logger.info("evaluation.completed", rows=total_rows, models=len(scorecards), stored=stored)
     return {
+        "stored_verdicts": stored,
         "calls_seen": total_rows,
         "models": [c.as_dict() for c in sorted(scorecards.values(), key=lambda c: -c.calls)],
         # Capped: a scorecard is for reading, and the first few examples of a
