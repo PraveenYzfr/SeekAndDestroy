@@ -31,6 +31,9 @@ class InfrastructureRecommendationState(TypedDict, total=False):
     recommendation_explanations: list[dict]
     human_review_required: bool
     final_report: Optional[dict]
+    #: Set instead of final_report when the reviewer rejects. Carries the
+    #: question to put back to them and the constraints they can pick from.
+    rejection_prompt: Optional[dict]
     errors: Annotated[list[str], operator.add]
 
     # --- control-flow plumbing ----------------------------------------------
@@ -81,7 +84,7 @@ def new_state(
         user_query=user_query, created_by=created_by, errors=[], candidate_clusters=[], candidate_nodes=[],
         eligible_candidates=[], rejected_candidates=[], capacity_calculations={}, forecast_results={},
         candidate_scores=[], retrieved_context=[], recommendation_explanations=[], human_review_required=True,
-        final_report=None, investigation_id=None, parsed_intent=None, application_requirements=None,
+        final_report=None, rejection_prompt=None, investigation_id=None, parsed_intent=None, application_requirements=None,
         capacity_requirements=None, investigation_plan=None, investigation_type="Question", requirement=None,
         confidence="Medium", decision=None, reviewer_employee_id=None, review_comments=None,
         selected_cluster_code=None, selected_host_name=None,

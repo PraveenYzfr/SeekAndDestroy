@@ -17,6 +17,7 @@ interface ChatMessage {
   // once, so the two cannot drift.
   reviewPayload?: RunInvestigationResult["review_payload"];
   finalReport?: RunInvestigationResult["final_report"];
+  rejectionPrompt?: RunInvestigationResult["rejection_prompt"];
   recommendations?: InfrastructureRecommendation[];
   error?: string;
   /** Set once this review has been acted on. The bubble stays in the thread as
@@ -63,6 +64,27 @@ function newId(): string {
   return `msg-${nextId}`;
 }
 
+/** Turn a picked rejection reason into the next question.
+ *
+ *  Deliberately a normal chat message rather than a new constraint API. The
+ *  conversation already carries the shortlist it is refining, so this reuses the
+ *  path that "show me the next three" uses instead of adding a second way to
+ *  narrow a search - two mechanisms would drift, and the one used less often is
+ *  the one that rots.
+ */
+function refineFromRejection(
+  option: { id: string; constraint: Record<string, unknown> },
+  rejectedCluster?: string | null,
+): string {
+  const c = option.constraint;
+  if (c.exclude_data_center) return `Show other options, but not in ${c.exclude_data_center}.`;
+  if (c.min_headroom_percent) return `Show options with at least ${c.min_headroom_percent}% headroom after the move.`;
+  if (c.min_resiliency) return "Show options with better failure-domain separation.";
+  if (c.min_change_risk) return "Show options on clusters with less change activity.";
+  return `Show other options, but not ${rejectedCluster ?? "that cluster"}.`;
+}
+
+
 export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -99,7 +121,11 @@ export default function Chat() {
     // to refer to: answered directly, with no Investigation row behind it and
     // so no recommendations to fetch.
     if (result.investigation_id == null) {
-      updateMessage(assistantId, { status: "completed", finalReport: result.final_report });
+      updateMessage(assistantId, {
+        status: "completed",
+        finalReport: result.final_report,
+        rejectionPrompt: result.rejection_prompt,
+      });
       return;
     }
     try {
@@ -108,6 +134,7 @@ export default function Chat() {
         status: "completed",
         investigationId: result.investigation_id,
         finalReport: result.final_report,
+        rejectionPrompt: result.rejection_prompt,
         recommendations,
       });
     } catch (e) {
@@ -115,6 +142,7 @@ export default function Chat() {
         status: "completed",
         investigationId: result.investigation_id,
         finalReport: result.final_report,
+        rejectionPrompt: result.rejection_prompt,
       });
     }
   }
@@ -225,7 +253,7 @@ export default function Chat() {
         )}
 
         {messages.map((m) => (
-          <ChatBubble key={m.id} message={m} onDecide={decide} busy={busy} />
+          <ChatBubble key={m.id} message={m} onDecide={decide} onAsk={send} busy={busy} />
         ))}
         <div ref={bottomRef} />
       </div>
@@ -325,6 +353,7 @@ function RecommendationRows({
 function ChatBubble({
   message,
   onDecide,
+  onAsk,
   busy,
 }: {
   message: ChatMessage;
@@ -334,6 +363,10 @@ function ChatBubble({
     selectedClusterCode?: string,
     selectedHostName?: string,
   ) => void;
+  /** Sends a follow-up question as if the engineer had typed it. Used by the
+   *  rejection prompt, so picking a reason continues the same conversation
+   *  rather than starting a parallel one. */
+  onAsk: (query: string) => void;
   busy: boolean;
 }) {
   if (message.role === "user") {
@@ -377,7 +410,31 @@ function ChatBubble({
           )
         )}
 
-        {message.status === "completed" && (
+        {/* A rejection asks rather than narrates. Rendered BEFORE the report
+            check and returning early, because the two are alternatives: the
+            backend sets one or the other, and a reviewer who has just said no
+            should not be handed an executive summary of what they declined.
+
+            The options are buttons rather than prose because the model was not
+            asked to invent them - they are derived from the rejected
+            candidate's own figures, so they can be pressed. */}
+        {message.status === "completed" && message.rejectionPrompt ? (
+          <div>
+            <p>{message.rejectionPrompt.question}</p>
+            <div className="grid" style={{ gap: 6 }}>
+              {message.rejectionPrompt.options.map((option) => (
+                <button
+                  key={option.id}
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => onAsk(refineFromRejection(option, message.rejectionPrompt?.rejected_cluster))}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : message.status === "completed" && (
           <div>
             {message.finalReport ? (
               <>

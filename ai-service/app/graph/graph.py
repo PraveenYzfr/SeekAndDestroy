@@ -72,6 +72,7 @@ def _build_graph() -> StateGraph:
     g.add_node("human_review_interrupt", _audited("human_review_interrupt", nodes.human_review_interrupt))
     g.add_node("generate_final_report", _audited("generate_final_report", nodes.generate_final_report))
     g.add_node("persist_recommendations", _audited("persist_recommendations", nodes.persist_recommendations))
+    g.add_node("ask_rejection_reason", _audited("ask_rejection_reason", nodes.ask_rejection_reason))
     g.add_node("complete_investigation", _audited("complete_investigation", nodes.complete_investigation))
 
     g.add_edge(START, "parse_user_request")
@@ -104,7 +105,19 @@ def _build_graph() -> StateGraph:
         "assess_risk_and_confidence", router.route_after_risk,
         {"generate_final_report": "generate_final_report", "human_review_interrupt": "human_review_interrupt"},
     )
-    g.add_edge("human_review_interrupt", "generate_final_report")
+    # Approve writes the report. Reject asks what was wrong instead - rejecting a
+    # placement used to produce an executive summary of the thing just declined.
+    # Both paths still reach persist_recommendations, so the decision is recorded
+    # either way; only the narration differs.
+    g.add_conditional_edges(
+        "human_review_interrupt",
+        nodes.route_after_decision,
+        {
+            "generate_final_report": "generate_final_report",
+            "ask_rejection_reason": "ask_rejection_reason",
+        },
+    )
+    g.add_edge("ask_rejection_reason", "persist_recommendations")
 
     g.add_edge("generate_final_report", "persist_recommendations")
     g.add_edge("persist_recommendations", "complete_investigation")
@@ -188,6 +201,10 @@ def _summarize(final_state: dict) -> dict:
         "forecast_results": final_state.get("forecast_results"),
         "recommendation_explanations": final_state.get("recommendation_explanations"),
         "final_report": final_state.get("final_report"),
+        # Set instead of final_report when the reviewer rejected. Omitted here it
+        # would be built correctly and then dropped on the way out, which is the
+        # quietest possible way for a feature to not exist.
+        "rejection_prompt": final_state.get("rejection_prompt"),
         "errors": final_state.get("errors", []),
     }
 

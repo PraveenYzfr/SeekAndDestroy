@@ -830,6 +830,53 @@ def generate_recommendation_explanations(state: InfrastructureRecommendationStat
     return {}
 
 
+def route_after_decision(state: InfrastructureRecommendationState) -> str:
+    """Approve writes a report. Reject asks a question.
+
+    This edge used to be unconditional - every decision, either way, ran
+    generate_final_report. So rejecting a placement produced an executive summary
+    of the thing you had just declined, which is the one document nobody wants at
+    that moment.
+    """
+    return "ask_rejection_reason" if state.get("decision") == "Reject" else "generate_final_report"
+
+
+def ask_rejection_reason(state: InfrastructureRecommendationState) -> dict:
+    """Put the question back to the reviewer instead of narrating at them.
+
+    A human rejecting a candidate the engine scored as eligible knows something
+    the engine does not. Guessing which thing - and silently re-ranking on the
+    guess - would be the same error as the summary, one step further on: it
+    replaces a document nobody asked for with a search nobody asked for.
+
+    No model is called here. The options come from the candidate's own figures.
+    """
+    from app.services.refinement import rejection_reasons
+
+    # candidate_scores, not "candidates" - there is no such key, and reading it
+    # produced an empty option list and a prompt that asked nothing. Silent,
+    # because an empty list is a valid shape.
+    candidates = state.get("candidate_scores") or state.get("eligible_candidates") or []
+    selected = state.get("selected_cluster_code")
+    candidate = None
+    if selected:
+        candidate = next((c for c in candidates if c.get("cluster_code") == selected), None)
+    if candidate is None:
+        candidate = next((c for c in candidates if c.get("eligibility_status") == "Eligible"), None)
+
+    reasons = rejection_reasons(candidate, state.get("requirement"))
+    code = (candidate or {}).get("cluster_code")
+    return {
+        "rejection_prompt": {
+            "rejected_cluster": code,
+            "question": (
+                f"Noted - {code} is out." if code else "Noted."
+            ) + " What was wrong with it? I will use that to narrow the next search.",
+            "options": reasons,
+        }
+    }
+
+
 # =============================================================================
 # 14. assess_risk_and_confidence
 # =============================================================================

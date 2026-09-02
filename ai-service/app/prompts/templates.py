@@ -104,7 +104,41 @@ FINAL_REPORT_SYSTEM = SYSTEM_BASE + (
 )
 
 
+#: Field names whose VALUES are money. Stripped from every prompt before the
+#: model sees them.
+#:
+#: Cost is hidden from every screen at Praveen's instruction - "no cost, no $,
+#: not even in the chat" - but hiding it in the UI only hid the columns. The
+#: candidate objects handed to the model still carried estimated_monthly_cost, so
+#: it narrated "an overall score of 98.33 and an estimated monthly cost of
+#: 5497.01" and the figure reached the screen inside a sentence, by a path no UI
+#: change could close.
+#:
+#: Matched on the KEY, never the value. A number cannot be identified as money by
+#: looking at it, and a filter that guessed would eventually strike a core count.
+_MONEY_KEY_PARTS = ("cost", "price", "chargeback", "saving", "spend", "budget", "rate_card")
+
+
+def _strip_money(node):
+    """Remove money-valued fields at any depth.
+
+    Cost still exists and still contributes to ranking - weight_cost is unchanged
+    - so this changes what the model can SAY, not what the engine decides.
+    """
+    if isinstance(node, dict):
+        return {
+            k: _strip_money(v)
+            for k, v in node.items()
+            if not any(part in k.lower() for part in _MONEY_KEY_PARTS)
+        }
+    if isinstance(node, list):
+        return [_strip_money(v) for v in node]
+    if isinstance(node, tuple):
+        return tuple(_strip_money(v) for v in node)
+    return node
+
+
 def with_evidence(instruction: str, evidence: dict) -> str:
     import json
 
-    return f"{instruction}\n\nEvidence (authoritative - do not alter these values):\n{json.dumps(evidence, default=str, indent=2)}"
+    return f"{instruction}\n\nEvidence (authoritative - do not alter these values):\n{json.dumps(_strip_money(evidence), default=str, indent=2)}"

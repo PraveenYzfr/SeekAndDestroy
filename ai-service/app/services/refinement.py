@@ -306,3 +306,81 @@ def rejection_follow_ups(failed_rule_ids: list[str]) -> list[str]:
     if _ALWAYS not in seen:
         seen.append(_ALWAYS)
     return seen[:3]
+
+
+# =============================================================================
+# What to ask when the REVIEWER rejects a recommendation
+# =============================================================================
+#
+# Different question from blocking_reasons above. That one explains why the
+# ENGINE rejected a cluster. This one is asked when a human rejects a cluster the
+# engine considered fine, which means the objection is information the engine did
+# not have - and the only way to get it is to ask.
+#
+# Praveen, on being shown a summary after rejecting: "why do I need a summary? we
+# should keep exploring the next options right?" Then, on being told what those
+# next options would be: "that is your assumption again - you need to ask me what
+# do you want."
+#
+# Both halves matter. Do not write a report at somebody who has just said no, and
+# do not decide on their behalf what "no" meant.
+
+
+def rejection_reasons(candidate: dict | None, requirement: dict | None) -> list[dict]:
+    """Concrete objections, phrased with this candidate's own figures.
+
+    Derived from the candidate rather than offered as a fixed menu, because a
+    generic list makes the reviewer translate their objection into our
+    vocabulary. "Only 18% headroom after this move" is recognisable; "capacity
+    concerns" is a form to fill in.
+
+    Each carries a `constraint` the re-rank can apply, so picking one narrows the
+    search rather than merely recording a mood.
+    """
+    if not candidate:
+        return []
+
+    reasons: list[dict] = []
+    projected = candidate.get("projected") or {}
+    snapshot = candidate.get("snapshot") or {}
+    subscores = candidate.get("subscores") or {}
+    code = candidate.get("cluster_code") or "this cluster"
+
+    headroom = projected.get("projected_headroom_percent")
+    if headroom is not None:
+        reasons.append({
+            "id": "more_headroom",
+            "label": f"Too tight - only {headroom}% headroom after the move",
+            "constraint": {"min_headroom_percent": float(headroom) + 10},
+        })
+
+    if candidate.get("data_center") or snapshot.get("data_center"):
+        site = candidate.get("data_center") or snapshot.get("data_center")
+        reasons.append({
+            "id": "different_site",
+            "label": f"Wrong location - not {site}",
+            "constraint": {"exclude_data_center": site},
+        })
+
+    resiliency = subscores.get("resiliency")
+    if resiliency is not None:
+        reasons.append({
+            "id": "more_resilient",
+            "label": "Concentrates risk - I want more failure-domain separation",
+            "constraint": {"min_resiliency": float(resiliency) + 10},
+        })
+
+    change = subscores.get("change_risk")
+    if change is not None and float(change) < 90:
+        reasons.append({
+            "id": "quieter_cluster",
+            "label": "Too much change activity on that cluster",
+            "constraint": {"min_change_risk": float(change) + 10},
+        })
+
+    reasons.append({
+        "id": "different_cluster",
+        "label": f"No reason - just not {code}",
+        "constraint": {"exclude_cluster_code": code},
+    })
+    return reasons[:5]

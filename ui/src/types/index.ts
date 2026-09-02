@@ -308,6 +308,15 @@ export interface RunInvestigationResult {
   /** Set when this answer is an earlier investigation shown again rather than
    *  a new one - there is no second Investigation row behind it. */
   recall_of_investigation_id?: number;
+  /** Set instead of final_report when the reviewer REJECTED a placement.
+   *  Rejecting used to produce an executive summary of the thing just declined;
+   *  it now asks what was wrong and offers constraints derived from that
+   *  candidate's own figures. */
+  rejection_prompt?: {
+    rejected_cluster?: string | null;
+    question: string;
+    options: { id: string; label: string; constraint: Record<string, unknown> }[];
+  } | null;
   review_payload?: {
     /** The richer form: one entry per shortlisted cluster, each with its
      *  capacity figures and the hosts ranked inside it. */
