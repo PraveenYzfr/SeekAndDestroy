@@ -21,27 +21,55 @@ def health():
 
 @router.get("/api/ready")
 def ready():
-    checks = {}
-    try:
-        fetch_one("SELECT 1 AS Ok")
-        checks["database"] = "ok"
-    except Exception as exc:
-        checks["database"] = f"error: {exc}"
+    """Deep readiness: database, vector store, cache.
 
-    try:
-        store = get_vector_store()
-        checks["vector_store"] = f"ok ({store.count()} documents)"
-    except Exception as exc:
-        checks["vector_store"] = f"error: {exc}"
+    THIS ENDPOINT IS PUBLIC AND UNAUTHENTICATED. routes_system is mounted at
+    main.py:88 without _auth_dep, and ui/nginx.conf proxies `location /api/` as
+    a PREFIX - so everything under /api/ reaches the internet. The root-level
+    404s for /ready and /readyz do not cover /api/ready.
 
-    try:
-        cache = get_cache_store()
-        checks["cache"] = f"ok ({cache.count()} keys)"
-    except Exception as exc:
-        checks["cache"] = f"error: {exc}"
+    A comment in nginx.conf used to state the opposite - "deep readiness is NOT
+    exposed here" - which is what stopped anyone rechecking. It has been
+    corrected alongside this change.
 
-    healthy = all(v.startswith("ok") for v in checks.values())
-    return JSONResponse(status_code=200 if healthy else 503, content={"status": "ready" if healthy else "not_ready", "checks": checks})
+    So it says WHETHER, never WHY OR HOW MUCH. It previously returned:
+
+        database:     f"error: {exc}"          full driver/pyodbc text, which
+                                               can carry the server name and the
+                                               failing statement
+        vector_store: f"ok ({count} documents)" corpus size
+        cache:        f"ok ({count} keys)"      cache population
+
+    all to an unauthenticated caller. A probe needs the status code; it has
+    never needed the prose. The diagnosis goes to the LOG, where an operator
+    reads it and a stranger does not - the same split applied to the drift
+    guard in app/api/errors.py.
+
+    The counts are not lost: /api/index/status serves them behind
+    authentication, which is where they belonged already.
+    """
+    checks: dict[str, str] = {}
+
+    def _probe(name: str, fn) -> None:
+        try:
+            fn()
+            checks[name] = "ok"
+        except Exception as exc:  # noqa: BLE001
+            # Full text to the operator, one word to the caller.
+            logger.warning(
+                "readiness.check_failed", check=name, error=str(exc)[:500]
+            )
+            checks[name] = "error"
+
+    _probe("database", lambda: fetch_one("SELECT 1 AS Ok"))
+    _probe("vector_store", lambda: get_vector_store().count())
+    _probe("cache", lambda: get_cache_store().count())
+
+    healthy = all(v == "ok" for v in checks.values())
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={"status": "ready" if healthy else "not_ready", "checks": checks},
+    )
 
 
 def _enqueue(mode: str, employee_number: str) -> dict:

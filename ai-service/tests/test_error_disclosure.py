@@ -150,3 +150,65 @@ class TestTheOptInItself:
 
     def test_problem_details_is_explicitly_public(self):
         assert _is_public(ProblemDetailsError(400, "t", "d")) is True
+
+
+class TestReadinessSaysWhetherNotWhy:
+    """/api/ready is PUBLIC and UNAUTHENTICATED, which is not obvious.
+
+    routes_system is mounted at main.py:88 without _auth_dep, and nginx proxies
+    `location /api/` as a PREFIX - so /api/ready reaches the internet. The
+    root-level 404s for /ready and /readyz never covered it.
+
+    A comment in nginx.conf asserted the opposite, and being written down is
+    what stopped anyone rechecking. It previously returned raw driver exception
+    text plus the document and cache counts to anyone who asked.
+    """
+
+    @pytest.fixture
+    def app_client(self):
+        from app.main import app
+
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_healthy_response_carries_no_counts(self, app_client):
+        """"ok (96937 documents)" tells a stranger the corpus size. A probe has
+        never needed it; /api/index/status serves it behind auth."""
+        body = app_client.get("/api/ready").text
+        assert "documents" not in body
+        assert "keys" not in body
+        assert '"ok"' in body
+
+    def test_a_failure_does_not_return_the_driver_message(self, app_client, monkeypatch):
+        """The real leak. A pyodbc failure carries the driver, the provider and
+        often the server name - handed to an unauthenticated caller."""
+        import app.api.routes_system as rs
+
+        boom = ("('08001', \"[08001][Microsoft][ODBC Driver 17 for SQL Server]"
+                "Named Pipes Provider: Could not open a connection\")")
+        monkeypatch.setattr(rs, "fetch_one", lambda *a, **k: (_ for _ in ()).throw(Exception(boom)))
+
+        response = app_client.get("/api/ready")
+        assert response.status_code == 503
+        for term in ("ODBC", "Driver 17", "Named Pipes", "SQL Server", "08001"):
+            assert term not in response.text, f"leaked: {term}"
+
+    def test_the_verdict_is_still_usable(self, app_client, monkeypatch):
+        """Hiding the reason must not make the probe useless - the caller still
+        learns WHICH dependency is down, just not what it said."""
+        import app.api.routes_system as rs
+
+        monkeypatch.setattr(rs, "fetch_one", lambda *a, **k: (_ for _ in ()).throw(Exception("x")))
+        checks = app_client.get("/api/ready").json()["checks"]
+        assert checks["database"] == "error"
+        assert checks["vector_store"] == "ok"
+
+    def test_the_operator_gets_the_reason(self, app_client, monkeypatch, capsys):
+        import app.api.routes_system as rs
+
+        monkeypatch.setattr(
+            rs, "fetch_one", lambda *a, **k: (_ for _ in ()).throw(Exception("ODBC Driver 17 exploded"))
+        )
+        app_client.get("/api/ready")
+        out = capsys.readouterr().out
+        assert "readiness.check_failed" in out
+        assert "ODBC Driver 17 exploded" in out
