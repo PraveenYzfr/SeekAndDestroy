@@ -62,36 +62,44 @@ DECLARE @login SYSNAME = 'sad_app';
 --  Derived by reading app/repositories/*.py: literal INSERT/UPDATE/DELETE
 --  statements plus execute_insert() call sites, which take the table as T("Name")
 --  and are easy to miss.
-DECLARE @writable TABLE (TableName SYSNAME, Perm VARCHAR(10), PRIMARY KEY (TableName, Perm));
-INSERT INTO @writable (TableName, Perm) VALUES
-    ('AgentAuditLog',                'INSERT'),
-    ('AgentAuditLog',                'UPDATE'),
-    ('AnswerEvaluation',             'INSERT'),
-    ('AnswerFeedback',               'INSERT'),
-    ('CallEvaluation',               'INSERT'),
-    ('CapacityRequest',              'INSERT'),
-    ('Conversation',                 'INSERT'),
-    ('Conversation',                 'UPDATE'),
-    ('ConversationTurn',             'INSERT'),
+--  Col is NULL for a table-wide grant, or a column name where the grant is
+--  deliberately narrower. sad.Employee is the case that matters: the app may
+--  set a password hash and NOTHING else on that row, so the grant is
+--  GRANT UPDATE ON sad.Employee(PasswordHash, PasswordUpdatedAt). A table-level
+--  check cannot see a column grant and reported it as missing - which would
+--  have been 'fixed' by granting UPDATE on the whole row and quietly handing
+--  the application the ability to rewrite anyone's identity.
+DECLARE @writable TABLE (TableName SYSNAME, Perm VARCHAR(10), Col SYSNAME NULL);
+INSERT INTO @writable (TableName, Perm, Col) VALUES
+    ('AgentAuditLog', 'INSERT', NULL),
+    ('AgentAuditLog', 'UPDATE', NULL),
+    ('AnswerEvaluation', 'INSERT', NULL),
+    ('AnswerFeedback', 'INSERT', NULL),
+    ('CallEvaluation', 'INSERT', NULL),
+    ('CapacityRequest', 'INSERT', NULL),
+    ('Conversation', 'INSERT', NULL),
+    ('Conversation', 'UPDATE', NULL),
+    ('ConversationTurn', 'INSERT', NULL),
     --  UPDATE only. The app sets a password hash; it does not create employees.
-    ('Employee',                     'UPDATE'),
-    ('EvalCaseResult',               'INSERT'),
-    ('EvalRun',                      'INSERT'),
-    ('EvalRun',                      'UPDATE'),
-    ('IndexRun',                     'INSERT'),
-    ('IndexRun',                     'UPDATE'),
-    ('IndexWatermark',               'INSERT'),
-    ('IndexWatermark',               'UPDATE'),
-    ('IndexWatermark',               'DELETE'),
-    ('InfrastructureRecommendation', 'INSERT'),
-    ('InfrastructureRecommendation', 'UPDATE'),
-    ('Investigation',                'INSERT'),
-    ('Investigation',                'UPDATE'),
-    ('LlmRoleOverride',              'INSERT'),
-    ('LlmRoleOverride',              'UPDATE'),
-    ('LlmRoleOverride',              'DELETE'),
-    ('RecommendationDecision',       'INSERT'),
-    ('RemediationTask',              'INSERT');
+    --  Column-scoped by design: a password hash and nothing else.
+    ('Employee', 'UPDATE', 'PasswordHash'),
+    ('EvalCaseResult', 'INSERT', NULL),
+    ('EvalRun', 'INSERT', NULL),
+    ('EvalRun', 'UPDATE', NULL),
+    ('IndexRun', 'INSERT', NULL),
+    ('IndexRun', 'UPDATE', NULL),
+    ('IndexWatermark', 'INSERT', NULL),
+    ('IndexWatermark', 'UPDATE', NULL),
+    ('IndexWatermark', 'DELETE', NULL),
+    ('InfrastructureRecommendation', 'INSERT', NULL),
+    ('InfrastructureRecommendation', 'UPDATE', NULL),
+    ('Investigation', 'INSERT', NULL),
+    ('Investigation', 'UPDATE', NULL),
+    ('LlmRoleOverride', 'INSERT', NULL),
+    ('LlmRoleOverride', 'UPDATE', NULL),
+    ('LlmRoleOverride', 'DELETE', NULL),
+    ('RecommendationDecision', 'INSERT', NULL),
+    ('RemediationTask', 'INSERT', NULL);
 
 --  A DEVELOPER BOX HAS NO sad_app. Local development connects with integrated
 --  security as the developer, so the application login legitimately does not
@@ -110,14 +118,17 @@ EXECUTE AS USER = 'sad_app';
 
 SELECT
     w.TableName,
-    w.Perm,
+    w.Perm + ISNULL(' (' + w.Col + ')', '') AS Permission,
     CASE
         WHEN OBJECT_ID('sad.' + w.TableName) IS NULL THEN 'TABLE MISSING - migration not applied'
         ELSE 'NO ' + w.Perm + ' - grant missing'
     END AS Problem
 FROM @writable w
 WHERE OBJECT_ID('sad.' + w.TableName) IS NULL
-   OR HAS_PERMS_BY_NAME('sad.' + w.TableName, 'OBJECT', w.Perm) = 0
+   OR (w.Col IS NULL
+       AND HAS_PERMS_BY_NAME('sad.' + w.TableName, 'OBJECT', w.Perm) = 0)
+   OR (w.Col IS NOT NULL
+       AND HAS_PERMS_BY_NAME('sad.' + w.TableName, 'OBJECT', w.Perm, w.Col, 'COLUMN') = 0)
 ORDER BY w.TableName, w.Perm;
 
 REVERT;
