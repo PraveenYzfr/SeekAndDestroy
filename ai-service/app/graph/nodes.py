@@ -1252,9 +1252,12 @@ def _review_message(next_steps: dict, dc_choice: dict | None) -> str:
         return head + "."
 
     if more:
+        #  Wording tracks the buttons. They say "Select ... and proceed" and
+        #  "Next choices"; prose telling the reader to approve or reject names
+        #  two controls that are no longer on the screen.
         return (
             f"Showing the top {shown} of {total} clusters that qualify. "
-            "Choose one cluster and host, then approve - or see the next few."
+            "Select one and proceed, or show more."
         )
 
     #  The exhausted case, and the one that used to be silent. Say the number
@@ -1275,7 +1278,7 @@ def _review_message(next_steps: dict, dc_choice: dict | None) -> str:
     plural = "" if total == 1 else "s"
     return (
         f"{total} cluster{plural} qualify" if total != 1 else "1 cluster qualifies"
-    ) + f" - that is all of them. Choose one cluster and host, then approve - or reject the shortlist.{tail}"
+    ) + f" - that is all of them. Select one and proceed, or ask for the next choices.{tail}"
 
 
 def build_review_payload(state: InfrastructureRecommendationState | dict) -> dict:

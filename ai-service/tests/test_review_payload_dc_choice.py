@@ -107,6 +107,7 @@ def test_a_truncated_shortlist_says_how_many_are_behind_it():
         {"eligible_total": 11, "shown": 3, "more_available": 8}, None
     )
     assert "top 3 of 11" in msg
+    assert "Select one and proceed" in msg
 
 
 def test_nothing_eligible_names_the_constraint_doing_it():
