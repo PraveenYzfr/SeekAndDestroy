@@ -153,3 +153,55 @@ def test_a_rescope_with_room_left_names_what_remains():
         },
     )
     assert "Remaining data centre(s): Denver-DC1, Phoenix-DC1." in msg
+
+
+# ---------------------------------------------------------------------------
+# The review deck is wider than the page
+#
+# The panel is GIVEN policy.review_options candidates and SHOWS
+# policy.top_clusters of them, so "show the next 3" is a slice of a list
+# already in the browser rather than a fresh walk of the estate. The narrower
+# bound still governs what the platform records as its recommendation.
+# ---------------------------------------------------------------------------
+from app.graph.nodes import build_review_payload, route_after_decision
+
+
+def _state(n: int) -> dict:
+    return {
+        "investigation_id": 1,
+        "investigation_type": "Capacity",
+        "requirement": {},
+        "candidate_scores": [
+            {
+                "cluster_code": f"c{i}",
+                "eligibility_status": "Eligible",
+                "data_center": "Denver-DC1",
+                "rank": i + 1,
+                "top_nodes": [],
+            }
+            for i in range(n)
+        ],
+    }
+
+
+def test_the_panel_is_given_more_options_than_it_shows():
+    payload = build_review_payload(_state(11))
+    assert len(payload["options"]) == 11          # the deck, capped at review_options
+    assert len(payload["top_candidates"]) == 3    # the page, and what gets persisted
+    assert payload["page_size"] == 3
+    assert payload["next_steps"]["more_available"] == 8
+
+
+def test_the_deck_is_capped_so_a_wide_estate_does_not_ship_everything():
+    payload = build_review_payload(_state(40))
+    assert len(payload["options"]) == 12
+    assert len(payload["top_candidates"]) == 3
+
+
+def test_moving_on_asks_what_would_help_rather_than_narrating_a_skipped_report():
+    """RequestMoreAnalysis is the "Next choices" button. It used to fall through
+    to generate_final_report - an executive summary of options the reviewer had
+    just declined to read."""
+    assert route_after_decision({"decision": "RequestMoreAnalysis"}) == "ask_rejection_reason"
+    assert route_after_decision({"decision": "Reject"}) == "ask_rejection_reason"
+    assert route_after_decision({"decision": "Approve"}) == "generate_final_report"

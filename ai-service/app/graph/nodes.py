@@ -674,7 +674,14 @@ def select_candidate_nodes(state: InfrastructureRecommendationState) -> dict:
     requirement = HostingRequirement.model_validate(state["requirement"])
     try:
         scored = [CandidateScore.model_validate(c) for c in state.get("candidate_scores", [])]
-        node_placement.attach_top_nodes(requirement, scored)
+        #  The whole review deck, not just the first page of it. An engineer
+        #  paging to options 4-6 must be able to pick a host there too, and a
+        #  cluster that arrives without hosts is indistinguishable from one
+        #  that has none. Costs about a second now that the drill runs in
+        #  parallel - see node_placement.attach_top_nodes.
+        node_placement.attach_top_nodes(
+            requirement, scored, top_clusters=get_settings().policy.review_options
+        )
     except Exception as exc:  # noqa: BLE001
         # Node drill-down is an enrichment, not a precondition: a failure here
         # degrades to cluster-only recommendations rather than losing the
@@ -1063,7 +1070,18 @@ def route_after_decision(state: InfrastructureRecommendationState) -> str:
     of the thing you had just declined, which is the one document nobody wants at
     that moment.
     """
-    return "ask_rejection_reason" if state.get("decision") == "Reject" else "generate_final_report"
+    #  RequestMoreAnalysis - the "Next choices" button - lands here too. It is
+    #  the reviewer declining this shortlist without condemning it, and what
+    #  they need next is the same question a rejection gets ("what was wrong
+    #  with it?") rather than an executive summary of options they just
+    #  skipped. It used to fall through to the report because this compared
+    #  against one literal, which meant the one decision in the enum that
+    #  nothing sent was also the one that behaved wrongly if anything did.
+    return (
+        "ask_rejection_reason"
+        if state.get("decision") in ("Reject", "RequestMoreAnalysis")
+        else "generate_final_report"
+    )
 
 
 def ask_rejection_reason(state: InfrastructureRecommendationState) -> dict:
@@ -1091,12 +1109,25 @@ def ask_rejection_reason(state: InfrastructureRecommendationState) -> dict:
 
     reasons = rejection_reasons(candidate, state.get("requirement"))
     code = (candidate or {}).get("cluster_code")
+    #  Two decisions arrive here and they are not the same act. Rejecting says
+    #  this cluster is wrong; "Next choices" says the reviewer has moved past
+    #  this page without condemning anything on it. Asking "what was wrong with
+    #  it?" about a shortlist nobody criticised puts words in their mouth, and
+    #  the answer feeds the next search.
+    skipped = state.get("decision") == "RequestMoreAnalysis"
+    if skipped:
+        question = (
+            "Moving on from these. What would make the next set better? "
+            "I will use that to narrow the search."
+        )
+    else:
+        question = (
+            f"Noted - {code} is out." if code else "Noted."
+        ) + " What was wrong with it? I will use that to narrow the next search."
     return {
         "rejection_prompt": {
-            "rejected_cluster": code,
-            "question": (
-                f"Noted - {code} is out." if code else "Noted."
-            ) + " What was wrong with it? I will use that to narrow the next search.",
+            "rejected_cluster": None if skipped else code,
+            "question": question,
             "options": reasons,
         }
     }
@@ -1255,11 +1286,21 @@ def build_review_payload(state: InfrastructureRecommendationState | dict) -> dic
     would drift, and the half that drifted would be the one the engineer
     actually clicks Approve on.
     """
-    top = (state.get("candidate_scores") or [])[: get_settings().policy.top_clusters]
+    policy = get_settings().policy
+    candidates = state.get("candidate_scores") or []
+    #  TWO WIDTHS, AND THEY MEAN DIFFERENT THINGS.
+    #
+    #  `page` is what the reviewer sees at once, and what this platform records
+    #  as its recommendation - persist_recommendations uses the same bound.
+    #  `deck` is what the panel is GIVEN, so "show the next 3" is a slice of a
+    #  list already in the browser rather than a twenty-second re-run of the
+    #  whole estate. Both come from one ranking; neither re-queries.
+    page = candidates[: policy.top_clusters]
+    deck = candidates[: policy.review_options]
     steps = refinement.next_steps(
-        state.get("candidate_scores") or [],
+        candidates,
         state.get("requirement") or {},
-        shown=len(top),
+        shown=len(page),
     )
     dc_choice = (
         refinement.data_center_choice(
@@ -1276,16 +1317,20 @@ def build_review_payload(state: InfrastructureRecommendationState | dict) -> dic
         # on - how big the cluster/host is, how much is already committed, and
         # what is left - because "score 99.83" is a summary of those numbers,
         # not a substitute for seeing them.
-        "options": [_review_option(c) for c in top],
+        "options": [_review_option(c) for c in deck],
         # Retained for older callers; options above is the richer form.
-        "top_candidates": [c.get("cluster_code") for c in top],
+        "top_candidates": [c.get("cluster_code") for c in page],
         "top_hosts_by_cluster": {
             c.get("cluster_code"): [n.get("host_name") for n in (c.get("top_nodes") or [])]
-            for c in top
+            for c in page
         },
         "cluster_eligibility": {
-            c.get("cluster_code"): c.get("eligibility_status") for c in top
+            c.get("cluster_code"): c.get("eligibility_status") for c in page
         },
+        #: How many of `options` to show at once. The panel pages through the
+        #: rest locally; sending it means the page size is a server policy
+        #: rather than a number the browser invented.
+        "page_size": policy.top_clusters,
         "confidence": state.get("confidence"),
         "message": _review_message(steps, dc_choice),
         # What to offer when the shortlist is not good enough. This is a search:

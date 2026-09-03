@@ -186,10 +186,11 @@ def next_steps(
 ) -> dict:
     """The choice to offer when the shortlist is thin.
 
-    Returned on every investigation but only meaningful when it is. With a full
-    shortlist of eligible options `sufficient` is True and the UI shows nothing:
-    the engineer picks one and leaves, which is the common case and should stay
-    the quiet one.
+    Returned on every investigation but only meaningful when it is. When the
+    shortlist holds everything there is, `sufficient` is True and the UI shows
+    nothing: the engineer picks one and leaves, which is the common case and
+    should stay the quiet one. It is False whenever candidates remain unseen,
+    which is what makes "show the next 3" reachable.
 
     ``offset`` is how far into the ranked list the caller already is, so "show
     me the next three" is a slice of the same match rather than a new search.
@@ -201,7 +202,15 @@ def next_steps(
     reasons = blocking_reasons(candidates)
     options = size_options(candidates, requirement or {})
     remaining = max(0, len(eligible) - (offset + shown))
-    sufficient = shown > 0 and len(eligible) >= offset + shown
+    #  SUFFICIENT MEANS "NOTHING FURTHER TO OFFER", NOT "THE PAGE IS FULL".
+    #
+    #  It used to be `len(eligible) >= offset + shown`, which is true of every
+    #  full page - including a page 1 with eight more candidates behind it. The
+    #  panel hides the whole "what next?" block when sufficient is set, so the
+    #  one case where paging matters was the exact case where the control to
+    #  page was suppressed: eleven eligible clusters, three on screen, and no
+    #  way to reach the other eight.
+    sufficient = shown > 0 and remaining == 0
 
     # The moves available, as things to press rather than prose to read. Only
     # offered when they lead somewhere: "show the next 3" with nothing left

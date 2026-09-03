@@ -480,6 +480,22 @@ class PolicySettings(_Base):
     # InfrastructureRecommendation (see app/graph/nodes.persist_recommendations).
     top_clusters: int = 3
     top_nodes_per_cluster: int = 3
+    #: How many scored clusters are DELIVERED to the review panel, as opposed to
+    #: how many are shown at once (top_clusters) or written to
+    #: InfrastructureRecommendation (also top_clusters).
+    #:
+    #: Deliberately a separate number rather than raising top_clusters, which
+    #: three other things read: what persist_recommendations writes, how many
+    #: clusters get drilled for hosts, and the API's default top_n. Raising it
+    #: to widen a UI page would have quietly changed what the platform records
+    #: as its recommendation.
+    #:
+    #: The panel pages through these locally - "show the next 3" costs nothing
+    #: because the candidates were already scored on the way here. The cost of
+    #: the wider deck is the host drill-down, which is why that runs in
+    #: parallel: 11 clusters drilled sequentially took 11.0s against 2.1s for
+    #: 3, and 3.0s in parallel. See node_placement.attach_top_nodes.
+    review_options: int = 12
     node_incident_window_days: int = 90
     node_stale_after_days: int = 7
 

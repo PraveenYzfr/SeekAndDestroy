@@ -26,9 +26,14 @@ interface ChatMessage {
   recommendations?: InfrastructureRecommendation[];
   error?: string;
   /** Set once this review has been acted on. The bubble stays in the thread as
-   *  history, so without this its Approve/Reject controls remain live and a
-   *  second click re-decides an investigation that is already closed. */
-  decided?: { decision: "Approve" | "Reject"; cluster?: string; host?: string };
+   *  history - the shortlist is the evidence behind the decision - so without
+   *  this its controls remain live and a second click re-decides an
+   *  investigation that is already closed. */
+  decided?: {
+    decision: "Approve" | "Reject" | "RequestMoreAnalysis";
+    cluster?: string;
+    host?: string;
+  };
 }
 
 /** The signed-in employee, not a hardcoded 1. The backend treats the token as
@@ -54,12 +59,29 @@ function currentEmployeeId(): number {
  *  asking where to place something is placing something new and describes it by
  *  tier, platform and size. These examples do that, name nothing that has to
  *  exist, and need no request to build.
+ *
+ *  THE SIZES ARE MEASURED, NOT PLAUSIBLE. The first version asked for a Tier-1
+ *  workload at 32 cores / 128 GB, which this estate can barely satisfy: it
+ *  returned one data centre, sometimes one cluster, and never enough to page
+ *  through. A suggested question is the first thing anyone presses, so it
+ *  should exercise the product rather than corner it. Counted against
+ *  production, by requirement shape:
+ *
+ *      Tier-1  32c / 128 GB           0-3 eligible, 1-2 DCs   (what it was)
+ *      Tier-2  16c /  64 GB / 1 TB      0 eligible
+ *      Tier-2   8c /  32 GB / 500 GB    5 eligible, 4 DCs
+ *      Tier-3   8c /  32 GB / 500 GB    6 eligible, 5 DCs
+ *      Tier-3   4c /  16 GB / 250 GB   11 eligible, 7 DCs
+ *
+ *  So the first two ask for something the estate can actually place several
+ *  ways, which is what makes "show the next 3" and "give me a different data
+ *  centre" mean anything when pressed.
  */
 function buildExamples(): string[] {
   return [
-    "Where can I host a Tier-1 production Java app needing 32 cores and 128 GB?",
-    "I need 64 cores, 512 GB RAM and 4 TB storage for a production Kubernetes workload.",
-    "Which clusters are underutilized and could be right-sized?",
+    "Where can I host a Tier-3 internal web app needing 4 cores, 16 GB RAM and 250 GB storage?",
+    "I need 8 cores, 32 GB RAM and 500 GB storage for a Tier-2 production workload.",
+    "Which 3 clusters are the best right-sizing candidates?",
   ];
 }
 
@@ -109,6 +131,20 @@ export default function Chat() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const examples = buildExamples();
   const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  /** The most recent shortlist still awaiting a decision - the only one whose
+   *  controls should do anything. Derived rather than stored: a decision, a new
+   *  answer or a superseding question all change it, and a second copy of this
+   *  fact in state is a copy that goes stale. */
+  const liveReviewId = (() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m.status === "awaiting_review" && !m.decided && m.investigationId != null) {
+        return m.investigationId;
+      }
+    }
+    return null;
+  })();
 
 
   useEffect(() => {
@@ -185,7 +221,7 @@ export default function Chat() {
 
   async function decide(
     investigationId: number,
-    decision: "Approve" | "Reject",
+    decision: "Approve" | "Reject" | "RequestMoreAnalysis",
     selectedClusterCode?: string,
     selectedHostName?: string,
   ) {
@@ -267,8 +303,27 @@ export default function Chat() {
           </div>
         )}
 
+        {/* Only the newest open shortlist is live. Older ones stay on screen -
+            they are the evidence behind what was asked next - but their
+            controls are inert, because acting on a shortlist two questions ago
+            resumes an investigation the engineer has moved past, against a
+            requirement they have since changed. The panels used to stay fully
+            clickable: `busy` went false when the follow-up landed and every
+            earlier bubble came back to life. */}
         {messages.map((m) => (
-          <ChatBubble key={m.id} message={m} onDecide={decide} onAsk={send} busy={busy} />
+          <ChatBubble
+            key={m.id}
+            message={m}
+            onDecide={decide}
+            onAsk={send}
+            busy={busy}
+            superseded={
+              m.status === "awaiting_review" &&
+              !m.decided &&
+              liveReviewId != null &&
+              m.investigationId !== liveReviewId
+            }
+          />
         ))}
         <div ref={bottomRef} />
       </div>
@@ -423,11 +478,14 @@ function ChatBubble({
   onDecide,
   onAsk,
   busy,
+  superseded,
 }: {
   message: ChatMessage;
+  /** A later question has moved past this shortlist. Shown, not removed. */
+  superseded?: boolean;
   onDecide: (
     investigationId: number,
-    decision: "Approve" | "Reject",
+    decision: "Approve" | "Reject" | "RequestMoreAnalysis",
     selectedClusterCode?: string,
     selectedHostName?: string,
   ) => void;
@@ -453,29 +511,42 @@ function ChatBubble({
         {message.status === "error" && <div className="error-box">{message.error}</div>}
 
         {message.status === "awaiting_review" && message.reviewPayload && message.investigationId != null && (
-          message.decided ? (
-            <div className="review-decided">
-              {message.decided.decision === "Approve" ? (
-                <>
-                  <span className="badge eligible">Approved</span>{" "}
-                  <strong>{message.decided.cluster}</strong>
-                  {message.decided.host && <> / <strong>{message.decided.host}</strong></>}
-                </>
-              ) : (
-                <>
-                  <span className="badge rejected">Rejected</span> the whole shortlist
-                </>
-              )}
-            </div>
-          ) : (
+          <>
+            {/* THE OUTCOME SITS ABOVE THE SHORTLIST; IT DOES NOT REPLACE IT.
+                This branch used to swap the whole panel for this one line, so
+                choosing an option deleted the table the choice was made from -
+                the figures behind a placement disappeared at the moment the
+                placement became a decision worth defending. */}
+            {message.decided && (
+              <div className="review-decided" style={{ marginBottom: 8 }}>
+                {message.decided.decision === "Approve" ? (
+                  <>
+                    <span className="badge eligible">Selected</span>{" "}
+                    <strong>{message.decided.cluster}</strong>
+                    {message.decided.host && <> / <strong>{message.decided.host}</strong></>}
+                  </>
+                ) : (
+                  <>
+                    <span className="badge rejected">Moved on</span> from this shortlist
+                  </>
+                )}
+              </div>
+            )}
             <ReviewChoice
               payload={message.reviewPayload}
               investigationId={message.investigationId}
               busy={busy}
-              decided={Boolean(message.decided)}
+              locked={Boolean(message.decided) || Boolean(superseded)}
+              lockedNote={
+                message.decided
+                  ? "Decided - kept here as the evidence behind it."
+                  : superseded
+                    ? "Superseded by a later question - kept for reference."
+                    : undefined
+              }
               onDecide={onDecide}
             />
-          )
+          </>
         )}
 
         {/* A rejection asks rather than narrates. Rendered BEFORE the report

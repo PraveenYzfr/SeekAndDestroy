@@ -183,3 +183,42 @@ class TestDataCenterChoice:
     def test_excluded_defaults_to_empty_list_not_none(self):
         result = refinement.data_center_choice([_candidate("Eligible", data_center="atl")])
         assert result["excluded_data_centers"] == []
+
+
+# ---------------------------------------------------------------------------
+# "sufficient" must mean nothing further to offer, not "the page is full"
+#
+# The panel hides the whole "what next?" block when sufficient is set, so the
+# old definition suppressed the show-more control in exactly the case it
+# existed for: a full first page with more candidates behind it.
+# ---------------------------------------------------------------------------
+
+
+def _eligible(n: int) -> list[dict]:
+    return [
+        {"cluster_code": f"c{i}", "eligibility_status": "Eligible", "data_center": "Denver-DC1"}
+        for i in range(n)
+    ]
+
+
+def test_a_full_page_with_more_behind_it_is_not_sufficient():
+    steps = refinement.next_steps(_eligible(11), {}, shown=3)
+    assert steps["eligible_total"] == 11
+    assert steps["more_available"] == 8
+    assert steps["sufficient"] is False
+    assert any(c["action"] == "show_more" for c in steps["choices"])
+
+
+def test_a_shortlist_holding_everything_is_sufficient():
+    steps = refinement.next_steps(_eligible(3), {}, shown=3)
+    assert steps["more_available"] == 0
+    assert steps["sufficient"] is True
+    assert not any(c["action"] == "show_more" for c in steps["choices"])
+
+
+def test_paging_to_the_end_becomes_sufficient():
+    """offset is how far the reader already is. Once it covers the list there
+    is nothing further, whatever the page size was."""
+    steps = refinement.next_steps(_eligible(11), {}, shown=3, offset=8)
+    assert steps["more_available"] == 0
+    assert steps["sufficient"] is True

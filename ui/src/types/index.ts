@@ -338,6 +338,10 @@ export interface RunInvestigationResult {
      *  "the cluster was rejected" rather than "the cluster has no usable
      *  hosts" - hosts are only ranked inside eligible clusters. */
     cluster_eligibility?: Record<string, string>;
+    /** How many of `options` to show at once. The panel reveals the rest
+     *  locally, so paging costs no round-trip - the candidates were all
+     *  scored in the run that produced this payload. */
+    page_size?: number;
     message: string;
     /** What to offer when the shortlist is not good enough - see
      *  app/services/refinement.py. `sufficient` is true on a normal result and

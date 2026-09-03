@@ -75,18 +75,27 @@ export default function ReviewChoice({
   payload,
   investigationId,
   busy,
-  decided,
+  locked,
+  lockedNote,
   onDecide,
 }: {
   payload: NonNullable<RunInvestigationResult["review_payload"]>;
   investigationId: number;
   busy: boolean;
-  /** True once this investigation has a decision. The parent normally swaps
-   *  this panel for a summary, but a resume that returns AwaitingReview again
-   *  re-renders it - and live buttons on a decided investigation are worse
-   *  than a disabled panel. */
-  decided?: boolean;
-  onDecide: (id: number, decision: "Approve" | "Reject", cluster?: string, host?: string) => void;
+  /** True when this panel must not be acted on again: the investigation has a
+   *  decision, or a later question has superseded it. The panel STAYS - a
+   *  shortlist is the evidence behind what happened next, and removing it on
+   *  decide left the thread with a one-line badge where the reasoning had
+   *  been. Locked, not gone. */
+  locked?: boolean;
+  /** Why it is locked, shown in the panel. Silent locking reads as a bug. */
+  lockedNote?: string;
+  onDecide: (
+    id: number,
+    decision: "Approve" | "Reject" | "RequestMoreAnalysis",
+    cluster?: string,
+    host?: string,
+  ) => void;
 }) {
   const options: ReviewOption[] = payload.options ?? [];
   const eligible = options.filter((o) => o.eligibility_status === "Eligible");
@@ -99,9 +108,23 @@ export default function ReviewChoice({
   // point of this panel, so every option shows them unless folded away.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [showRejected, setShowRejected] = useState(false);
+  //  How far into the ranked deck the engineer has read. The server sends more
+  //  options than it shows (policy.review_options against policy.top_clusters)
+  //  precisely so this costs nothing: every candidate here was already scored
+  //  by the run that produced the payload, so "show the next 3" is a slice,
+  //  not a twenty-second re-walk of the estate.
+  //
+  //  Cumulative rather than a replacing page. The engineer paging for
+  //  alternatives is comparing, and taking option 2 off the screen to show
+  //  option 5 loses the thing they were comparing against.
+  const pageSize = payload.page_size ?? 3;
+  const [revealed, setRevealed] = useState(pageSize);
   const notRecommended = options.filter((o) => o.eligibility_status !== "Eligible");
-  const visible = showRejected ? options : eligible;
+  const shownEligible = eligible.slice(0, revealed);
+  const moreEligible = Math.max(0, eligible.length - shownEligible.length);
+  const visible = showRejected ? [...shownEligible, ...notRecommended] : shownEligible;
   const steps = payload.next_steps;
+  const disabled = busy || Boolean(locked);
 
   function choose(option: ReviewOption, hostName?: string) {
     setCluster(option.cluster_code);
@@ -112,7 +135,13 @@ export default function ReviewChoice({
   // back to the flat list rather than rendering an empty panel.
   if (options.length === 0) {
     return (
-      <div>
+      <div style={locked ? { opacity: 0.6 } : undefined}>
+      {lockedNote && (
+        //  Says WHY it is inert. A greyed panel with no explanation reads as a
+        //  bug, and the two reasons it greys - decided, or superseded by a
+        //  later question - mean different things to the reader.
+        <p className="stat-label" style={{ marginBottom: 8 }}>{lockedNote}</p>
+      )}
         <p>{payload.message}</p>
         <p>{payload.top_candidates.join(", ")}</p>
         {notRecommended.length > 0 && (
@@ -128,11 +157,11 @@ export default function ReviewChoice({
       )}
 
       <div className="chat-review-actions">
-          <button disabled={busy || decided} onClick={() => onDecide(investigationId, "Approve")}>
-            Approve
+          <button disabled={disabled} onClick={() => onDecide(investigationId, "Approve")}>
+            Select and proceed
           </button>
-          <button className="danger" disabled={busy || decided} onClick={() => onDecide(investigationId, "Reject")}>
-            Reject
+          <button className="secondary" disabled={disabled} onClick={() => onDecide(investigationId, "RequestMoreAnalysis")}>
+            Next choices
           </button>
         </div>
       </div>
@@ -140,7 +169,13 @@ export default function ReviewChoice({
   }
 
   return (
-    <div>
+    <div style={locked ? { opacity: 0.6 } : undefined}>
+      {lockedNote && (
+        //  Says WHY it is inert. A greyed panel with no explanation reads as a
+        //  bug, and the two reasons it greys - decided, or superseded by a
+        //  later question - mean different things to the reader.
+        <p className="stat-label" style={{ marginBottom: 8 }}>{lockedNote}</p>
+      )}
       <p>{eligible.length === 0 && steps ? "Nothing here can take this workload." : payload.message}</p>
 
       {/* Only present when this run actually excluded a data center - see
@@ -201,13 +236,29 @@ export default function ReviewChoice({
         </div>
       )}
 
+      {/* Moves, not a reading list. These were rendered as <li> text, which
+          made "Show the next 3" a description of something the engineer could
+          not do - the backend computed next_offset and the UI dropped it.
+          show_more is answered here, from options already in the browser;
+          the rest describe a different search and are left as text because
+          this panel cannot run one. */}
       {steps && !steps.sufficient && steps.choices.length > 0 && (
         <div className="explain-box" style={{ marginBottom: 10 }}>
           <strong>What next?</strong>
           <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
             {steps.choices.map((choice, i) => (
               <li key={i}>
-                {choice.label}
+                {choice.action === "show_more" && moreEligible > 0 ? (
+                  <button
+                    className="secondary"
+                    disabled={disabled}
+                    onClick={() => setRevealed((n) => n + pageSize)}
+                  >
+                    Show {Math.min(pageSize, moreEligible)} more
+                  </button>
+                ) : (
+                  choice.label
+                )}
                 {choice.detail ? <span className="stat-label"> — {choice.detail}</span> : null}
               </li>
             ))}
@@ -232,7 +283,7 @@ export default function ReviewChoice({
                 type="radio"
                 name={`option-${investigationId}`}
                 checked={isChosen}
-                disabled={isRejected || busy}
+                disabled={isRejected || disabled}
                 onChange={() => choose(option)}
               />
               <strong>{option.cluster_code}</strong>
@@ -288,7 +339,7 @@ export default function ReviewChoice({
                             type="radio"
                             name={`host-${investigationId}-${option.cluster_code}`}
                             checked={isChosen && host === h.host_name}
-                            disabled={isRejected || busy}
+                            disabled={isRejected || disabled}
                             onChange={() => choose(option, h.host_name)}
                           />
                           <strong>{h.host_name}</strong>
@@ -314,17 +365,31 @@ export default function ReviewChoice({
       })}
 
       <div className="chat-review-actions">
-        {/* Disabled while a request is in flight: these controls stay rendered
-            after a decision (the thread keeps its history), so without this a
-            second click re-resumes an already-decided investigation. */}
+        {/* Disabled while a request is in flight, and while locked: these
+            controls stay rendered after a decision because the shortlist is
+            the evidence behind what happened next, so without this a second
+            click re-resumes an already-decided investigation.
+
+            SELECT AND PROCEED / NEXT CHOICES, not Approve / Reject. An
+            engineer reading a shortlist is choosing where to put a workload,
+            not sitting in judgement on the platform's homework, and "Reject
+            all" made declining a page of options sound like a verdict on
+            them. The recorded decision is unchanged - proceeding still writes
+            Approve, because proceeding IS the placement decision that gets
+            audited - but moving on now sends RequestMoreAnalysis, which the
+            schema has always allowed and nothing ever sent. */}
         <button
-          disabled={busy || decided || !cluster}
+          disabled={disabled || !cluster}
           onClick={() => onDecide(investigationId, "Approve", cluster, host)}
         >
-          {cluster ? `Approve ${cluster}${host ? ` / ${host}` : ""}` : "Approve"}
+          {cluster ? `Select ${cluster}${host ? ` / ${host}` : ""} and proceed` : "Select and proceed"}
         </button>
-        <button className="danger" disabled={busy || decided} onClick={() => onDecide(investigationId, "Reject")}>
-          Reject all
+        <button
+          className="secondary"
+          disabled={disabled}
+          onClick={() => onDecide(investigationId, "RequestMoreAnalysis", cluster, host)}
+        >
+          Next choices
         </button>
       </div>
     </div>
