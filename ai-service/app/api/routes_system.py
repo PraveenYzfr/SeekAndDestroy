@@ -23,16 +23,27 @@ def health():
 def ready():
     """Deep readiness: database, vector store, cache.
 
-    THIS ENDPOINT IS PUBLIC AND UNAUTHENTICATED. routes_system is mounted at
-    main.py:88 without _auth_dep, and ui/nginx.conf proxies `location /api/` as
-    a PREFIX - so everything under /api/ reaches the internet. The root-level
-    404s for /ready and /readyz do not cover /api/ready.
+    UNAUTHENTICATED, AND SHIELDED FROM THE INTERNET ONLY BY ACCIDENT.
 
-    A comment in nginx.conf used to state the opposite - "deep readiness is NOT
-    exposed here" - which is what stopped anyone rechecking. It has been
-    corrected alongside this change.
+    routes_system is mounted at main.py:88 WITHOUT _auth_dep - which is defined
+    eight lines later and applied to every other router. So anything that can
+    reach this process can call this endpoint.
 
-    So it says WHETHER, never WHY OR HOW MUCH. It previously returned:
+    It is NOT publicly reachable today, and the reason is worth stating because
+    nobody designed it: ui/nginx.conf proxies `location /api/` to
+    http://api-gateway:5090/api/, and the .NET gateway has no /api/ready route.
+    So the public URL 404s at the GATEWAY, not here. MEASURED, not inferred -
+    curl against the public host returns 404 with an empty body.
+
+    That shield is undesigned and untested. It disappears the moment the gateway
+    gains a passthrough route or someone points nginx at ai-service directly,
+    and it would disappear with no change to this file. tests/test_error_
+    disclosure.py asserts the gateway does not route it, so the shield at least
+    fails loudly.
+
+    Hence: this endpoint says WHETHER, never WHY OR HOW MUCH - defence in depth
+    rather than reliance on a proxy that happens not to forward the path. It
+    previously returned:
 
         database:     f"error: {exc}"          full driver/pyodbc text, which
                                                can carry the server name and the
@@ -40,10 +51,10 @@ def ready():
         vector_store: f"ok ({count} documents)" corpus size
         cache:        f"ok ({count} keys)"      cache population
 
-    all to an unauthenticated caller. A probe needs the status code; it has
-    never needed the prose. The diagnosis goes to the LOG, where an operator
-    reads it and a stranger does not - the same split applied to the drift
-    guard in app/api/errors.py.
+    to any unauthenticated caller INSIDE the network. A probe needs the status
+    code; it has never needed the prose. The diagnosis goes to the LOG, where an
+    operator reads it and a stranger does not - the same split applied to the
+    drift guard in app/api/errors.py.
 
     The counts are not lost: /api/index/status serves them behind
     authentication, which is where they belonged already.

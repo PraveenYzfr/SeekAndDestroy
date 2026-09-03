@@ -19,6 +19,8 @@ it costs the operator nothing.
 from __future__ import annotations
 
 import json
+import pathlib
+import re
 
 import pytest
 from fastapi import FastAPI
@@ -212,3 +214,54 @@ class TestReadinessSaysWhetherNotWhy:
         out = capsys.readouterr().out
         assert "readiness.check_failed" in out
         assert "ODBC Driver 17 exploded" in out
+
+
+class TestTheGatewayDoesNotRouteSystemPaths:
+    """The shield nobody designed, asserted so it fails loudly.
+
+    /api/ready is unauthenticated and reachable by anything that can reach the
+    ai-service process. It is not reachable from the internet, and the reason is
+    NOT this codebase: nginx proxies `location /api/` to api-gateway:5090, and
+    the .NET gateway has no api/ready route, so the public URL 404s AT THE
+    GATEWAY.
+
+    I asserted the opposite in 1cff8a2 - "public, unauthenticated, to anyone" -
+    from reading the prefix match without following proxy_pass to its target.
+    7b measured it: curl against the public host returns 404 with an empty body,
+    against a container still running the pre-fix config.
+
+    That shield is a routing table, not a security boundary, and nothing tested
+    it. This does. If someone adds a passthrough controller or points nginx at
+    ai-service directly, this fails and names what it means.
+    """
+
+    GATEWAY_CONTROLLERS = pathlib.Path(__file__).resolve().parents[2] / (
+        "api-gateway/SeekAndDestroy.Api/Controllers"
+    )
+
+    def _routes(self) -> set[str]:
+        routes: set[str] = set()
+        for cs in self.GATEWAY_CONTROLLERS.glob("*.cs"):
+            for match in re.finditer(r'\[Route\("([^"]+)"\)\]', cs.read_text(encoding="utf-8")):
+                routes.add(match.group(1).lower().rstrip("/"))
+        return routes
+
+    @pytest.mark.skipif(
+        not GATEWAY_CONTROLLERS.exists(), reason="gateway sources not present"
+    )
+    @pytest.mark.parametrize("unsafe", ["api/ready", "api/health", "api/index"])
+    def test_the_gateway_has_no_route_for_ai_service_system_paths(self, unsafe):
+        """Adding one of these to the gateway publishes an unauthenticated
+        readiness endpoint to the internet. If that is ever deliberate, it needs
+        auth on the ai-service side first."""
+        assert unsafe not in self._routes()
+
+    @pytest.mark.skipif(
+        not GATEWAY_CONTROLLERS.exists(), reason="gateway sources not present"
+    )
+    def test_the_gateway_does_have_the_routes_we_expect(self):
+        """Guards the test above from passing because the glob broke rather than
+        because the routes are absent."""
+        routes = self._routes()
+        assert "api/investigations" in routes
+        assert "api/admin" in routes
