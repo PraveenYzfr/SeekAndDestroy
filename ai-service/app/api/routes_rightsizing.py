@@ -26,8 +26,14 @@ def right_size_clusters(payload: ClusterRightSizingRequest, current: Authenticat
     else:
         clusters = cluster_repository.list_all(limit=500)
     results = [rightsizing.analyze_cluster_right_sizing(c) for c in clusters]
-    results.sort(key=lambda r: (r.classification != "Overprovisioned", -float(r.estimated_monthly_savings)))
-    return to_jsonable({"results": results})
+    #  One ranking, shared with the graph, so the API and the chat answer
+    #  cannot disagree about which cluster is the best candidate. The old key
+    #  here sorted Overprovisioned first and then by estimated_monthly_savings,
+    #  which no longer exists - and which ranked a cluster with nothing to do
+    #  (node_delta 0, floored by N-1 tolerance) above a real reduction.
+    return to_jsonable(
+        {"results": rightsizing.rank_right_sizing(to_jsonable(results))}
+    )
 
 
 @router.post("/api/right-sizing/applications")

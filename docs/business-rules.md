@@ -86,7 +86,15 @@ The same formulas run per host in `compute_node_capacity` / `compute_node_projec
 
 **Why `consumed = max(allocated, measured)`:** a cluster that has *declared* allocations (via `ApplicationHosting`) exceeding what's *actually measured* is still committed - those cores are reserved even if idle right now. A cluster with low measured use but high allocation is not truly overprovisioned; RIGHTSIZE-001 correctly refuses to call it so.
 
-**What `InfrastructureCluster.MonthlyCost` represents:** an internal chargeback/showback rate - the amount the owning support group (LOB) is billed internally for that cluster's capacity - not external vendor spend, not a literal sunk-hardware/depreciation cost. `estimate_monthly_cost()` (`app/services/placement.py`) apportions this rate to a candidate by its CPU/memory share of the cluster; `RIGHTSIZE-006`'s savings figures are the change in that internal chargeback, not a real-dollar vendor refund. This framing matters for how recommendations should be read: "estimated monthly savings" is a showback number for capacity-planning conversations with a LOB, not a number finance would recognize as cash saved.
+**What `InfrastructureCluster.MonthlyCost` represents:** an internal chargeback/showback rate - the amount the owning support group (LOB) is billed internally for that cluster's capacity - not external vendor spend, not a literal sunk-hardware/depreciation cost. `estimate_monthly_cost()` (`app/services/placement.py`) apportions this rate to a candidate by its CPU/memory share of the cluster.
+
+**Right-sizing and consolidation no longer report money at all.** They used to: `RIGHTSIZE-006` produced `estimated_monthly_savings` / `estimated_annual_savings`, and consolidation compared chargeback-per-core between two clusters. Both are gone.
+
+The reason is the estate. These data centres are **owned** - the capacity is paid for whether or not a workload sits on it - so powering a node down does not save money, and moving a workload between two racks the bank already owns changes an internal ledger entry and nothing else. A "saving" that no budget ever sees is not a saving, and presenting one invites a capacity decision to be argued on a number that will not survive contact with finance.
+
+What replaced them is what right-sizing actually produces on owned hardware: **reclaimed capacity**, as `cpu_cores_delta` and `memory_gb_delta`, signed so the same field carries both directions. The old figure could not do that - it was floored at zero for expansions, so a cluster needing five more nodes reported no financial effect at all.
+
+The cost sub-score in placement (`weight_cost`, 0.15) is a separate question and is still live: choosing between clusters that already exist is a different act from deciding whether to power one down.
 
 ## 3. Right-sizing rules (RIGHTSIZE-001 .. 006)
 

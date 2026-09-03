@@ -1011,7 +1011,19 @@ def generate_recommendation_explanations(state: InfrastructureRecommendationStat
     if itype == InvestigationType.RIGHT_SIZING:
         results = state.get("capacity_calculations", {}).get("right_sizing", [])
         llm = get_chat_model_for_role("narration")
-        flagged = [r for r in results if r["classification"] != "Healthy"][:5]
+        #  RANKED, NOT SLICED. This was
+        #      [r for r in results if r["classification"] != "Healthy"][:5]
+        #  which took the first five non-Healthy rows in whatever order
+        #  cluster_repository.list_all returned - so the clusters an engineer
+        #  read about were an artefact of SQL, not the ones worth acting on.
+        #
+        #  The filter was wrong too, in a way the slice hid. "not Healthy" is
+        #  not the same as actionable: an Overprovisioned cluster whose node
+        #  count is already floored by N-1 tolerance has node_delta 0 and
+        #  nothing to do. Those used to be eligible for all five slots.
+        ranked = rightsizing.rank_right_sizing(results)
+        actionable = [r for r in ranked if r.get("node_delta")]
+        flagged = actionable[:5]
         from app.models.rightsizing import ClusterRightSizingResult
 
         explanations = _narrate_all(
@@ -1460,8 +1472,47 @@ def generate_final_report(state: InfrastructureRecommendationState) -> dict:
         return {"final_report": report}
 
     llm = get_chat_model_for_role("reporting")
+    #  top_candidates IS THE RANKED SELECTION, whatever produced it.
+    #
+    #  It used to read candidate_scores unconditionally, which only the
+    #  Hosting/Capacity path fills. A right-sizing investigation therefore
+    #  handed the reporting model an empty list, and asked for "the best 3
+    #  candidates" it answered that the evidence contained no precomputed
+    #  top-candidates list - correctly, because this platform does not let a
+    #  model rank anything. The refusal was the guard working; the empty list
+    #  was the bug behind it.
+    top_candidates = state.get("candidate_scores", [])[:5]
+    right_sizing_summary = None
+    if itype == InvestigationType.RIGHT_SIZING:
+        all_results = (state.get("capacity_calculations") or {}).get("right_sizing") or []
+        ranked = rightsizing.rank_right_sizing(all_results)
+        actionable = [r for r in ranked if r.get("node_delta")]
+        top_candidates = actionable[:5]
+        #  THE DENOMINATORS, so a top-5 cannot pass for the whole picture.
+        #
+        #  Reductions outrank expansions in rank_right_sizing, so on an estate
+        #  with plenty of savings a bare top 5 could be all reductions and an
+        #  engineer would never learn that eleven clusters are heading for
+        #  their ceiling. Counting them here is what stops the ranking from
+        #  hiding the risk it deprioritises.
+        #
+        #  "Classified but not actionable" is its own number and not an
+        #  oversight: an Overprovisioned cluster already floored by N-1
+        #  tolerance has nothing to do, and saying so is a better answer than
+        #  either listing it or silently dropping it.
+        right_sizing_summary = {
+            "clusters_analysed": len(all_results),
+            "reductions_available": sum(1 for r in ranked if (r.get("node_delta") or 0) < 0),
+            "expansions_needed": sum(1 for r in ranked if (r.get("node_delta") or 0) > 0),
+            "flagged_but_no_change_possible": sum(
+                1 for r in ranked
+                if not r.get("node_delta") and r.get("classification") != "Healthy"
+            ),
+            "healthy": sum(1 for r in ranked if r.get("classification") == "Healthy"),
+        }
     evidence = {
-        "top_candidates": state.get("candidate_scores", [])[:5],
+        "top_candidates": top_candidates,
+        "right_sizing_summary": right_sizing_summary,
         "explanations": state.get("recommendation_explanations", []),
         "confidence": state.get("confidence"),
         "forecast_results": state.get("forecast_results"),

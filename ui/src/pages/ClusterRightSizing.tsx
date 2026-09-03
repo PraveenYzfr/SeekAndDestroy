@@ -58,14 +58,19 @@ export default function ClusterRightSizing() {
               <div>{r.current_node_count} → {r.recommended_node_count}</div>
             </div>
             <div>
-              {/* Node change, not currency. The two savings figures that were
-                  here are still returned by the API and still computed from
-                  sad.InfrastructureCluster.MonthlyCost; they are only hidden.
-                  Node delta is the unit the recommendation is actually made in -
-                  right-sizing decides a node count, and the money was a
-                  derived restatement of that one number. */}
+              {/* Node change and the capacity it moves. The two savings
+                  figures that used to be here were hidden from this screen
+                  first and only removed from the platform later - they were
+                  still computed, still returned by the API, and still the key
+                  the API sorted "best candidate" by. Gone now: the data centres
+                  are owned, so a node powered down returns cores, not money. */}
               <div className="stat-label">Node change</div>
               <div>{r.node_delta > 0 ? `+${r.node_delta}` : r.node_delta}</div>
+              <div className="stat-label" style={{ marginTop: 6 }}>Capacity</div>
+              <div>
+                {r.cpu_cores_delta > 0 ? "+" : ""}{r.cpu_cores_delta} cores,{" "}
+                {r.memory_gb_delta > 0 ? "+" : ""}{r.memory_gb_delta} GB
+              </div>
             </div>
           </div>
           <p style={{ marginTop: 10, fontSize: 13 }}>{r.rationale}</p>

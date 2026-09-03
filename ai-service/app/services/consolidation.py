@@ -16,17 +16,11 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.models.entities import CmdbApplication, InfrastructureCluster
+from app.models.entities import CmdbApplication
 from app.models.rightsizing import ConsolidationCandidate
 from app.repositories import cluster_repository, hosting_repository
 from app.scoring.subscores import round2
 from app.services import placement, rightsizing
-
-
-def _cost_per_cpu_unit(cluster: InfrastructureCluster) -> Decimal:
-    if cluster.TotalCpuCores == 0:
-        return Decimal("0")
-    return cluster.MonthlyCost / cluster.TotalCpuCores
 
 
 def evaluate_consolidation_for_application(app: CmdbApplication) -> ConsolidationCandidate | None:
@@ -44,7 +38,7 @@ def evaluate_consolidation_for_application(app: CmdbApplication) -> Consolidatio
             application_id=app.ApplicationId, application_code=app.ApplicationCode,
             current_cluster_code=current_cluster.ClusterCode, target_cluster_code="",
             reason="Current cluster is not overprovisioned; no consolidation benefit identified.",
-            estimated_monthly_savings=Decimal("0.00"), blocking_constraints=[], feasible=False,
+            reclaimed_cpu_cores=Decimal("0.00"), blocking_constraints=[], feasible=False,
         )
 
     requirement = placement.requirement_for_application(app)
@@ -62,9 +56,18 @@ def evaluate_consolidation_for_application(app: CmdbApplication) -> Consolidatio
         if len(existing_hosting) < 1:
             continue
 
-        current_rate = _cost_per_cpu_unit(current_cluster)
-        target_rate = _cost_per_cpu_unit(target_cluster)
-        savings = round2(max(Decimal("0"), (current_rate - target_rate)) * app.CpuRequirement)
+        #  What the source cluster gets back. The figure here used to be a
+        #  monthly saving from the difference in MonthlyCost per core between
+        #  the two clusters - a comparison of two internal chargeback rates for
+        #  hardware the bank owns either way, so moving a workload between them
+        #  changed a ledger entry and nothing else. Cores freed is the thing
+        #  that is actually true after the move.
+        #
+        #  Target selection never used the rate: the loop takes the first
+        #  eligible candidate that already hosts other workloads. Dropping the
+        #  cost comparison therefore changes what is REPORTED, not what is
+        #  CHOSEN.
+        reclaimed = round2(app.CpuRequirement)
 
         return ConsolidationCandidate(
             application_id=app.ApplicationId, application_code=app.ApplicationCode,
@@ -74,9 +77,9 @@ def evaluate_consolidation_for_application(app: CmdbApplication) -> Consolidatio
                 f"(CPU {current_sizing.snapshot.current_cpu_utilization_percent}%, "
                 f"memory {current_sizing.snapshot.current_memory_utilization_percent}%); "
                 f"{target_cluster.ClusterCode} is eligible, already hosts {len(existing_hosting)} other "
-                f"workload(s), and offers a lower cost per CPU core."
+                f"workload(s), and has the headroom to take this one."
             ),
-            estimated_monthly_savings=savings, blocking_constraints=[], feasible=True,
+            reclaimed_cpu_cores=reclaimed, blocking_constraints=[], feasible=True,
         )
 
     blocking = []
@@ -88,7 +91,7 @@ def evaluate_consolidation_for_application(app: CmdbApplication) -> Consolidatio
         application_id=app.ApplicationId, application_code=app.ApplicationCode,
         current_cluster_code=current_cluster.ClusterCode, target_cluster_code="",
         reason="No eligible, already-utilized consolidation target found.",
-        estimated_monthly_savings=Decimal("0.00"), blocking_constraints=blocking, feasible=False,
+        reclaimed_cpu_cores=Decimal("0.00"), blocking_constraints=blocking, feasible=False,
     )
 
 

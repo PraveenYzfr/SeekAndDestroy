@@ -7,7 +7,7 @@ this module ever calls the LLM. See docs/business-rules.md for the formulas.
 from __future__ import annotations
 
 import math
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from app.config import get_settings
 from app.models.entities import CmdbApplication, InfrastructureCluster
@@ -58,7 +58,6 @@ def analyze_cluster_right_sizing(cluster: InfrastructureCluster) -> ClusterRight
 
     per_node_cpu = cluster.TotalCpuCores / active_nodes
     per_node_mem = cluster.TotalMemoryGb / active_nodes
-    monthly_cost_per_node = round2(cluster.MonthlyCost / active_nodes)
 
     risks: list[str] = []
     node_delta = 0
@@ -122,8 +121,13 @@ def analyze_cluster_right_sizing(cluster: InfrastructureCluster) -> ClusterRight
     if cluster.LifecycleStatus == "Deprecated":
         risks.append("Cluster lifecycle status is Deprecated.")
 
-    monthly_savings = round2(monthly_cost_per_node * Decimal(-node_delta)) if node_delta < 0 else Decimal("0.00")
-    annual_savings = round2(monthly_savings * Decimal("12"))
+    #  Signed, both directions, no floor. The money version of these two lines
+    #  computed a saving only when node_delta < 0 and returned 0.00 otherwise,
+    #  so an expansion reported no financial effect at all. Capacity has no
+    #  such asymmetry: removing two nodes frees exactly what adding two would
+    #  consume, and the sign carries which it is.
+    cpu_cores_delta = round2(per_node_cpu * Decimal(node_delta))
+    memory_gb_delta = round2(per_node_mem * Decimal(node_delta))
 
     return ClusterRightSizingResult(
         cluster_id=cluster.ClusterId,
@@ -133,12 +137,81 @@ def analyze_cluster_right_sizing(cluster: InfrastructureCluster) -> ClusterRight
         current_node_count=active_nodes,
         recommended_node_count=recommended_nodes,
         node_delta=node_delta,
-        monthly_cost_per_node=monthly_cost_per_node,
-        estimated_monthly_savings=monthly_savings,
-        estimated_annual_savings=annual_savings,
+        cpu_cores_delta=cpu_cores_delta,
+        memory_gb_delta=memory_gb_delta,
         risks=risks,
         rationale=rationale,
     )
+
+
+def rank_right_sizing(results: list[dict]) -> list[dict]:
+    """A total order over right-sizing findings, worth-acting-on first.
+
+    WHY THIS EXISTS. Hosting and Capacity go through
+    app.scoring.engine.rank_candidates, which promises "score desc, cost asc,
+    cluster_code asc. No ties, ever." Right-sizing had no equivalent, and two
+    things went wrong for want of one.
+
+    Narration picked its subjects with a bare slice - the first five
+    non-Healthy rows in whatever order cluster_repository.list_all returned -
+    so the clusters an engineer read about were an artefact of SQL. And the
+    final report reads top_candidates, which only the Hosting path fills, so
+    "which 3 clusters are the best right-sizing candidates?" met an empty list
+    and the reporting model correctly refused to invent one. The refusal was
+    the guard working; the missing ranking was the defect.
+
+    RANKED ON RECLAIMED CAPACITY, NOT MONEY. The first version of this
+    function sorted by estimated_monthly_savings, which no longer exists - see
+    the note in app/models/rightsizing.py. These data centres are owned, so
+    the capacity is paid for whether or not anything runs on it, and there was
+    no saving to sort by. Nodes and cores are what right-sizing actually
+    moves.
+
+    ACTIONABLE IS NOT THE SAME AS NOT-HEALTHY. A cluster can be classified
+    Overprovisioned and still have node_delta == 0, because the recommended
+    count is floored by N-1 failure tolerance and by node_failure_tolerance+1.
+    It is genuinely underused and there is genuinely nothing to do about it.
+    Ranking those beside real candidates is how a top-3 ends up listing three
+    clusters nobody can act on. They are kept, not dropped - "why is this not
+    on the list" deserves an answer - but they sort last, exactly as rejected
+    candidates do in the hosting ranker.
+
+    THE ORDER:
+
+        1. actionable (node_delta != 0) before the rest
+        2. reductions before expansions. Both are real findings, but "best
+           right-sizing candidate" asks which capacity can be handed back.
+        3. size of the change, largest first - nodes, then cores as the
+           tie-break, because two clusters can free the same node count and
+           very different capacity.
+        4. cluster_code, so the order is total and a re-run is identical.
+
+    Expansions therefore sort after every reduction, which is a real cost: a
+    cluster approaching its ceiling is a risk, and risk is not less urgent
+    than reclaimed capacity. What stops the ranking from hiding it is that the
+    caller states the counts of each rather than showing a bare top 5 - see
+    app.graph.nodes.generate_final_report.
+
+    Takes dicts because that is what lives in the graph state
+    (capacity_calculations["right_sizing"] is to_jsonable'd). Missing or null
+    fields sort last rather than raising: a partial row is a reason to rank it
+    low, not to fail an investigation that has 255 good ones.
+    """
+    def key(r: dict) -> tuple:
+        delta = r.get("node_delta") or 0
+        try:
+            cores = Decimal(str(r.get("cpu_cores_delta") or "0"))
+        except (InvalidOperation, ValueError):
+            cores = Decimal("0")
+        return (
+            0 if delta else 1,      # actionable first
+            0 if delta < 0 else 1,  # reductions before expansions
+            -abs(Decimal(delta)),   # biggest change first, either direction
+            -abs(cores),
+            str(r.get("cluster_code") or ""),
+        )
+
+    return sorted(results, key=key)
 
 
 def analyze_application_right_sizing(app: CmdbApplication) -> ApplicationRightSizingResult | None:
@@ -169,8 +242,8 @@ def analyze_application_right_sizing(app: CmdbApplication) -> ApplicationRightSi
             recommended_memory_gb=hosting.AllocatedMemoryGb,
             recommended_storage_gb=hosting.AllocatedStorageGb,
             classification="RightSized",
-            estimated_monthly_savings=Decimal("0.00"),
-            estimated_annual_savings=Decimal("0.00"),
+            cpu_cores_delta=Decimal("0.00"),
+            memory_gb_delta=Decimal("0.00"),
             rationale="No usage history available; keeping current allocation.",
         )
 
@@ -215,12 +288,12 @@ def analyze_application_right_sizing(app: CmdbApplication) -> ApplicationRightSi
 
     cpu_delta = hosting.AllocatedCpuCores - recommended_cpu
     mem_delta = hosting.AllocatedMemoryGb - recommended_mem
-    monthly_savings = Decimal("0.00")
-    if cluster and classification == "OverAllocated":
-        cpu_share_saved = cpu_delta / cluster.TotalCpuCores if cluster.TotalCpuCores else Decimal("0")
-        mem_share_saved = mem_delta / cluster.TotalMemoryGb if cluster.TotalMemoryGb else Decimal("0")
-        share_saved = max(cpu_share_saved, mem_share_saved, Decimal("0"))
-        monthly_savings = round2(cluster.MonthlyCost * share_saved)
+    #  The allocation change itself, signed the same way as the cluster result:
+    #  negative hands capacity back, positive asks for more. This replaced a
+    #  currency figure that apportioned the cluster's internal chargeback rate
+    #  by the share of CPU or memory released - a share of a number that does
+    #  not change when the workload shrinks, because the hardware is owned and
+    #  already paid for.
 
     return ApplicationRightSizingResult(
         application_id=app.ApplicationId,
@@ -236,7 +309,7 @@ def analyze_application_right_sizing(app: CmdbApplication) -> ApplicationRightSi
         recommended_memory_gb=recommended_mem,
         recommended_storage_gb=recommended_storage,
         classification=classification,
-        estimated_monthly_savings=monthly_savings,
-        estimated_annual_savings=round2(monthly_savings * Decimal("12")),
+        cpu_cores_delta=round2(-cpu_delta),
+        memory_gb_delta=round2(-mem_delta),
         rationale=rationale,
     )

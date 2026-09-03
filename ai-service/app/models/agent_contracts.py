@@ -115,7 +115,17 @@ class RightSizingExplanation(BaseModel):
     classification: str
     summary: str
     recommended_action: str
-    estimated_monthly_savings: Optional[float] = None
+    #  estimated_monthly_savings was HERE, on the model's own output contract,
+    #  and it was unfillable. with_evidence strips every money key from the
+    #  prompt, so the model was asked to report a figure that had just been
+    #  removed from its input - leaving null, or a number it made up and the
+    #  drift guard then rejected.
+    #
+    #  It should not have been asked for at all: the figure came from
+    #  InfrastructureCluster.MonthlyCost apportioned by node count, on hardware
+    #  the bank owns and pays for whether or not it is used, so there was no
+    #  saving to report. Capacity reclaimed is on the evidence instead; see
+    #  app/models/rightsizing.py.
 
 
 class ForecastExplanation(BaseModel):

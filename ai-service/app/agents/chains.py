@@ -127,7 +127,8 @@ def explain_cluster_right_sizing(llm: BaseChatModel, result: ClusterRightSizingR
     evidence = {
         "cluster_or_application_code": result.cluster_code,
         "classification": result.classification,
-        "estimated_monthly_savings": float(result.estimated_monthly_savings),
+        "cpu_cores_delta": float(result.cpu_cores_delta),
+        "memory_gb_delta": float(result.memory_gb_delta),
         "current_node_count": result.current_node_count,
         "recommended_node_count": result.recommended_node_count,
         "measured_cpu_percent": _num(snapshot.measured_cpu_percent),
@@ -152,7 +153,8 @@ def explain_application_right_sizing(
     evidence = {
         "cluster_or_application_code": result.application_code,
         "classification": result.classification,
-        "estimated_monthly_savings": float(result.estimated_monthly_savings),
+        "cpu_cores_delta": float(result.cpu_cores_delta),
+        "memory_gb_delta": float(result.memory_gb_delta),
         "allocated_cpu_cores": float(result.allocated_cpu_cores),
         "recommended_cpu_cores": float(result.recommended_cpu_cores),
         "rationale": result.rationale,

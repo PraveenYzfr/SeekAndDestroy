@@ -168,8 +168,12 @@ export interface ClusterRightSizingResult {
   current_node_count: number;
   recommended_node_count: number;
   node_delta: number;
-  estimated_monthly_savings: number;
-  estimated_annual_savings: number;
+  /** Capacity the node change frees (negative) or requires (positive). Replaced
+   *  estimated_monthly_savings / estimated_annual_savings: these data centres
+   *  are owned, so the capacity is paid for whether or not anything runs on
+   *  it, and powering a node down returns cores rather than money. */
+  cpu_cores_delta: number;
+  memory_gb_delta: number;
   risks: string[];
   rationale: string;
   snapshot: {
@@ -185,7 +189,8 @@ export interface ConsolidationCandidate {
   current_cluster_code: string;
   target_cluster_code: string;
   reason: string;
-  estimated_monthly_savings: number;
+  /** CPU the source cluster gets back if the move happens. */
+  reclaimed_cpu_cores: number;
   blocking_constraints: string[];
   feasible: boolean;
 }
@@ -403,7 +408,6 @@ export interface RunInvestigationResult {
     key_strengths?: string[];
     key_risks?: string[];
     recommended_action?: string;
-    estimated_monthly_savings?: number | null;
     follow_ups?: string[];
   }[];
 }
