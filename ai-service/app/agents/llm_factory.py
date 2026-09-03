@@ -400,7 +400,20 @@ def get_chat_model_for_role(role_name: str) -> BaseChatModel:
     agree.
     """
     resolved = resolve_role(role_name)
-    if resolved["source"] in ("config", "tier"):
+    if resolved["source"] == "config":
+        # ONLY "config" may take this shortcut, and the reason is exact:
+        # get_chat_model() builds from settings.provider + settings.model, which
+        # IS the config answer. It is not the tier answer.
+        #
+        # "tier" was briefly routed here too, on the reading that a tier slot is
+        # just another non-override default. It is not. Sending it here DISCARDS
+        # the slot: narration resolved to the cheap model, displayed the cheap
+        # model on the Model Settings screen, and called the costly one - so the
+        # screen and the audit log disagreed and the cheap tier existed only as
+        # a label. Measured, not reasoned: narration resolved
+        # openai/gpt-oss-20b and called openai/gpt-oss-120b. The costly roles
+        # agreed only because that slot happens to equal settings.model, which
+        # is exactly the coincidence that would have kept this hidden.
         return get_chat_model()
 
     primary = _model_for(resolved["provider"], resolved["model"])

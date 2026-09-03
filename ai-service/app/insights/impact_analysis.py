@@ -24,7 +24,24 @@ from app.repositories.base import T, fetch_one
 class UnknownCiError(ValueError):
     """Raised when a CI name/code could not be resolved to a CiId - refuses
     rather than silently walking from nothing and reporting a zero blast
-    radius that looks like a real finding."""
+    radius that looks like a real finding.
+
+    PUBLIC, and this one is a judgement rather than an obvious call. The message
+    echoes back the name the CALLER typed and nothing else, so it discloses no
+    estate data - but "no CI named X" is still an existence oracle, and someone
+    could probe names to learn what exists.
+
+    Judged acceptable because the endpoint is authenticated and a SUCCESSFUL
+    answer is a far stronger oracle than a refusal: anyone who can ask can
+    already confirm existence by getting a blast radius back. Suppressing only
+    the refusal would cost a caller the ability to spot their own typo while
+    leaving the stronger signal untouched.
+
+    If this endpoint is ever exposed unauthenticated, revisit this - the
+    reasoning above depends entirely on that.
+    """
+
+    public_detail = True
 
 
 def resolve_ci_id(name: str, class_name: str | None = None) -> int | None:

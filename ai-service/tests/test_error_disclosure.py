@@ -265,3 +265,81 @@ class TestTheGatewayDoesNotRouteSystemPaths:
         routes = self._routes()
         assert "api/investigations" in routes
         assert "api/admin" in routes
+
+
+class TestEveryValueErrorSubclassIsClassified:
+    """The regression that prompted this: internal-by-default swallowed two
+    refusals that were WRITTEN for the caller.
+
+    "Name the specific configuration item you want the blast radius for" became
+    "the request could not be processed", so a question the caller could fix
+    read as a broken platform. The rule was right; applying it without sweeping
+    the existing subclasses was not.
+
+    So the classification is asserted rather than assumed. A NEW ValueError
+    subclass fails this test until somebody decides which side it is on - which
+    is the point, because the failure mode here is silence in both directions:
+    a leaked internal figure, or a refusal nobody can act on.
+    """
+
+    #: Text written FOR the caller. Must reach them.
+    PUBLIC = {"NoCiNamedError", "UnknownCiError"}
+
+    #: Diagnostics. Must never be rendered into a response body.
+    INTERNAL = {
+        "NumberDriftError",        # carries the engine-computed figure
+        "InsightNarrationError",   # carries the ungrounded figures
+        "InsightValidationError",  # enumerates the entity/measure whitelist
+        "InvalidPasswordHash",     # never anything about a credential
+    }
+
+    def _subclasses(self):
+        import importlib
+        import pkgutil
+
+        import app
+
+        found = {}
+        for mod in pkgutil.walk_packages(app.__path__, prefix="app."):
+            try:
+                m = importlib.import_module(mod.name)
+            except Exception:  # noqa: BLE001 - optional deps must not fail the sweep
+                continue
+            for name in dir(m):
+                obj = getattr(m, name)
+                if (
+                    isinstance(obj, type)
+                    and issubclass(obj, ValueError)
+                    and obj is not ValueError
+                    and getattr(obj, "__module__", "").startswith("app.")
+                ):
+                    found[obj.__name__] = obj
+        return found
+
+    def test_no_subclass_is_left_unclassified(self):
+        found = self._subclasses()
+        unclassified = set(found) - self.PUBLIC - self.INTERNAL
+        assert not unclassified, (
+            f"Classify {sorted(unclassified)} in this test: does the message speak "
+            "to the CALLER (set public_detail = True and add to PUBLIC) or to an "
+            "OPERATOR (leave it internal and add to INTERNAL)?"
+        )
+
+    def test_caller_facing_errors_reach_the_caller(self):
+        found = self._subclasses()
+        for name in self.PUBLIC:
+            assert name in found, f"{name} disappeared - update this test"
+            assert getattr(found[name], "public_detail", False) is True, (
+                f"{name} lost public_detail, so its refusal now reads as a broken "
+                "platform rather than as a question the caller can fix"
+            )
+
+    def test_diagnostics_never_reach_the_caller(self):
+        found = self._subclasses()
+        for name in self.INTERNAL:
+            if name not in found:
+                continue
+            assert getattr(found[name], "public_detail", False) is not True, (
+                f"{name} was marked public; its message carries an internal "
+                "figure, a whitelist, or credential detail"
+            )

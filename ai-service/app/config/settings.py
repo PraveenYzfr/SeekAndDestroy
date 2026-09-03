@@ -262,7 +262,18 @@ class LlmSettings(_Base):
     #: two, and a fallback runs on the path that has ALREADY failed once - so
     #: the leg most likely to answer quickly goes first, and the sturdier one
     #: sits behind it.
-    fallback_providers: str = "gemini,openai"
+    #: THREE VENDORS, NOT TWO, and that number came from an outage rather than
+    #: from caution: on the golden run deepseek exhausted its output budget on
+    #: reasoning while openai returned 429 in the SAME investigation, so a
+    #: two-leg chain had nothing left and the answer came back as fallback text.
+    #: Three is the observed number of simultaneous failures plus one.
+    #:
+    #: groq stays in the list even though it is the primary today. A provider is
+    #: skipped automatically when it IS the primary, so this costs nothing now
+    #: and keeps the third leg for the case where the primary is pointed
+    #: elsewhere from the Model Settings screen - which is when the depth
+    #: matters most and nobody would think to come back here.
+    fallback_providers: str = "gemini,openai,groq"
     #: The model the FALLBACK provider runs.
     #:
     #: This exists because it was missing, and its absence made the whole chain

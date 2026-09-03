@@ -96,7 +96,16 @@ _STOPWORDS = frozenset(
 class NoCiNamedError(ValueError):
     """Raised when an impact question names no CI this layer can resolve -
     refuses rather than guessing a CI or silently falling through to a
-    different intent, which would answer a question nobody asked."""
+    different intent, which would answer a question nobody asked.
+
+    PUBLIC. Its text is an instruction to the person asking - "name the
+    configuration item you want the blast radius for" - and it names nothing
+    from the estate. Without this opt-in the internal-by-default rule in
+    app/api/errors.py replaced it with "the request could not be processed",
+    which turns a question the caller could FIX into one that looks broken.
+    """
+
+    public_detail = True
 
 
 def _extract_ci_name(question: str) -> str | None:

@@ -61,7 +61,14 @@ class TestTheFallbackCarriesItsOwnModel:
         of simultaneous failures plus one.
         """
         s = _settings()
-        assert s.fallback_provider_list == ["openai", "groq", "gemini"]
+        assert len(s.fallback_provider_list) == 3, s.fallback_provider_list
+        assert len(set(s.fallback_provider_list)) == 3, "three LEGS is not three VENDORS"
+        assert s.model.split("/")[0] not in s.fallback_provider_list[:1]
+        # gemini leads: a fallback runs on a path that has ALREADY failed once,
+        # so the cheapest and fastest leg goes first and the sturdier one waits
+        # behind it. Asserted as an ORDER, not as a fixed list - the vendors may
+        # be re-chosen, but "quickest first" is the property that must survive.
+        assert s.fallback_provider_list[0] == "gemini", s.fallback_provider_list
 
     def test_every_leg_carries_its_own_model(self, built):
         """The bug this class is named for, at chain scale.
@@ -73,7 +80,21 @@ class TestTheFallbackCarriesItsOwnModel:
         chain = built(_settings())
         names = [n for n, _ in chain.members]
         assert names[0] == "deepseek", "the primary leads"
-        assert names[1:] == ["openai", "groq"] or names[1:] == ["openai", "groq", "gemini"], names
+        # Asserted as PROPERTIES rather than as a fixed vendor list. The old
+        # version pinned the exact legs, so it failed when the configured chain
+        # was re-ordered - reporting a changed default as though it were the
+        # broken-model bug this class exists to catch. It also could not tell
+        # "the chain changed" from "a leg was silently dropped", and a leg IS
+        # dropped here: the fixture has no gemini credential, which is the
+        # designed skip.
+        s = _settings()
+        assert names[1:], "the chain must not be empty"
+        assert "deepseek" not in names[1:], "a provider is not its own backup"
+        for leg in names[1:]:
+            assert leg in s.fallback_provider_list, f"{leg} is not a configured leg"
+        assert names[1:] == [n for n in s.fallback_provider_list if n in names[1:]],             f"legs are out of configured order: {names[1:]}"
+        for provider, client in chain.members[1:]:
+            assert client.model == s.fallback_model_for(provider),                 f"{provider} leg asked for {client.model}, not its own model"
 
         for provider, client in chain.members:
             assert client.model, f"{provider} leg has no model"
@@ -138,9 +159,21 @@ class TestEveryRoleHasItsOwnFallback:
         chain = llm_factory.get_chat_model_for_role("planning")
         assert [n for n, _ in chain.members] == ["deepseek", "openai"]
 
-    def test_no_fallback_chosen_means_no_chain(self, monkeypatch):
-        """A fallback nobody selected is a model nobody evaluated. Filling one in
-        automatically is how an outage becomes a silent change in behaviour."""
+    def test_no_fallback_chosen_means_the_configured_chain(self, monkeypatch):
+        """POLICY REVERSED, deliberately.
+
+        This used to assert that an overridden role with no explicit fallback
+        got NO chain at all - the reasoning being that a fallback nobody
+        selected is a model nobody evaluated.
+
+        That was right about silence and wrong about what it cost. It meant
+        choosing a model on the Model Settings screen REMOVED that role's
+        resilience, so the more deliberately the platform was configured the
+        more fragile it became, and nothing on the screen said so.
+
+        The estate chain is not unevaluated: every non-overridden role already
+        answers from it. An explicit per-role fallback still wins over it - that
+        is the test above."""
         def fake_resolve(name):
             if name == "planning":
                 return {"source": "override", "provider": "deepseek", "model": "deepseek-v4-flash"}
@@ -151,7 +184,10 @@ class TestEveryRoleHasItsOwnFallback:
                             lambda: type("S", (), {"llm": _settings()})())
         llm_factory.reset_role_model_cache()
         result = llm_factory.get_chat_model_for_role("planning")
-        assert not hasattr(result, "members")
+        names = [n for n, _ in result.members]
+        assert names[0] == "deepseek", "the operator's choice still leads"
+        assert "deepseek" not in names[1:], "a provider is not its own backup"
+        assert names[1:], "an overridden role must not be left with no backup"
 
     def test_an_unbuildable_role_fallback_does_not_break_the_role(self, monkeypatch):
         def fake_resolve(name):
