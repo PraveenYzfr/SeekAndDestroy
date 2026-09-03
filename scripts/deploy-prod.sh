@@ -58,11 +58,26 @@ echo "==> 2. stage SQL where the database container can read it"
 sudo docker exec hub-sqlserver bash -c 'rm -rf /database' 2>/dev/null || true
 sudo docker cp database/. hub-sqlserver:/database/ >/dev/null
 cp scripts/preserve_credentials.sql scripts/restore_credentials.sql /tmp/ 2>/dev/null || true
+cp scripts/preserve_settings.sql scripts/restore_settings.sql /tmp/ 2>/dev/null || true
 sudo docker cp /tmp/preserve_credentials.sql hub-sqlserver:/database/ 2>/dev/null || true
 sudo docker cp /tmp/restore_credentials.sql  hub-sqlserver:/database/ 2>/dev/null || true
+sudo docker cp /tmp/preserve_settings.sql    hub-sqlserver:/database/ 2>/dev/null || true
+sudo docker cp /tmp/restore_settings.sql     hub-sqlserver:/database/ 2>/dev/null || true
 
 echo "==> 3. carry credentials OUT of the schema about to be dropped"
 run -d SeekandDestroy -h -1 -W -i /database/preserve_credentials.sql
+
+echo "==> 3a. carry the MODEL SETTINGS out too"
+# sad.LlmRoleOverride is every model assignment made on the Model Settings
+# screen, and reset.sql below drops it with everything else - it builds its DROP
+# list from sys.tables rather than naming tables, so nothing in [sad] survives.
+#
+# Losing them is silent: the platform falls back to the configured defaults and
+# answers normally, on models nobody chose. The operator finds out later, by
+# noticing the behaviour changed, and sets them again. Being asked to redo the
+# same configuration after every deploy is not a workflow, it is a bug with a
+# manual workaround.
+run -d SeekandDestroy -h -1 -W -i /database/preserve_settings.sql
 
 echo "==> 4. reset, schema, migrations, then seed - in that order"
 run -d SeekandDestroy -i /database/reset.sql  >/dev/null && echo "    reset ok"
@@ -91,6 +106,12 @@ echo "    second pass complete"
 
 echo "==> 5. restore credentials"
 run -d SeekandDestroy -h -1 -W -i /database/restore_credentials.sql
+
+echo "==> 5a. restore the model settings"
+# After the migrations, so sad.LlmRoleOverride exists to restore INTO, and after
+# the seed, so a seeded row cannot overwrite the operator's choice. The operator
+# wins over the migration - that is the whole point of the table.
+run -d SeekandDestroy -h -1 -W -i /database/restore_settings.sql
 
 echo "==> 6. re-apply grants - the reset dropped all of them"
 ( cd "$HOME/infra" && sudo docker compose up db-provision )

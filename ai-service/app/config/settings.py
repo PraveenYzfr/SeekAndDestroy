@@ -130,7 +130,13 @@ class LlmSettings(_Base):
     provider: Literal[
         "mock", "openai", "azure-openai", "ollama", "gemini", "deepseek", "groq", "anthropic"
     ] = "mock"
-    model: str = "seek-and-destroy-mock"
+    #: GROQ FOR EVERYTHING, and the model names come from the account's own
+    #: /models listing rather than from memory. I set a judge model from recall
+    #: once and it 404'd, which looks identical to a judge nobody configured.
+    #:
+    #: groq serves: groq/compound, groq/compound-mini, openai/gpt-oss-120b,
+    #: openai/gpt-oss-20b, qwen/qwen3.6-27b, qwen/qwen3.8-27b
+    model: str = "openai/gpt-oss-120b"
     temperature: float = 0.0
     #: Ceiling on generated tokens, NOT a reservation - billing is per token
     #: actually produced, so raising this costs nothing for any call that already
@@ -247,7 +253,16 @@ class LlmSettings(_Base):
     #: A two-leg chain survives ONE provider having a bad moment. Rate limits and
     #: reasoning overflows are not rare enough for that, and they are independent
     #: causes, so they co-occur at exactly the rate you would expect.
-    fallback_providers: str = "openai,groq,gemini"
+    #: GEMINI FLASH-LITE FIRST, THEN OPENAI MINI. Both are the cheap tier of a
+    #: DIFFERENT vendor to the primary, which is the property that matters: a
+    #: fallback sharing a provider with the primary fails at the same moment the
+    #: primary does, and a rate limit or an outage takes both.
+    #:
+    #: Order is deliberate. gemini flash-lite is the cheaper and faster of the
+    #: two, and a fallback runs on the path that has ALREADY failed once - so
+    #: the leg most likely to answer quickly goes first, and the sturdier one
+    #: sits behind it.
+    fallback_providers: str = "gemini,openai"
     #: The model the FALLBACK provider runs.
     #:
     #: This exists because it was missing, and its absence made the whole chain
@@ -261,7 +276,7 @@ class LlmSettings(_Base):
     #: The model for a fallback leg whose provider is not named in
     #: fallback_models below. Kept for compatibility with a single-provider
     #: chain; on a multi-provider chain it is almost always wrong.
-    fallback_model: str = "gpt-4o"
+    fallback_model: str = "gpt-4o-mini"
 
     #: Per-provider fallback models, because ONE model name cannot serve a chain
     #: of different providers.
@@ -279,10 +294,14 @@ class LlmSettings(_Base):
     #: serve it, and a real call returned 404.
     #:
     #: SAD_LLM__FALLBACK_MODELS__GROQ=... overrides one leg.
+    #: Verified against each provider's /models listing, not recalled.
+    #: groq is kept as a leg for the case where the PRIMARY has been pointed
+    #: elsewhere from the Model Settings screen - it is skipped automatically
+    #: when it is also the primary, since a provider is not its own backup.
     fallback_models: dict[str, str] = {
-        "openai": "gpt-4o",
+        "gemini": "gemini-3.5-flash-lite",
+        "openai": "gpt-4o-mini",
         "groq": "openai/gpt-oss-20b",
-        "gemini": "gemini-3.5-flash",
     }
 
     def fallback_model_for(self, provider: str) -> str:
@@ -303,10 +322,15 @@ class LlmSettings(_Base):
     # The point of the slot is bulk movement: SAD_LLM__CHEAP_PROVIDER=groq moves
     # every cheap role at once, and back again, without editing each one and
     # remembering which were changed.
-    cheap_provider: str = ""
-    cheap_model: str = ""
-    costly_provider: str = ""
-    costly_model: str = ""
+    cheap_provider: str = "groq"
+    #: TIERED, BOTH ON GROQ. cheap gets the 20b, costly the 120b - narration and
+    #: summarisation write prose around figures Python already decided and
+    #: assert_no_number_drift already validated, so a smaller model produces a
+    #: clumsier sentence rather than a wrong answer. Extraction, grounded_qa and
+    #: reporting can each be wrong in ways nothing downstream catches.
+    cheap_model: str = "openai/gpt-oss-20b"
+    costly_provider: str = "groq"
+    costly_model: str = "openai/gpt-oss-120b"
 
     #: Move individual roles between tiers without a code change:
     #: "narration=costly,grounded_qa=cheap". Generalises AutoCoder's
@@ -345,8 +369,16 @@ class LlmSettings(_Base):
     #: verdict came back as an error, which the platform records as "judge
     #: unavailable" rather than as anything alarming. A judge configured to a
     #: model that does not exist fails exactly like a judge nobody configured.
-    judge_provider: str = "groq"
-    judge_model: str = "openai/gpt-oss-20b"
+    #: THE JUDGE MUST NOT BE THE AUTHOR. With everything else on groq, a groq
+    #: judge would be self-judging on every answer - every verdict stored,
+    #: disqualified and excluded, which is exactly the state that made the
+    #: judge panels read "No data" while the judge was running perfectly.
+    #:
+    #: So the judge moves to gemini: a different vendor from the primary AND
+    #: from both fallback legs' usual role, cheap, and off the request path so
+    #: its latency costs nothing.
+    judge_provider: str = "gemini"
+    judge_model: str = "gemini-3.5-flash-lite"
 
     # -- Answer evaluation -------------------------------------------------
     #: Grade every delivered answer and keep the verdict. Off means the platform

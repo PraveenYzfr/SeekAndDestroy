@@ -356,6 +356,30 @@ def _model_for(provider: str, model: str) -> BaseChatModel:
     return build_chat_model_for_provider(provider, model_override=model)
 
 
+def _with_configured_fallbacks(primary_provider: str, primary: BaseChatModel) -> BaseChatModel:
+    """Put the configured fallback chain behind an already-built primary.
+
+    A leg that cannot be built is SKIPPED rather than fatal - no credential for
+    a backup provider must not take the primary offline too. A chain with
+    nothing constructible degrades to the primary alone, which is where it
+    started.
+    """
+    settings = get_settings().llm
+    members = [(primary_provider, primary)]
+    for name in settings.fallback_provider_list:
+        if name == primary_provider:
+            continue  # a provider is not its own backup
+        try:
+            members.append(
+                (name, build_chat_model_for_provider(name, settings.fallback_model_for(name)))
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("llm_factory.role_fallback_unavailable", provider=name, error=str(exc))
+    if len(members) == 1:
+        return primary
+    return FallbackChatModel(members=members)
+
+
 def get_chat_model_for_role(role_name: str) -> BaseChatModel:
     """The model configured for ``role_name``, with that role's own backup behind it.
 
@@ -376,16 +400,31 @@ def get_chat_model_for_role(role_name: str) -> BaseChatModel:
     agree.
     """
     resolved = resolve_role(role_name)
-    if resolved["source"] == "config":
+    if resolved["source"] in ("config", "tier"):
         return get_chat_model()
 
     primary = _model_for(resolved["provider"], resolved["model"])
     backup = resolve_role(fallback_role_name(role_name))
     if backup.get("source") != "override":
-        # No backup chosen for this role. Deliberate: a fallback nobody selected
-        # is a model nobody evaluated, and picking one automatically is how an
-        # outage becomes a quiet change in behaviour.
-        return primary
+        # NO EXPLICIT BACKUP FOR THIS ROLE - fall back to the CONFIGURED CHAIN
+        # rather than to nothing.
+        #
+        # This used to return `primary` alone, on the reasoning that a fallback
+        # nobody selected is a model nobody evaluated. That was right about
+        # silence and wrong about what it cost: choosing a model on the Model
+        # Settings screen REMOVED that role's resilience, so the more
+        # deliberately the platform was configured the more fragile it became -
+        # and nothing on the screen said so.
+        #
+        # The chain is not unevaluated. SAD_LLM__FALLBACK_PROVIDERS is a
+        # deliberate configuration - gemini flash-lite, then openai mini - and
+        # every other role already answers from it. Giving an overridden role
+        # the same chain is consistent rather than surprising.
+        #
+        # An explicit per-role fallback still wins, and the audit log records
+        # the provider that actually answered, so the screen and the record
+        # continue to agree.
+        return _with_configured_fallbacks(resolved["provider"], primary)
     try:
         secondary = _model_for(backup["provider"], backup["model"])
     except Exception as exc:  # noqa: BLE001

@@ -69,9 +69,17 @@ class TestRoleDefinitions:
 
 
 class TestResolution:
-    def test_a_role_with_no_override_follows_config(self):
+    def test_a_role_with_no_override_is_not_an_override(self):
+        """Asserts the INTENT, not the literal layer.
+
+        This read `source == "config"` and broke when the tier slots were
+        populated with groq models - narration now resolves at "tier", which is
+        correct and has nothing to do with what this test is checking. Pinning
+        the exact layer made it fail on a change that never touched overrides.
+        """
         resolved = resolve_role("narration")
-        assert resolved["source"] == "config"
+        assert resolved["source"] != "override"
+        assert resolved["provider"] and resolved["model"]
 
     def test_an_override_wins_and_says_so(self):
         repo.set_override("narration", "mock", "seek-and-destroy-mock", "E1001")
@@ -100,7 +108,9 @@ class TestResolution:
         repo.set_override("reporting", "mock", "seek-and-destroy-mock", "E1001")
         assert resolve_role("reporting")["source"] == "override"
         assert repo.clear("reporting") is True
-        assert resolve_role("reporting")["source"] == "config"
+        # Back to whatever the configuration says - tier or base config. The
+        # point is that it is no longer an override.
+        assert resolve_role("reporting")["source"] != "override"
 
     def test_reset_reports_whether_anything_was_removed(self):
         """"reset" and "was already the default" are different answers, and the
@@ -124,7 +134,11 @@ class TestResolution:
             raise RuntimeError("database unavailable")
 
         monkeypatch.setattr(repo, "as_map", boom)
-        assert resolve_role("narration")["source"] == "config"
+        resolved = resolve_role("narration")
+        # It answered at all - that is the property. Which layer answered is not
+        # what this test is about.
+        assert resolved["source"] != "override"
+        assert resolved["provider"] and resolved["model"]
 
 
 class TestProviderListing:
