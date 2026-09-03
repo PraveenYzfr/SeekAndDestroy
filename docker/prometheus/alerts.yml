@@ -42,8 +42,23 @@ groups:
       # The instrument, not the output. A judge that has silently stopped leaves
       # every quality panel showing its last good score forever, which reads as
       # health. This is the alert that says the measurement is broken.
+      # A COUNT, NOT A RATE, and the difference decides whether this can fire.
+      #
+      # 0.05/sec sustained for ten minutes is three judge failures a minute for
+      # ten minutes. This estate does not run investigations at anything like
+      # that rate, so a judge that had failed on EVERY answer all evening would
+      # never have reached the threshold. The rule described a real condition
+      # and could not observe it.
+      #
+      # "The judge failed repeatedly within an hour" is the actual condition,
+      # and it does not depend on how busy the platform happens to be.
+      #
+      # No `or vector(0)` here, deliberately, unlike JudgeNotIndependent below:
+      # an absent series means no failure has ever been recorded, and comparing
+      # nothing against > 3 correctly yields no alert. There the absent series
+      # is on the far side of an `and` and silences a condition that IS true.
       - alert: JudgeNotProducingVerdicts
-        expr: sum(rate(sad_judge_failures_total[15m])) > 0.05
+        expr: sum(increase(sad_judge_failures_total[1h])) > 3
         for: 10m
         labels:
           severity: warning
@@ -103,9 +118,23 @@ groups:
       # which is what a default configuration does: every role on the same model,
       # so the judge grades its own output and every verdict is disqualified.
       - alert: JudgeNotIndependent
+        # THIS COULD NOT FIRE IN THE STATE IT DESCRIBES.
+        #
+        # sad_judge_score_count does not exist until the judge has produced its
+        # first INDEPENDENT verdict. When every verdict is self-judged - the
+        # exact condition here - that never happens, so the right-hand side
+        # returned an EMPTY VECTOR rather than 0, the `and` matched nothing, and
+        # the rule stayed silent precisely when it was true.
+        #
+        # Worse than a missing rule, because its silence gets read as evidence
+        # that the judge is independent.
+        #
+        # `or vector(0)` makes an absent series the zero it means. Same defect,
+        # same fix, as the quality panels that read "No data" on a healthy
+        # system.
         expr: |
           sum(rate(sad_judge_excluded_total{reason="self_judged"}[30m])) > 0
-          and sum(rate(sad_judge_score_count[30m])) == 0
+          and (sum(rate(sad_judge_score_count[30m])) or vector(0)) == 0
         for: 30m
         labels:
           severity: warning

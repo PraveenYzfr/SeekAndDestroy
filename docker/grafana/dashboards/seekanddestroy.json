@@ -11,150 +11,15 @@
   },
   "panels": [
     {
-      "id": 1,
-      "title": "HTTP request rate (ai-service)",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 0
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(http_requests_total{job=\"ai-service\"}[5m])) by (handler, status)",
-          "legendFormat": "{{handler}} [{{status}}]"
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "title": "HTTP request rate (api-gateway)",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 0
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(http_requests_received_total{job=\"api-gateway\"}[5m])) by (code)",
-          "legendFormat": "status {{code}}"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "title": "Real LLM calls by provider/outcome",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 8
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_llm_calls_total[5m])) by (provider, outcome)",
-          "legendFormat": "{{provider}} [{{outcome}}]"
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "title": "Real embedding calls by provider/outcome",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 8
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_embedding_calls_total[5m])) by (provider, outcome)",
-          "legendFormat": "{{provider}} [{{outcome}}]"
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "title": "LLM fallback activations",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 16
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_llm_fallback_total[5m])) by (from_provider)",
-          "legendFormat": "from {{from_provider}}"
-        }
-      ]
-    },
-    {
-      "id": 6,
-      "title": "Narration cache hit rate",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 16
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_narration_cache_total[5m])) by (result)",
-          "legendFormat": "{{result}}"
-        }
-      ]
-    },
-    {
-      "id": 7,
-      "title": "Spend-budget denials",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 16
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_budget_denied_total[5m])) by (namespace)",
-          "legendFormat": "{{namespace}}"
-        }
-      ]
-    },
-    {
-      "id": 8,
-      "title": "Investigations created by type",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 24
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_investigations_total[5m])) by (investigation_type)",
-          "legendFormat": "{{investigation_type}}"
-        }
-      ]
-    },
-    {
-      "id": 20,
+      "id": 100,
       "type": "row",
       "title": "AI quality - was the answer right",
+      "description": "Whether the platform is producing CORRECT answers. First because a wrong answer returned successfully is this platform's characteristic failure, and every panel below this one would call that healthy.",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 0
       },
       "collapsed": false,
       "panels": []
@@ -172,7 +37,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 34
+        "y": 1
       },
       "targets": [
         {
@@ -193,6 +58,69 @@
       }
     },
     {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Fidelity score distribution",
+      "description": "A DISTRIBUTION, not a mean. An average fidelity of 0.97 can be 97 perfect answers and 3 broken ones, or 100 answers each carrying a wrong figure - those need different responses and a mean cannot tell them apart.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (le, grader) (rate(sad_fidelity_score_bucket[1h]))",
+          "legendFormat": "{{grader}} {{le}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Judge scores by dimension",
+      "description": "The LLM judge, kept separate from the deterministic graders on purpose. Graders are arithmetic; the judge is an opinion. Averaging them gives a 'quality score' that cannot be acted on, because a drop could be a fabricated figure or a model being less chatty and only one of those is an incident. p10 matters more than p50 - it is the bad tail.\n\nEMPTY? Check 'Judge verdicts excluded' to the right. Every role defaults to the same model, which makes the judge the author of what it is grading - those verdicts are stored and disqualified, never averaged in. Point the judge role at a different provider on Model Settings and this fills in.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, dimension) (rate(sad_judge_score_bucket[1h])))",
+          "legendFormat": "p50 {{dimension}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.1, sum by (le, dimension) (rate(sad_judge_score_bucket[1h])))",
+          "legendFormat": "p10 {{dimension}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
       "id": 22,
       "type": "timeseries",
       "title": "Narration checks by schema",
@@ -205,7 +133,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 34
+        "y": 9
       },
       "targets": [
         {
@@ -220,6 +148,275 @@
       ]
     },
     {
+      "id": 30,
+      "type": "stat",
+      "title": "Judge coverage",
+      "description": "Share of produced verdicts that actually counted. 0% with traffic means the judge is not independent of the authors and no quality opinion is reaching the dashboard at all.\n\n0% AND the liveness stat beside it at 0 means the judge is not running at all - a different problem from 0% with verdicts being produced, which means it is running and every verdict is disqualified.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 17
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "(sum(rate(sad_judge_score_count[1h])) or vector(0))\n  / clamp_min((sum(rate(sad_judge_score_count[1h])) or vector(0))\n      + 3 * (sum(rate(sad_judge_excluded_total[1h])) or vector(0)), 0.0001)",
+          "legendFormat": "independent"
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "type": "stat",
+      "title": "Judge verdicts, last 24h",
+      "description": "HAS THE JUDGE PRODUCED A VERDICT AT ALL. Nothing else on this dashboard separates 'no traffic' from 'the judge is broken': every quality panel goes quiet in both cases.\n\n0 while investigations are running is the signal. Read it beside Judge coverage: 0 here means no verdict was produced; a low coverage with a non-zero count here means verdicts ARE produced and are being disqualified.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 17
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(increase(sad_judge_score_count[24h])) or vector(0)",
+          "legendFormat": "verdicts"
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "type": "timeseries",
+      "title": "Judge verdicts excluded",
+      "description": "Verdicts the judge PRODUCED and that were deliberately not scored. Rising here with an empty scores panel to the left is not a broken judge - it is a judge grading its own output, which is disqualified by design because a model scores its own work high.\n\nThis panel exists because the exclusion used to be silent, and 'no data' looked identical to 'every verdict disqualified'. Those need opposite responses.\n\nReads a flat ZERO when nothing has been excluded. It used to read 'No data', which is what a judge that never ran also looks like.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (reason) (rate(sad_judge_excluded_total[15m])) or vector(0)",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Judge failures",
+      "description": "A judge that silently stops running leaves every quality panel showing its last good score forever, which reads as health. This is the panel that says the instrument itself is broken.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (reason) (rate(sad_judge_failures_total[15m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Refusals correctly not judged",
+      "description": "Replies with no investigation behind them - a greeting, a refused out-of-scope question - which are NOT judge failures.\n\nThese used to tick judge_failures_total, so correct refusals were counted as a broken judge and fed the alert that watches it. Split into their own counter rather than filtered out inside the alert, because filtering there hides them from every other reader of the metric.\n\nTwo kinds, and the set is closed by construction rather than by convention - the counter only fires when there is no investigation, and exactly two paths produce that:\n\n  Count         an estate count answered from SQL, no model called\n  Conversation  a greeting, a capability refusal, or an ask too vague\n\nRising here is not a fault. Rising here WHILE the verdict count sits at zero means real answers are going ungraded too.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (kind) (rate(sad_judge_not_applicable_total[15m])) or vector(0)",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 101,
+      "type": "row",
+      "title": "AI operations - models, fallbacks, spend",
+      "description": "What the models are doing and what they cost. A degraded provider shows here BEFORE it shows as a quality problem above.",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 3,
+      "title": "Real LLM calls by provider/outcome",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_llm_calls_total[5m])) by (provider, outcome)",
+          "legendFormat": "{{provider}} [{{outcome}}]"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Real embedding calls by provider/outcome",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_embedding_calls_total[5m])) by (provider, outcome)",
+          "legendFormat": "{{provider}} [{{outcome}}]"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "LLM fallback activations",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 38
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_llm_fallback_total[5m])) by (from_provider)",
+          "legendFormat": "from {{from_provider}}"
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "type": "timeseries",
+      "title": "Fallback activations by provider",
+      "description": "How often a primary provider failed and its backup answered. Sustained non-zero means a provider is degraded and the platform is quietly absorbing it - answers are still being produced, by a different model than the one configured.\n\nGrouped by from_provider, which is the metric's ONLY label. It grouped by 'provider' - a label that does not exist - so every provider collapsed into a single unlabelled series and the panel could not answer the question in its own title. The title said 'by role'; the metric is by provider.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 38
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (from_provider) (rate(sad_llm_fallback_total[15m])) or vector(0)",
+          "legendFormat": "{{from_provider}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Narration cache hit rate",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 38
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_narration_cache_total[5m])) by (result)",
+          "legendFormat": "{{result}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Spend-budget denials",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 46
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_budget_denied_total[5m])) by (namespace)",
+          "legendFormat": "{{namespace}}"
+        }
+      ]
+    },
+    {
       "id": 23,
       "type": "timeseries",
       "title": "Spend per hour by model",
@@ -230,9 +427,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 42
+        "w": 8,
+        "x": 8,
+        "y": 46
       },
       "targets": [
         {
@@ -263,9 +460,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 42
+        "w": 8,
+        "x": 16,
+        "y": 46
       },
       "targets": [
         {
@@ -286,181 +483,67 @@
       }
     },
     {
-      "id": 25,
-      "type": "timeseries",
-      "title": "Fidelity score distribution",
-      "description": "A DISTRIBUTION, not a mean. An average fidelity of 0.97 can be 97 perfect answers and 3 broken ones, or 100 answers each carrying a wrong figure - those need different responses and a mean cannot tell them apart.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+      "id": 102,
+      "type": "row",
+      "title": "Platform - traffic and throughput",
+      "description": "The web tier. Healthy here says nothing about whether the answers were right, which is why it is last rather than first.",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 54
       },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 8,
+      "title": "Investigations created by type",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 55
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_investigations_total[5m])) by (investigation_type)",
+          "legendFormat": "{{investigation_type}}"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "title": "HTTP request rate (ai-service)",
+      "type": "timeseries",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 50
+        "y": 63
       },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (le, grader) (rate(sad_fidelity_score_bucket[1h]))",
-          "legendFormat": "{{grader}} {{le}}",
-          "refId": "A"
+          "expr": "sum(rate(http_requests_total{job=\"ai-service\"}[5m])) by (handler, status)",
+          "legendFormat": "{{handler}} [{{status}}]"
         }
       ]
     },
     {
-      "id": 26,
+      "id": 2,
+      "title": "HTTP request rate (api-gateway)",
       "type": "timeseries",
-      "title": "Judge scores by dimension",
-      "description": "The LLM judge, kept separate from the deterministic graders on purpose. Graders are arithmetic; the judge is an opinion. Averaging them gives a 'quality score' that cannot be acted on, because a drop could be a fabricated figure or a model being less chatty and only one of those is an incident. p10 matters more than p50 - it is the bad tail.\n\nEMPTY? Check 'Judge verdicts excluded' to the right. Every role defaults to the same model, which makes the judge the author of what it is grading - those verdicts are stored and disqualified, never averaged in. Point the judge role at a different provider on Model Settings and this fills in.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 50
+        "y": 63
       },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "histogram_quantile(0.5, sum by (le, dimension) (rate(sad_judge_score_bucket[1h])))",
-          "legendFormat": "p50 {{dimension}}",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "histogram_quantile(0.1, sum by (le, dimension) (rate(sad_judge_score_bucket[1h])))",
-          "legendFormat": "p10 {{dimension}}",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "id": 27,
-      "type": "timeseries",
-      "title": "Judge failures",
-      "description": "A judge that silently stops running leaves every quality panel showing its last good score forever, which reads as health. This is the panel that says the instrument itself is broken.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 12,
-        "x": 0,
-        "y": 58
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (reason) (rate(sad_judge_failures_total[15m]))",
-          "legendFormat": "{{reason}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 28,
-      "type": "timeseries",
-      "title": "Fallback activations by role",
-      "description": "How often a primary provider failed and its backup answered. Sustained non-zero means a provider is degraded and the platform is quietly absorbing it - answers are still being produced, by a different model than the one configured.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 12,
-        "x": 12,
-        "y": 58
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (provider) (rate(sad_llm_fallback_total[15m]))",
-          "legendFormat": "{{provider}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 29,
-      "type": "timeseries",
-      "title": "Judge verdicts excluded",
-      "description": "Verdicts the judge PRODUCED and that were deliberately not scored. Rising here with an empty scores panel to the left is not a broken judge - it is a judge grading its own output, which is disqualified by design because a model scores its own work high.\n\nThis panel exists because the exclusion used to be silent, and 'no data' looked identical to 'every verdict disqualified'. Those need opposite responses.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 12,
-        "x": 0,
-        "y": 66
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum by (reason) (rate(sad_judge_excluded_total[15m]))",
-          "legendFormat": "{{reason}}"
-        }
-      ]
-    },
-    {
-      "id": 30,
-      "type": "stat",
-      "title": "Judge coverage",
-      "description": "Share of produced verdicts that actually counted. 0% with traffic means the judge is not independent of the authors and no quality opinion is reaching the dashboard at all.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 12,
-        "x": 12,
-        "y": 66
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum(rate(sad_judge_score_count[1h])) / clamp_min(sum(rate(sad_judge_score_count[1h])) + 3 * sum(rate(sad_judge_excluded_total[1h])), 0.0001)",
-          "legendFormat": "independent"
+          "expr": "sum(rate(http_requests_received_total{job=\"api-gateway\"}[5m])) by (code)",
+          "legendFormat": "status {{code}}"
         }
       ]
     }
