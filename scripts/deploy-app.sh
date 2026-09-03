@@ -139,6 +139,35 @@ SELECT CONCAT('    apps=',       (SELECT COUNT(*) FROM sad.CmdbApplication),
 SELECT CONCAT('    credentials=',(SELECT COUNT(*) FROM sad.Employee WHERE PasswordHash IS NOT NULL));
 VERIFY
 
+echo "==> 6b. GRANT DRIFT - can the app write everywhere it writes?"
+# Step 7 below tests two tables by name. This asks the same question of EVERY
+# table the repository layer writes to, from one list in the repo.
+#
+# It exists because a missing grant is SILENT here: every write path swallows its
+# exception by design, so a table can be created, written to on every request,
+# and stay permanently empty while the platform reports itself healthy. That has
+# happened three times - AnswerEvaluation (018), EvalRun (020), RemediationTask
+# (021) - and each was found by a person noticing missing data, days later.
+#
+# Structural cause: GRANT SELECT is schema-wide, INSERT is per table, and there
+# are TWO files claiming to issue them. This repository has docker/db-init.sh;
+# production runs ~/infra/provision-databases.sh, which is not version
+# controlled and has been hand-patched. Until those become one file, this check
+# is what stands between a new table and another silent hole.
+#
+# Non-fatal on purpose. A grant gap must not strand a deploy that is otherwise
+# good - the code is already built and the alternative is a half-deployed
+# system. It shouts instead.
+if ! runq < "$REPO/database/verify_grants.sql" | tee /tmp/grantcheck.out; then
+    echo "    grant check could not run - investigate before trusting step 7"
+elif grep -qiE "NO INSERT|TABLE MISSING" /tmp/grantcheck.out; then
+    echo "    ^^ GRANT DRIFT: the tables above are unwritable by the app login."
+    echo "       Add them to ~/infra/provision-databases.sh on the VM and re-run"
+    echo "       'docker compose up db-provision' from ~/infra."
+else
+    echo "    every writable table is writable"
+fi
+
 echo "==> 7. WRITE TEST - existence is not writability"
 # The check that caught migrations 020 and 021 shipping unwritable. A table can
 # be created, present, queryable and still reject every INSERT, and the one
