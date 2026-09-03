@@ -160,7 +160,7 @@ echo "==> 6b. GRANT DRIFT - can the app write everywhere it writes?"
 # system. It shouts instead.
 if ! runq < "$REPO/database/verify_grants.sql" | tee /tmp/grantcheck.out; then
     echo "    grant check could not run - investigate before trusting step 7"
-elif grep -qiE "NO INSERT|TABLE MISSING" /tmp/grantcheck.out; then
+elif grep -qiE "grant missing|TABLE MISSING" /tmp/grantcheck.out; then
     echo "    ^^ GRANT DRIFT: the tables above are unwritable by the app login."
     echo "       Add them to ~/infra/provision-databases.sh on the VM and re-run"
     echo "       'docker compose up db-provision' from ~/infra."

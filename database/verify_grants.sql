@@ -51,25 +51,47 @@ DECLARE @login SYSNAME = 'sad_app';
 --  Every table the repository layer issues INSERT, UPDATE or DELETE against,
 --  taken from app/repositories/*.py. Reads are covered by the schema-wide
 --  GRANT SELECT and are deliberately not listed.
-DECLARE @writable TABLE (TableName SYSNAME PRIMARY KEY);
-INSERT INTO @writable (TableName) VALUES
-    ('AgentAuditLog'),
-    ('AnswerEvaluation'),
-    ('AnswerFeedback'),
-    ('CallEvaluation'),
-    ('CapacityRequest'),
-    ('Conversation'),
-    ('ConversationTurn'),
-    ('Employee'),
-    ('EvalCaseResult'),
-    ('EvalRun'),
-    ('IndexRun'),
-    ('IndexWatermark'),
-    ('InfrastructureRecommendation'),
-    ('Investigation'),
-    ('LlmRoleOverride'),
-    ('RecommendationDecision'),
-    ('RemediationTask');
+--  Every table the repository layer writes, and WHICH operation it needs.
+--
+--  Per-permission, not a blanket INSERT check. The first version demanded INSERT
+--  everywhere and immediately reported sad.Employee as broken - the app only ever
+--  UPDATEs it, to set a password hash, and granting INSERT would have handed the
+--  application the ability to create employees to satisfy a check that was wrong.
+--  A verifier that provokes over-granting is worse than none.
+--
+--  Derived by reading app/repositories/*.py: literal INSERT/UPDATE/DELETE
+--  statements plus execute_insert() call sites, which take the table as T("Name")
+--  and are easy to miss.
+DECLARE @writable TABLE (TableName SYSNAME, Perm VARCHAR(10), PRIMARY KEY (TableName, Perm));
+INSERT INTO @writable (TableName, Perm) VALUES
+    ('AgentAuditLog',                'INSERT'),
+    ('AgentAuditLog',                'UPDATE'),
+    ('AnswerEvaluation',             'INSERT'),
+    ('AnswerFeedback',               'INSERT'),
+    ('CallEvaluation',               'INSERT'),
+    ('CapacityRequest',              'INSERT'),
+    ('Conversation',                 'INSERT'),
+    ('Conversation',                 'UPDATE'),
+    ('ConversationTurn',             'INSERT'),
+    --  UPDATE only. The app sets a password hash; it does not create employees.
+    ('Employee',                     'UPDATE'),
+    ('EvalCaseResult',               'INSERT'),
+    ('EvalRun',                      'INSERT'),
+    ('EvalRun',                      'UPDATE'),
+    ('IndexRun',                     'INSERT'),
+    ('IndexRun',                     'UPDATE'),
+    ('IndexWatermark',               'INSERT'),
+    ('IndexWatermark',               'UPDATE'),
+    ('IndexWatermark',               'DELETE'),
+    ('InfrastructureRecommendation', 'INSERT'),
+    ('InfrastructureRecommendation', 'UPDATE'),
+    ('Investigation',                'INSERT'),
+    ('Investigation',                'UPDATE'),
+    ('LlmRoleOverride',              'INSERT'),
+    ('LlmRoleOverride',              'UPDATE'),
+    ('LlmRoleOverride',              'DELETE'),
+    ('RecommendationDecision',       'INSERT'),
+    ('RemediationTask',              'INSERT');
 
 --  A DEVELOPER BOX HAS NO sad_app. Local development connects with integrated
 --  security as the developer, so the application login legitimately does not
@@ -88,14 +110,15 @@ EXECUTE AS USER = 'sad_app';
 
 SELECT
     w.TableName,
+    w.Perm,
     CASE
         WHEN OBJECT_ID('sad.' + w.TableName) IS NULL THEN 'TABLE MISSING - migration not applied'
-        ELSE 'NO INSERT - grant missing'
+        ELSE 'NO ' + w.Perm + ' - grant missing'
     END AS Problem
 FROM @writable w
 WHERE OBJECT_ID('sad.' + w.TableName) IS NULL
-   OR HAS_PERMS_BY_NAME('sad.' + w.TableName, 'OBJECT', 'INSERT') = 0
-ORDER BY w.TableName;
+   OR HAS_PERMS_BY_NAME('sad.' + w.TableName, 'OBJECT', w.Perm) = 0
+ORDER BY w.TableName, w.Perm;
 
 REVERT;
 GO
