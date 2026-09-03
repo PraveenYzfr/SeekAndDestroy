@@ -193,3 +193,20 @@ count_routing_total = Counter(
     # every deploy.
     ["outcome"],
 )
+
+judge_not_applicable_total = Counter(
+    "sad_judge_not_applicable_total",
+    "Answers deliberately not graded because no investigation stood behind them",
+    # A greeting, a capability refusal, a recall, an estate count. None of them
+    # narrates evidence, so groundedness is not merely unmeasured - it does not
+    # apply.
+    #
+    # SEPARATE FROM judge_failures_total ON PURPOSE. These used to be counted
+    # as reason="no_evidence" failures, which made correct refusals read as a
+    # broken judge and put them under JudgeNotProducingVerdicts. A failure is
+    # something that should have worked; this is something that was never
+    # asked. Filtering them out inside the alert would have hidden them from
+    # every other reader too - a rise here is real signal, it means more of
+    # what the platform says is being intercepted before it investigates.
+    ["kind"],
+)

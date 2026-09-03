@@ -113,6 +113,12 @@ def _safe_evaluate(**kwargs: Any) -> None:
         logger.warning("answer_evaluation.failed", error=str(exc)[:300], exc_info=False)
 
 
+def _count_not_applicable(kind: str) -> None:
+    from app.observability.metrics import judge_not_applicable_total
+
+    judge_not_applicable_total.labels(kind=kind).inc()
+
+
 def evaluate(
     *,
     question: str,
@@ -129,6 +135,39 @@ def evaluate(
     investigation_id = result.get("investigation_id")
     prose = _prose_from(result.get("final_report") or result.get("rejection_prompt") or {})
     if not prose:
+        return None
+
+    # NO INVESTIGATION MEANS NOTHING TO GRADE, AND THAT IS NOT A JUDGE FAILURE.
+    #
+    # Four answers leave this platform without an investigation behind them: a
+    # greeting, a capability refusal, a recall of a previous shortlist, and an
+    # estate count. None of them narrates evidence, so there is no evidence to
+    # check narration against - the question this table exists to answer does
+    # not apply.
+    #
+    # It used to be graded anyway. The guard below was written to stop that:
+    #
+    #     if deterministic["GradedCalls"] == 0 and not judged: return None
+    #
+    # and it never fired, because _judge returns {"JudgeError": ...} on
+    # unrecoverable evidence and a non-empty dict is truthy. So every refusal
+    # wrote a row carrying nothing but an error, and ticked
+    # judge_failures_total{reason="no_evidence"}. Five of the first twelve rows
+    # in this table were correct refusals filed as judge failures, and they are
+    # what JudgeNotProducingVerdicts alerts on - the interception working
+    # reported as the judge broken.
+    #
+    # Returning here rather than patching the truthiness test, because the test
+    # was the wrong instrument: it asks "did anything come back" when the
+    # question is "was there anything to ask about". Patching it would have
+    # suppressed the row and left the counter tick in place.
+    #
+    # NOT the same as an investigation whose evidence cannot be recovered -
+    # that IS a judge failure, it keeps its no_evidence label, and it is a real
+    # signal that an audit row went missing. Conflating the two is what made
+    # the alert unreadable.
+    if investigation_id is None:
+        _count_not_applicable(str(result.get("investigation_type") or "Conversation"))
         return None
 
     deterministic = _grade_deterministic(investigation_id)
