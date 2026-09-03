@@ -103,6 +103,8 @@ def price_for(model_identity: str, *, at: datetime | None = None) -> Price | Non
         {"model": model_identity, "at": moment},
     )
     if not rows:
+        rows = _dated_snapshot_rows(model_identity, moment)
+    if not rows:
         return None
     r = rows[0]
     return Price(
@@ -112,6 +114,56 @@ def price_for(model_identity: str, *, at: datetime | None = None) -> Price | Non
         output_per_million=Decimal(str(r["OutputPerMillion"])),
         currency=r["Currency"],
     )
+
+
+def _dated_snapshot_rows(model_identity: str, moment: datetime) -> list:
+    """Price a DATED SNAPSHOT from its base model's row.
+
+    Providers list prices under a base name and serve the model under a dated
+    one. The Model Settings dropdown is built from each provider's live /models
+    listing, so what an operator selects - and what therefore reaches
+    ModelIdentity - is the dated id:
+
+        claude-haiku-4-5-20251001   priced as claude-haiku-4-5
+        gpt-5-nano-2025-08-07       priced as gpt-5-nano
+        gemini-3.5-flash-lite-002   priced as gemini-3.5-flash-lite
+
+    An exact-match-only lookup left every one of those unpriced, which is the
+    silent kind of wrong: the call is recorded, the spend total is simply
+    smaller than the invoice.
+
+    LONGEST PREFIX WINS, and that is load-bearing rather than tidy. "gpt-5" is
+    a prefix of "gpt-5-mini", which is a prefix of "gpt-5-mini-2025-08-07".
+    Taking the longest match prices the mini snapshot as a mini; taking any
+    match could price it as the full model, at five times the rate.
+
+    The separator check is the other half. Requiring the remainder to start
+    with "-" stops "gpt-4o" from claiming "gpt-4omni" - a model it has nothing
+    to do with - so this only ever matches a genuine suffix on a real
+    boundary, never a coincidental string prefix.
+
+    A row is still returned only if it was in force at ``moment``: a snapshot
+    inherits its base model's price history, not just today's price.
+
+    ASSUMES MODEL IDS CARRY NO LIKE WILDCARDS. ModelIdentity is interpolated
+    into a LIKE pattern, so an id containing '%' or '_' would match more than
+    itself - '_' matches any single character. No provider currently uses
+    either (ids are letters, digits, '.', '-' and '/'), and a wrong match here
+    would misprice a call rather than fail loudly, so it is written down.
+    """
+    rows = fetch_all(
+        f"""
+        SELECT Provider, ModelIdentity, InputPerMillion, OutputPerMillion, Currency
+        FROM   {T("ModelPrice")}
+        WHERE  :model LIKE ModelIdentity + '-%'
+          AND  EffectiveFrom <= :at
+          AND  (EffectiveTo IS NULL OR EffectiveTo > :at)
+        """,
+        {"model": model_identity, "at": moment},
+    )
+    if not rows:
+        return []
+    return [max(rows, key=lambda r: len(str(r["ModelIdentity"])))]
 
 
 def cost_of(model_identity: str, prompt_tokens: int | None,
