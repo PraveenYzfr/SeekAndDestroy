@@ -142,7 +142,31 @@ class LlmSettings(_Base):
     #: So the cap was consumed mid-thought, content came back empty, and the
     #: reasoning tokens were billed anyway: about $0.00225 a call to receive
     #: nothing. The fix converts waste into output rather than adding spend.
-    max_output_tokens: int = 8192
+    #: 8,192 COULD NOT FIT THE REASONING, LET ALONE AN ANSWER.
+    #:
+    #: This budget covers reasoning AND content on a reasoning model, and on the
+    #: 100-case golden run deepseek produced 23,881 to 37,842 characters of
+    #: reasoning - roughly 6,000 to 9,500 tokens - before it had written a word of
+    #: output. Sixteen calls returned finish_reason=length with empty content, and
+    #: each one fell through the whole provider chain.
+    #:
+    #: Raising it was previously argued against here on the grounds that
+    #: max_output_tokens "is charged per request on every role". THAT WAS WRONG,
+    #: and the error is worth naming because it blocked the obvious fix for hours:
+    #: every provider in use bills ACTUAL completion tokens. This value is a CAP,
+    #: not a reservation. A call that needs 900 tokens costs 900 whether the cap
+    #: is 8,192 or 32,768.
+    #:
+    #: What a higher cap does change is the worst case: a runaway reasoning loop
+    #: can now bill for more before it is cut off. That is a real cost and it is
+    #: bounded and rare, against sixteen certain failures per hundred cases -
+    #: each of which already cost four provider calls and produced nothing.
+    #:
+    #: 32,768 rather than "just enough": the observed maximum is ~9,500 reasoning
+    #: tokens and a report needs a few thousand more, so 16,384 would sit close
+    #: enough to the observed ceiling to fail again on a harder prompt. The
+    #: daily call budget, not this, is what caps spend.
+    max_output_tokens: int = 32768
     timeout_seconds: int = 60
     base_url: str = ""
     api_key: str = ""
