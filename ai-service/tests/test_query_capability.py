@@ -14,6 +14,8 @@ The cases below are grouped by the way each one could go wrong again:
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from app.agents import query_capability as qc
@@ -36,16 +38,18 @@ class TestTheQueryThatFailed:
         reply = qc.capability_reply(
             "give me best dc for java apps", has_app_code=False, has_quantity=False
         )
-        assert "does not record" in reply
-        assert "never captured" in reply or "no column" in reply
+        assert "does not track" in reply
+        assert "not a search that came back empty" in reply
 
     def test_it_names_the_attribute_that_does_exist(self):
         """A refusal that only says no leaves the reader guessing whether to
-        rephrase or give up."""
+        rephrase or give up. Said in the reader's vocabulary, not the
+        schema's - see TestARefusalDisclosesNothing."""
         reply = qc.capability_reply(
             "give me best dc for java apps", has_app_code=False, has_quantity=False
         )
-        assert "TechnologyPlatform" in reply
+        assert "hosting platform" in reply
+        assert "not the language it is written in" in reply
 
     def test_it_asks_for_what_it_needs_to_rank(self):
         """The answerable half. "Best DC" is exactly what this platform does;
@@ -125,38 +129,67 @@ class TestTheClaimsStayTrue:
         assert qc.unmodelled_attribute("the subnet.network config") is None
         assert qc.unmodelled_attribute("our java services") is not None
 
-    def test_estate_figures_are_read_not_hard_coded(self, monkeypatch):
-        """A hard-coded "eight data centres" is correct until somebody adds one,
-        and then it is a figure this platform states confidently and wrongly -
-        the exact failure the rest of the codebase exists to prevent."""
-        qc.reset_estate_cache()
-        monkeypatch.setattr(
-            "app.repositories.base.fetch_all",
-            lambda sql, *a, **k: [{"n": 3}] if "COUNT" in sql else [{"p": "Kubernetes"}],
-        )
-        reply = qc.capability_reply(
-            "give me best dc for java apps", has_app_code=False, has_quantity=False
-        )
-        qc.reset_estate_cache()
-        assert "3 data centres" in reply
-        # The real estate has 8. Matching on the bare digit is not the check:
-        # "128 GB RAM" in the example text contains one.
-        assert "8 data centres" not in reply
 
-    def test_an_unreadable_database_says_less_rather_than_guessing(self, monkeypatch):
-        """No figure beats an invented one."""
-        qc.reset_estate_cache()
-        monkeypatch.setattr(
-            "app.repositories.base.fetch_all",
-            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db down")),
-        )
+class TestARefusalDisclosesNothing:
+    """A refusal is the answer least likely to be reviewed, and this one used to
+    name the backing store, name a column, list every platform recorded across
+    the estate and state how many data centres exist - the last two read LIVE
+    from production on the refusal path, so the leak stayed current.
+
+    None of those facts is secret alone. The shape is the defect: one malformed
+    question returned the platform inventory and the size of the estate. These
+    tests pin the rule rather than the wording - name no table, no column, no
+    enum value, no count.
+    """
+
+    QUERIES = (
+        "give me best dc for java apps",
+        "best data centre for our python services",
+        "where should we host the dotnet estate",
+    )
+
+    @pytest.mark.parametrize("query", QUERIES)
+    def test_no_schema_identifiers(self, query):
+        reply = qc.capability_reply(query, has_app_code=False, has_quantity=False)
+        assert reply is not None
+        for leaked in ("TechnologyPlatform", "CmdbApplication", "InfrastructureCluster",
+                       "CMDB", "column", "sad."):
+            assert leaked not in reply, f"{leaked!r} disclosed in: {reply}"
+
+    @pytest.mark.parametrize("query", QUERIES)
+    def test_no_platform_inventory(self, query):
+        """The sharpest part of the old leak: asking about Java returned the
+        set of platforms the bank actually runs."""
+        reply = qc.capability_reply(query, has_app_code=False, has_quantity=False)
+        for platform in ("BareMetal", "Hyper-V", "Kubernetes", "OpenShift", "VMware"):
+            assert platform not in reply, f"{platform!r} disclosed in: {reply}"
+
+    @pytest.mark.parametrize("query", QUERIES)
+    def test_no_estate_size(self, query):
+        reply = qc.capability_reply(query, has_app_code=False, has_quantity=False)
+        assert "across the estate" in reply
+        assert not re.search(r"\d+\s+data\s+cent", reply), reply
+
+    def test_the_refusal_path_issues_no_query(self, monkeypatch):
+        """The disclosure was live because building it read production. Nothing
+        on this path may touch the database at all - that also means a refusal
+        still works when SQL Server is down."""
+        def explode(*a, **k):
+            raise AssertionError("the refusal path queried the database")
+
+        monkeypatch.setattr("app.repositories.base.fetch_all", explode)
         reply = qc.capability_reply(
             "give me best dc for java apps", has_app_code=False, has_quantity=False
         )
-        qc.reset_estate_cache()
         assert reply is not None
-        assert "across the estate" in reply
-        assert "data centres" not in reply.split("across the estate")[1][:40]
+
+    def test_it_still_tells_the_reader_what_to_do(self):
+        """Redaction must not turn a useful refusal into a blank no."""
+        reply = qc.capability_reply(
+            "give me best dc for java apps", has_app_code=False, has_quantity=False
+        )
+        assert "name the application" in reply
+        assert "APP-CRM" in reply
 
 
 class TestThroughQuickReply:
@@ -165,7 +198,8 @@ class TestThroughQuickReply:
 
         reply = quick_reply("give me best dc for java apps")
         assert reply is not None
-        assert "TechnologyPlatform" in reply
+        assert "hosting platform" in reply
+        assert "TechnologyPlatform" not in reply
 
     def test_datacentre_words_now_register_as_infrastructure(self):
         """"dc" appeared in none of _INFRA_INTENT_WORDS. The failing query only

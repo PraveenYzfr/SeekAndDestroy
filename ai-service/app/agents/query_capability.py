@@ -48,6 +48,25 @@ PLACEMENT intent ("where should this go") needs something to place and is
 refused without it at any length, while QUESTION intent ("why did this happen")
 does not.
 
+WHAT A REFUSAL MAY SAY
+----------------------
+A refusal is still an answer, and it is the answer least likely to be reviewed.
+The first version of this file wrote one that was accurate, helpful, and a
+disclosure: it named the backing store, named the column that exists instead,
+listed every platform recorded across the estate, and stated how many data
+centres there are. Two of those figures were read live from production on the
+refusal path, so the leak stayed current as the estate grew.
+
+None of it was secret in isolation. The shape is the problem - an engineer who
+asks one malformed question learns the platform inventory and the size of an
+estate they may have no business knowing, and the next attribute added to
+UNMODELLED_ATTRIBUTES inherits that behaviour by default.
+
+So the rule here is: a refusal says what the READER must do differently, never
+what the system looks like inside. Name no table, no column, no enum value and
+no count. The structural distinction - "not tracked" is not "not found" - is
+the part worth keeping, and it survives in plain language.
+
 WHY THIS IS DETERMINISTIC AND NOT A MODEL CALL
 -----------------------------------------------
 Whether a column exists is a fact about the schema. Asking a model to decide it
@@ -61,11 +80,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from functools import lru_cache
-
-import structlog
-
-logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -98,9 +112,14 @@ UNMODELLED_ATTRIBUTES: tuple[UnmodelledAttribute, ...] = (
             "node", "nodejs", "node.js", "golang", "ruby", "php", "scala",
             "kotlin", "spring", "spring boot", "jvm", "cobol", "rust",
         ),
+        #: A whole sentence, and deliberately in the user's vocabulary rather
+        #: than the schema's. An earlier version named the column and then
+        #: listed every value in it, which told an engineer asking about Java
+        #: the platform inventory of the entire bank - see the note on
+        #: disclosure in the module docstring.
         instead=(
-            "TechnologyPlatform, which records the HOSTING platform an "
-            "application runs on rather than the language it is written in"
+            "What it does record is the hosting platform an application runs "
+            "on, not the language it is written in."
         ),
     ),
 )
@@ -191,42 +210,6 @@ def has_placement_intent(query: str) -> bool:
     return bool(_PLACEMENT_INTENT_RE.search(query))
 
 
-@lru_cache(maxsize=1)
-def _estate_shape() -> tuple[int | None, tuple[str, ...]]:
-    """How many data centres exist, and what platforms are recorded.
-
-    Read from the database rather than written here as a list. A hard-coded
-    "eight data centres" is correct until somebody adds one, and then it is a
-    figure this platform states confidently and wrongly - which is the exact
-    failure the rest of the codebase is built to prevent. Cached, because the
-    shape of an estate does not change between requests.
-
-    Returns (None, ()) when the database cannot be read, and every caller is
-    written to say less rather than to guess.
-    """
-    try:
-        from app.repositories.base import fetch_all
-
-        centres = fetch_all(
-            "SELECT COUNT(DISTINCT DataCenter) AS n FROM sad.InfrastructureCluster"
-        )
-        platforms = fetch_all(
-            "SELECT DISTINCT TechnologyPlatform AS p FROM sad.CmdbApplication "
-            "WHERE TechnologyPlatform IS NOT NULL"
-        )
-        count = int(centres[0]["n"]) if centres and centres[0].get("n") else None
-        names = tuple(sorted(str(r["p"]) for r in platforms if r.get("p")))
-        return count, names
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("query_capability.estate_shape_unavailable", error=str(exc)[:200])
-        return None, ()
-
-
-def reset_estate_cache() -> None:
-    """For tests, and for a process that outlives a schema change."""
-    _estate_shape.cache_clear()
-
-
 def capability_reply(query: str, *, has_app_code: bool, has_quantity: bool) -> str | None:
     """An honest answer for a query this platform cannot take as written.
 
@@ -252,22 +235,16 @@ def capability_reply(query: str, *, has_app_code: bool, has_quantity: bool) -> s
 
     if attribute is not None:
         parts.append(
-            f"I cannot filter by {attribute.name}: this CMDB does not record it. "
-            f"There is no column for it on any application, so it is not a matter "
-            f"of searching harder - the data was never captured. "
-            f"What each application does record is {attribute.instead}."
+            f"I cannot filter by {attribute.name} - this platform does not track it. "
+            f"That is a limit of what is recorded, not a search that came back empty, "
+            f"so rephrasing will not help. {attribute.instead}"
         )
-        _, platforms = _estate_shape()
-        if platforms:
-            parts.append("The platforms actually recorded are " + ", ".join(platforms) + ".")
 
     if placement and not has_app_code and not has_quantity:
-        centres, _ = _estate_shape()
-        where = f"across the {centres} data centres" if centres else "across the estate"
         parts.append(
-            f"I can rank candidates {where}, but I need to know what is being placed. "
-            f"Either name the application (\"best data centre for APP-CRM\") or give me "
-            f"its size (\"32 cores, 128 GB RAM and 2 TB storage in production\")."
+            "I can rank candidates across the estate, but I need to know what is being "
+            "placed. Either name the application (\"best data centre for APP-CRM\") or "
+            "give me its size (\"32 cores, 128 GB RAM and 2 TB storage in production\")."
         )
     elif attribute is not None and placement:
         parts.append(
