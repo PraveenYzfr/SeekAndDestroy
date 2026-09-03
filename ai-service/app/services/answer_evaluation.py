@@ -139,11 +139,18 @@ def evaluate(
 
     # NO INVESTIGATION MEANS NOTHING TO GRADE, AND THAT IS NOT A JUDGE FAILURE.
     #
-    # Four answers leave this platform without an investigation behind them: a
-    # greeting, a capability refusal, a recall of a previous shortlist, and an
-    # estate count. None of them narrates evidence, so there is no evidence to
-    # check narration against - the question this table exists to answer does
-    # not apply.
+    # TWO answers leave this platform without an investigation behind them: a
+    # conversation reply (a greeting, a capability refusal, an ask too vague to
+    # act on) and an estate count. Neither narrates evidence, so there is no
+    # evidence to check narration against - the question this table exists to
+    # answer does not apply.
+    #
+    # A RECALL IS NOT ONE OF THEM, though it looks like one. Asking to see the
+    # previous shortlist again returns prior.investigation_id, so it is graded
+    # against that investigation's evidence - which is right, because a recall
+    # re-presents a real report and the figures in it are the ones that were
+    # checked. Checked rather than assumed: an earlier version of this comment
+    # listed recall here and was wrong.
     #
     # It used to be graded anyway. The guard below was written to stop that:
     #
