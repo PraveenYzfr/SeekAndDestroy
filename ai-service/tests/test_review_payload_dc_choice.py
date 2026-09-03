@@ -79,3 +79,77 @@ def test_honest_when_excluding_leaves_nothing_eligible():
     choice = payload["data_center_choice"]
     assert choice["has_genuine_alternative"] is False
     assert choice["available_data_centers"] == []
+
+
+# ---------------------------------------------------------------------------
+# The review message has to report what the search found
+#
+# It was a constant, said identically whether three clusters qualified or none
+# did. Live-verified consequence on production: "what other options?" re-ran
+# the estate, returned the same three clusters and the same sentence, and was
+# indistinguishable from the question being ignored.
+# ---------------------------------------------------------------------------
+from app.graph.nodes import _review_message
+
+
+def test_an_exhausted_shortlist_says_so():
+    """The case that made a repeat look like a non-answer. The count is the
+    point: it separates a shortlist from a truncation."""
+    msg = _review_message(
+        {"eligible_total": 3, "shown": 3, "more_available": 0}, None
+    )
+    assert "3 clusters qualify" in msg
+    assert "that is all of them" in msg
+
+
+def test_a_truncated_shortlist_says_how_many_are_behind_it():
+    msg = _review_message(
+        {"eligible_total": 11, "shown": 3, "more_available": 8}, None
+    )
+    assert "top 3 of 11" in msg
+
+
+def test_nothing_eligible_names_the_constraint_doing_it():
+    """"No results" leaves the reader guessing whether they asked for too much
+    or the estate is full."""
+    msg = _review_message(
+        {
+            "eligible_total": 0,
+            "shown": 0,
+            "more_available": 0,
+            "blocking_reasons": [
+                {"name": "Capacity headroom", "count": 82},
+                {"name": "Availability requirement", "count": 17},
+            ],
+            "size_options": [{"dimension": "cpu_cores"}],
+        },
+        None,
+    )
+    assert "No cluster qualifies" in msg
+    assert "capacity headroom (82)" in msg
+    assert "Asking for less" in msg
+
+
+def test_the_end_of_a_rescope_is_stated_plainly():
+    """When every remaining site has been ruled out the reply must not read as
+    a fresh shortlist arriving."""
+    msg = _review_message(
+        {"eligible_total": 1, "shown": 1, "more_available": 0},
+        {"has_genuine_alternative": False, "available_data_centers": []},
+    )
+    assert "1 cluster qualifies" in msg
+    assert "Every other data centre has now been ruled out." in msg
+
+
+def test_a_rescope_with_room_left_names_what_remains():
+    msg = _review_message(
+        {"eligible_total": 2, "shown": 2, "more_available": 0},
+        {
+            "has_genuine_alternative": True,
+            "available_data_centers": [
+                {"data_center": "Denver-DC1", "eligible_count": 1},
+                {"data_center": "Phoenix-DC1", "eligible_count": 1},
+            ],
+        },
+    )
+    assert "Remaining data centre(s): Denver-DC1, Phoenix-DC1." in msg

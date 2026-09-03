@@ -1177,6 +1177,76 @@ def assess_risk_and_confidence(state: InfrastructureRecommendationState) -> dict
 # =============================================================================
 
 
+def _review_message(next_steps: dict, dc_choice: dict | None) -> str:
+    """What the search actually found, in one sentence.
+
+    This was a constant - "Choose one cluster and host, then approve" - said
+    identically whether three clusters qualified or none did, and identically
+    on a first ask and on a re-scope that turned up nothing new.
+
+    That constant is what made "what other options?" read as a non-answer.
+    Live-verified on production: the engineer asked, the platform re-ran the
+    whole estate, returned the same three clusters, and said the same sentence.
+    Nothing in the reply distinguished "here are more" from "there are no
+    more", so the only available reading was that the question had been
+    ignored. It had not been - there genuinely were no others - but a shortlist
+    that cannot say it is complete cannot say anything else either.
+
+    So the message reports the state of the search. The engineer asking a
+    second time now reads "these 3 are every cluster that qualifies", which is
+    both the answer to their question and the reason there is nothing further.
+
+    Derived from next_steps, which is already computed from the scored
+    candidates - no new query, no second opinion about what is eligible, and
+    nothing here that could disagree with the list rendered beside it.
+    """
+    total = next_steps.get("eligible_total") or 0
+    shown = next_steps.get("shown") or 0
+    more = next_steps.get("more_available") or 0
+
+    if not total:
+        #  Nothing qualified. Naming the constraint doing the damage beats
+        #  "no results", which leaves the reader to guess whether they asked
+        #  for too much or the estate is simply full.
+        blocks = [
+            f"{b.get('name', '').lower()} ({b.get('count')})"
+            for b in (next_steps.get("blocking_reasons") or [])[:2]
+            if b.get("name")
+        ]
+        head = "No cluster qualifies for this request"
+        if blocks:
+            head += " - blocked by " + ", ".join(blocks)
+        if next_steps.get("size_options"):
+            return head + ". Asking for less would open some up; see the options below."
+        return head + "."
+
+    if more:
+        return (
+            f"Showing the top {shown} of {total} clusters that qualify. "
+            "Choose one cluster and host, then approve - or see the next few."
+        )
+
+    #  The exhausted case, and the one that used to be silent. Say the number
+    #  out loud: it is the difference between a shortlist and a truncation.
+    tail = ""
+    if dc_choice and not dc_choice.get("has_genuine_alternative"):
+        #  Every remaining site has been ruled out across this conversation.
+        #  The honest end of a re-scope, and it must not look like a fresh
+        #  shortlist arriving.
+        tail = " Every other data centre has now been ruled out."
+    elif dc_choice:
+        remaining = [
+            str(d.get("data_center"))
+            for d in (dc_choice.get("available_data_centers") or [])
+        ]
+        if remaining:
+            tail = " Remaining data centre(s): " + ", ".join(remaining) + "."
+    plural = "" if total == 1 else "s"
+    return (
+        f"{total} cluster{plural} qualify" if total != 1 else "1 cluster qualifies"
+    ) + f" - that is all of them. Choose one cluster and host, then approve - or reject the shortlist.{tail}"
+
+
 def build_review_payload(state: InfrastructureRecommendationState | dict) -> dict:
     """The shortlist as a reviewer sees it.
 
@@ -1186,6 +1256,18 @@ def build_review_payload(state: InfrastructureRecommendationState | dict) -> dic
     actually clicks Approve on.
     """
     top = (state.get("candidate_scores") or [])[: get_settings().policy.top_clusters]
+    steps = refinement.next_steps(
+        state.get("candidate_scores") or [],
+        state.get("requirement") or {},
+        shown=len(top),
+    )
+    dc_choice = (
+        refinement.data_center_choice(
+            state.get("candidate_scores") or [], state.get("exclude_data_centers")
+        )
+        if state.get("exclude_data_centers")
+        else None
+    )
     return {
         "investigation_id": state.get("investigation_id"),
         "investigation_type": state.get("investigation_type"),
@@ -1205,17 +1287,13 @@ def build_review_payload(state: InfrastructureRecommendationState | dict) -> dic
             c.get("cluster_code"): c.get("eligibility_status") for c in top
         },
         "confidence": state.get("confidence"),
-        "message": "Choose one cluster and host, then approve - or reject the shortlist.",
+        "message": _review_message(steps, dc_choice),
         # What to offer when the shortlist is not good enough. This is a search:
         # when the results are usable the engineer picks one and leaves, and
         # next_steps reports sufficient=True so the UI stays quiet. When they
         # are not, the useful move is a choice - see more, or ask for less -
         # rather than an explanation of every rule that failed.
-        "next_steps": refinement.next_steps(
-            state.get("candidate_scores") or [],
-            state.get("requirement") or {},
-            shown=len(top),
-        ),
+        "next_steps": steps,
         # Only present when this run actually excluded something - an
         # ordinary first ask has nothing to say about "what did we rule
         # out", and next_steps already stays quiet the same way when the
@@ -1226,13 +1304,7 @@ def build_review_payload(state: InfrastructureRecommendationState | dict) -> dic
         # none - has_genuine_alternative:false is the common outcome here,
         # not an edge case, and a caller should say so plainly rather than
         # render an empty picker.
-        "data_center_choice": (
-            refinement.data_center_choice(
-                state.get("candidate_scores") or [], state.get("exclude_data_centers")
-            )
-            if state.get("exclude_data_centers")
-            else None
-        ),
+        "data_center_choice": dc_choice,
     }
 
 
