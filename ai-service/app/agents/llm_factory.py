@@ -20,7 +20,7 @@ from app.agents.gemini_chat_model import (
     DEFAULT_MODEL as GEMINI_DEFAULT_MODEL,
     GeminiChatModel,
 )
-from app.agents.http_chat_model import HttpChatModel
+from app.agents.http_chat_model import EmptyCompletionError, HttpChatModel
 from app.agents.mock_llm import MockChatModel
 from app.config import get_settings
 
@@ -92,6 +92,31 @@ def build_chat_model() -> BaseChatModel:
     return FallbackChatModel(members=members)
 
 
+#: Appended to the SYSTEM prompt when a model exhausts its output budget on
+#: reasoning. The question was fine; what overran is the model's own thinking, so
+#: rewriting the human turn would change what was asked.
+_BREVITY_NUDGE = (
+    "@@NL@@@@NL@@IMPORTANT: a previous attempt ran out of output budget while reasoning "
+    "and returned nothing. Reason briefly. Do not restate the evidence, do not "
+    "enumerate alternatives you have rejected, and produce the required output "
+    "directly."
+).replace("@@NL@@", chr(10))
+
+
+def _with_brevity(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """The same messages, with the brevity instruction on the system turn.
+
+    Falls back to prepending one if there is no system message, rather than
+    silently dropping the instruction - a retry that changes nothing is a second
+    identical failure and a doubled bill.
+    """
+    from langchain_core.messages import SystemMessage
+
+    if messages and isinstance(messages[0], SystemMessage):
+        return [SystemMessage(content=messages[0].content + _BREVITY_NUDGE), *messages[1:]]
+    return [SystemMessage(content=_BREVITY_NUDGE.strip()), *messages]
+
+
 class FallbackChatModel(BaseChatModel):
     """Tries each ``(provider_name, BaseChatModel)`` pair in order, moving to
     the next on any exception. This is what ``SAD_LLM__FALLBACK_PROVIDERS``
@@ -120,6 +145,40 @@ class FallbackChatModel(BaseChatModel):
         for i, (name, model) in enumerate(self.members):
             try:
                 return model._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+            except EmptyCompletionError as exc:
+                # RUNNING OUT OF BUDGET IS NOT A PROVIDER BEING UNAVAILABLE, and
+                # treating it as one is what made this expensive.
+                #
+                # A reasoning model that spends its whole allowance thinking
+                # returns 200 with empty content. This loop caught that like any
+                # other failure and moved to the next provider - so one overflow
+                # cost four sequential calls across four providers, and the
+                # cheapest possible fix, asking THIS model to be brief, was never
+                # tried. Measured on the 100-case golden run: 16 overflows,
+                # 23,881 to 37,842 characters of reasoning against an 8,192 token
+                # budget, every one falling through the entire chain.
+                #
+                # There IS a brevity retry in app.agents.structured. It never
+                # fired once, because this loop is INSIDE the model that
+                # structured calls: by the time anything escaped to it, the chain
+                # had already exhausted every provider and raised a RuntimeError,
+                # which is not the exception that retry watches for.
+                #
+                # So the retry belongs here, before the fall-through, and only for
+                # this failure. One attempt, same provider, then continue.
+                logger.warning("llm_factory.fallback.length_retry", provider=name, error=str(exc)[:200])
+                try:
+                    return model._generate(
+                        _with_brevity(messages), stop=stop, run_manager=run_manager, **kwargs
+                    )
+                except Exception as retry_exc:  # noqa: BLE001
+                    logger.warning(
+                        "llm_factory.fallback.provider_failed",
+                        provider=name, error=str(retry_exc)[:200],
+                    )
+                    if i < len(self.members) - 1:
+                        llm_fallback_total.labels(from_provider=name).inc()
+                    last_exc = retry_exc
             except Exception as exc:  # noqa: BLE001 - must try the next provider regardless of failure cause
                 logger.warning("llm_factory.fallback.provider_failed", provider=name, error=str(exc))
                 if i < len(self.members) - 1:

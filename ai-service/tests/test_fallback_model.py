@@ -51,17 +51,34 @@ class TestTheFallbackCarriesItsOwnModel:
         s = _settings()
         assert s.fallback_model and s.fallback_model != s.model
 
-    def test_the_default_fallback_is_openai_at_comparable_capability(self):
-        s = _settings()
-        assert s.fallback_provider_list == ["openai"]
-        assert s.fallback_model == "gpt-4o"
+    def test_the_default_chain_is_three_deep_across_three_vendors(self):
+        """Widened from a single backup after a real outage took both legs.
 
-    def test_the_chain_is_primary_then_fallback_each_with_its_own_model(self, built):
+        Measured on the golden run: deepseek exhausted its output budget on
+        reasoning and openai returned 429 in the same investigation, so a
+        two-leg chain had nothing left and the answer came back as fallback
+        text. Three vendors is not belt-and-braces - it is the observed number
+        of simultaneous failures plus one.
+        """
+        s = _settings()
+        assert s.fallback_provider_list == ["openai", "groq", "gemini"]
+
+    def test_every_leg_carries_its_own_model(self, built):
+        """The bug this class is named for, at chain scale.
+
+        A single fallback_model across the chain would ask groq for "gpt-4o" and
+        404 at exactly the moment the backup was needed - a safety net that only
+        fails when used. Each leg must name a model its own provider serves.
+        """
         chain = built(_settings())
-        assert [(n, c.model) for n, c in chain.members] == [
-            ("deepseek", "deepseek-v4-flash"),
-            ("openai", "gpt-4o"),
-        ]
+        names = [n for n, _ in chain.members]
+        assert names[0] == "deepseek", "the primary leads"
+        assert names[1:] == ["openai", "groq"] or names[1:] == ["openai", "groq", "gemini"], names
+
+        for provider, client in chain.members:
+            assert client.model, f"{provider} leg has no model"
+        models = [c.model for _, c in chain.members]
+        assert len(set(models)) == len(models), f"a model is shared across legs: {models}"
 
 
 class TestTheChainCannotBreakThePrimary:
