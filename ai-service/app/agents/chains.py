@@ -238,4 +238,10 @@ def generate_final_report(
     human = with_evidence(f"Generate the final investigation report: {title}.", full_evidence)
     parsed = run_structured(llm, FINAL_REPORT_SYSTEM, human, FinalRecommendationReport)
     assert_no_number_drift(parsed, full_evidence)
+    # STAMPED HERE, NOT TRUSTED FROM THE MODEL. The caller passed the id in; it is
+    # a fact the platform owns. Taking the model's echo would make an identifier
+    # something a language model can alter, which is the one thing this layer
+    # exists to prevent - and requiring it was discarding 28 of 29 otherwise
+    # complete reports.
+    parsed.investigation_id = investigation_id
     return parsed

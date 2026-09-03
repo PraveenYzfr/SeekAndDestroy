@@ -139,7 +139,25 @@ class GroundedAnswer(BaseModel):
 
 
 class FinalRecommendationReport(BaseModel):
-    investigation_id: int
+    #: NOT SUPPLIED BY THE MODEL, and it never should have been.
+    #:
+    #: This was a required int. The platform passes the investigation id INTO the
+    #: prompt as evidence and then demanded the model echo it back; models
+    #: correctly returned null for a field they have no way to know, and pydantic
+    #: threw the entire report away over it.
+    #:
+    #: Measured on the 100-case golden run: 29 final reports failed to parse and
+    #: 28 of them failed on this one field. Every one contained a complete, well
+    #: formed report - title, summary, risks, next steps - discarded because an
+    #: identifier the platform already held was absent.
+    #:
+    #: That is what "Report narration unavailable" was on screen: not a model
+    #: that could not write, a contract that would not accept what it wrote.
+    #:
+    #: Optional here and set authoritatively by generate_final_report after
+    #: parsing. Asking a model to carry an identifier is also a way to let it
+    #: change one - the same reason assert_no_number_drift exists.
+    investigation_id: Optional[int] = None
     title: str
     executive_summary: str
     top_recommendation: Optional[str] = None

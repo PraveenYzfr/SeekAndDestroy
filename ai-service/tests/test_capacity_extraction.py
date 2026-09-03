@@ -473,3 +473,53 @@ def test_an_unranked_shortlist_falls_back_to_score():
         ],
     )
     assert excluded_data_centers("a different DC", prior) == ["Atlanta-DC1"]
+
+
+# ---------------------------------------------------------------------------
+# The report contract demanded an id the model cannot know
+# ---------------------------------------------------------------------------
+# On the 100-case golden run, 29 final reports failed to parse and 28 failed on
+# investigation_id alone. Every one carried a complete report - title, summary,
+# risks, next steps - discarded because an identifier the platform already held
+# was null. That is what "Report narration unavailable" was on screen.
+from app.models.agent_contracts import FinalRecommendationReport
+
+
+def test_a_report_parses_when_the_model_omits_the_id():
+    """The real completion shape from the golden run."""
+    payload = (
+        '{"investigation_id": null,'
+        ' "title": "Spare capacity investigation for atl-p063",'
+        ' "executive_summary": "The evidence contains no entries for atl-p063.",'
+        ' "top_recommendation": null, "alternatives_considered": [],'
+        ' "risks": ["No record of host atl-p063 was found."],'
+        ' "next_steps": ["Confirm whether the host name is correct."],'
+        ' "human_action_required": "Verify the identifier."}'
+    )
+    report = FinalRecommendationReport.model_validate_json(payload)
+    assert report.investigation_id is None
+    assert report.title.startswith("Spare capacity")
+    # The content was never the problem - it was complete all along.
+    assert report.risks and report.next_steps
+
+
+def test_the_platform_stamps_the_id_rather_than_trusting_it(monkeypatch):
+    """Asking a model to carry an identifier is a way to let it change one.
+
+    The caller already has the id; the model's echo is at best redundant and at
+    worst a number a language model altered - which is what
+    assert_no_number_drift exists to prevent everywhere else.
+    """
+    from app.agents import chains
+
+    stamped = FinalRecommendationReport(
+        investigation_id=999,           # a WRONG id, as if echoed badly
+        title="t", executive_summary="s", human_action_required="h",
+    )
+    monkeypatch.setattr(chains, "run_structured", lambda *a, **k: stamped)
+    monkeypatch.setattr(chains, "assert_no_number_drift", lambda *a, **k: None)
+
+    out = chains.generate_final_report(
+        llm=object(), investigation_id=7, title="t", evidence={},
+    )
+    assert out.investigation_id == 7
