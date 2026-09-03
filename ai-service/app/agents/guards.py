@@ -17,7 +17,26 @@ from pydantic import BaseModel
 
 
 class NumberDriftError(ValueError):
-    """Raised when the LLM's output disagrees with the deterministic evidence it was given."""
+    """Raised when the LLM's output disagrees with the deterministic evidence it was given.
+
+    THE MESSAGE IS DIAGNOSTIC AND MUST NOT REACH A CALLER. It names the field,
+    the value the model produced, the evidence key and THE ENGINE-COMPUTED
+    FIGURE - which is exactly what an attacker probing this endpoint wants.
+
+    It subclasses ValueError because the platform treats it as a rejected input
+    rather than a crash, and app.api.errors renders ValueError as a 400. That
+    inheritance is what silently turned this diagnostic string into a response
+    body: `handle_value_error` returned `str(exc)` verbatim, so tripping the
+    guard handed the caller an internal score.
+
+    app.api.errors now has a dedicated handler that keeps this message for the
+    LOG and sends the caller a message that says what happened without saying
+    what the number was. Do not add `public_detail = True` here.
+    """
+
+    #: Read by app.api.errors. False - and the absence of the attribute means
+    #: the same thing - so a new exception is private unless it opts in.
+    public_detail = False
 
 
 def _to_snake(name: str) -> str:
