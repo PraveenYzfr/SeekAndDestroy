@@ -93,10 +93,23 @@ IF OBJECT_ID('sad.ModelPrice', 'U') IS NULL
     PRINT 'sad.ModelPrice does not exist - run migration_014 first; skipped';
 ELSE
 BEGIN
---  The date the prices were read, used as the effective boundary. A literal
---  rather than SYSUTCDATETIME() so re-running this migration is a no-op
---  instead of opening a new price window on every deploy.
-DECLARE @from DATETIME2(3) = '2026-09-04T00:00:00';
+--  The effective boundary. A literal rather than SYSUTCDATETIME() so
+--  re-running this migration is a no-op instead of opening a new price window
+--  on every deploy.
+--
+--  IN UTC, AND THAT IS THE WHOLE POINT OF THIS COMMENT. The first version used
+--  '2026-09-04' because that was the local date where it was written - India,
+--  UTC+5:30. UTC was still 2026-09-03T21:00, so every row was inserted with a
+--  window that opened THREE HOURS IN THE FUTURE. price_for filters on
+--  EffectiveFrom <= now, so all 79 prices loaded, the table looked right, and
+--  every single call still recorded UNPRICED. Caught only by pricing a real
+--  investigation and finding 0 of 8 priced - the table having rows in it
+--  proved nothing.
+--
+--  So the boundary is the start of the UTC day the prices were read, which is
+--  already past by construction, and the guard below refuses to leave a window
+--  open in the future.
+DECLARE @from DATETIME2(3) = '2026-09-03T00:00:00';
 
 DECLARE @new TABLE (
     Provider VARCHAR(40), ModelIdentity NVARCHAR(200),
@@ -211,7 +224,35 @@ WHERE  NOT EXISTS (
       AND  p.OutputPerMillion = n.OutputPerMillion
 );
 
-PRINT CONCAT('model prices current as of 2026-09-04: ', @@ROWCOUNT, ' row(s) inserted');
+DECLARE @inserted INT = @@ROWCOUNT;
+
+--  REPAIR, for a database that already ran the version with the future date.
+--  Those rows are present, current, and invisible to price_for until the
+--  window opens. Re-running the insert above will not fix them - the
+--  NOT EXISTS sees a current row at the right price and correctly skips it -
+--  so the boundary itself has to be moved.
+UPDATE sad.ModelPrice
+SET    EffectiveFrom = @from
+WHERE  EffectiveFrom > SYSUTCDATETIME();
+
+DECLARE @unfuture INT = @@ROWCOUNT;
+
+--  And the matching half: a row closed AT that future boundary would leave a
+--  gap where the old price has ended and the new one has not begun, so a call
+--  in the gap prices as unknown rather than as either price.
+UPDATE sad.ModelPrice
+SET    EffectiveTo = @from
+WHERE  EffectiveTo > SYSUTCDATETIME()
+  AND  EffectiveTo > EffectiveFrom
+  AND  EffectiveFrom < @from;
+
+PRINT CONCAT('model prices effective ', CONVERT(VARCHAR(10), @from, 120), ': ',
+             @inserted, ' inserted, ', @unfuture, ' future-dated row(s) corrected');
+
+--  A price nobody can see is worse than a price nobody loaded, because the
+--  table looks correct. Say so rather than leaving it to a spend report.
+IF EXISTS (SELECT 1 FROM sad.ModelPrice WHERE EffectiveTo IS NULL AND EffectiveFrom > SYSUTCDATETIME())
+    PRINT 'WARNING: prices exist whose window has not opened yet - they will not price any call';
 END
 GO
 
