@@ -183,6 +183,11 @@ class PriorInvestigation:
     requirement: Optional[dict] = None
     candidate_scores: list[dict] = field(default_factory=list)
     final_report: Optional[dict] = None
+    #: Data centres the PREVIOUS turn had already ruled out, carried forward so
+    #: a second "give me another one" does not offer back the site the engineer
+    #: rejected first. Read from the same checkpoint state as everything else
+    #: here; empty for an ordinary first ask.
+    exclude_data_centers: list[str] = field(default_factory=list)
 
     @property
     def has_options(self) -> bool:
@@ -204,6 +209,7 @@ class PriorInvestigation:
             requirement=state.get("requirement"),
             candidate_scores=list(state.get("candidate_scores") or []),
             final_report=state.get("final_report"),
+            exclude_data_centers=list(state.get("exclude_data_centers") or []),
         )
 
 
@@ -398,9 +404,38 @@ def excluded_data_centers(query: str, prior: PriorInvestigation) -> list[str]:
     text = query.lower()
     known = {str(c["data_center"]) for c in prior.candidate_scores if c.get("data_center")}
     named = {dc for dc in known if dc.lower() in text}
-    if named:
-        return sorted(named)
-    return _offered_data_center(prior)
+    this_turn = sorted(named) if named else _offered_data_center(prior)
+
+    #  EXCLUSIONS ACCUMULATE ACROSS THE CONVERSATION.
+    #
+    #  Each turn used to be derived from its immediate predecessor alone, and
+    #  asking twice therefore walked in a circle. Live-verified on production,
+    #  one conversation, four turns:
+    #
+    #      1. find hosting, critical, 32 cores   -> cmh-p225  (Columbus-DC1)
+    #      2. "what other options?"              -> cmh-p225  (Columbus-DC1)
+    #      3. "give me from a different DC"      -> excludes Columbus, offers
+    #                                               phx-p167 (Phoenix-DC1)
+    #      4. "what other DCs?"                  -> excludes PHOENIX ONLY, and
+    #                                               offers cmh-p225 back
+    #
+    #  Turn 4 handed the engineer the exact site they had ruled out one turn
+    #  earlier, and listed Columbus-DC1 under "available_data_centers" as
+    #  though it were a fresh choice. A re-scope that returns you to what you
+    #  already rejected is worse than refusing: it reads as a genuine second
+    #  answer.
+    #
+    #  So the prior turn's own exclusions are unioned in. The risk this runs
+    #  is the one that has already broken this feature twice - excluding so
+    #  much that the shortlist empties - and it is handled rather than
+    #  avoided: the set only ever grows by the ONE site actually offered per
+    #  turn, and when it finally covers everything with capacity,
+    #  refinement.data_center_choice reports has_genuine_alternative:false and
+    #  the caller says so plainly. An honest "you have ruled out every site
+    #  that fits" is the correct end of this conversation. Silently starting
+    #  it over is not.
+    carried = [dc for dc in prior.exclude_data_centers if dc]
+    return sorted(set(this_turn) | set(carried))
 
 
 def _offered_data_center(prior: PriorInvestigation) -> list[str]:

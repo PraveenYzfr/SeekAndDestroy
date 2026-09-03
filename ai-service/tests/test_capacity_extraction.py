@@ -523,3 +523,75 @@ def test_the_platform_stamps_the_id_rather_than_trusting_it(monkeypatch):
         llm=object(), investigation_id=7, title="t", evidence={},
     )
     assert out.investigation_id == 7
+
+
+# ---------------------------------------------------------------------------
+# Asking twice must not walk in a circle
+#
+# Live-verified defect, production, one conversation of four turns: turn 3
+# ("give me from a different DC") excluded Columbus and offered Phoenix; turn 4
+# ("what other DCs?") excluded Phoenix ONLY and offered Columbus back - the
+# site the engineer had ruled out one turn earlier, listed as though it were a
+# fresh choice. Exclusions are derived per turn, so they have to accumulate.
+# ---------------------------------------------------------------------------
+
+
+def test_a_second_rescope_keeps_the_first_exclusion():
+    """Turn 4 of the production sequence. The prior turn was itself a re-scope
+    that had already ruled Columbus out; asking again must rule out Phoenix AS
+    WELL, not INSTEAD."""
+    prior = PriorInvestigation(
+        investigation_id=2,
+        investigation_type="Capacity",
+        user_query="give me from a different DC",
+        candidate_scores=[
+            {"cluster_code": "phx-p167", "data_center": "Phoenix-DC1", "eligibility_status": "Eligible"},
+            {"cluster_code": "den-p096", "data_center": "Denver-DC1", "eligibility_status": "Eligible"},
+        ],
+        exclude_data_centers=["Columbus-DC1"],
+    )
+    excluded = excluded_data_centers("what other DCs?", prior)
+    assert excluded == ["Columbus-DC1", "Phoenix-DC1"]
+
+
+def test_naming_a_site_still_keeps_what_was_already_ruled_out():
+    """The named-site branch is reached from the Chat.tsx rejection button,
+    which names one site. Naming a second one adds to the set; it does not
+    reset a conversation's history of rejections."""
+    prior = PriorInvestigation(
+        investigation_id=3,
+        investigation_type="Capacity",
+        user_query="give me from a different DC",
+        candidate_scores=[
+            {"cluster_code": "den-p096", "data_center": "Denver-DC1", "eligibility_status": "Eligible"},
+        ],
+        exclude_data_centers=["Columbus-DC1"],
+    )
+    assert excluded_data_centers(
+        "not in the Denver-DC1 data center", prior
+    ) == ["Columbus-DC1", "Denver-DC1"]
+
+
+def test_carried_exclusions_survive_a_turn_with_nothing_eligible():
+    """When the previous turn had no eligible candidate there is no new site to
+    add - but the ones already ruled out stay ruled out. Dropping them would
+    silently re-offer them."""
+    prior = PriorInvestigation(
+        investigation_id=4,
+        investigation_type="Capacity",
+        user_query="give me from a different DC",
+        candidate_scores=[],
+        exclude_data_centers=["Columbus-DC1", "Phoenix-DC1"],
+    )
+    assert excluded_data_centers("what other DCs?", prior) == [
+        "Columbus-DC1",
+        "Phoenix-DC1",
+    ]
+
+
+def test_an_ordinary_first_ask_still_excludes_nothing():
+    """No carried exclusions and no location word: unchanged behaviour. An
+    empty list means no exclusion the whole way down to the SQL, where an empty
+    NOT IN would exclude everything."""
+    prior = _prior_offering("Denver-DC1", "Atlanta-DC1")
+    assert excluded_data_centers("what other options?", prior) == []
