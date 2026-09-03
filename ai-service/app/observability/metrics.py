@@ -177,3 +177,19 @@ remediation_enqueued_total = Counter(
     "Graph failures enqueued for remediation, by drop site and whether the row was stored",
     ["site", "outcome"],
 )
+
+count_routing_total = Counter(
+    "sad_count_routing_total",
+    "Estate count questions ('how many servers') routed away from the graph, by outcome",
+    # deterministic  answered from SQL with no model call at all
+    # parsed         answered via the spec parser (two model calls)
+    # refused        the parser declined and the reader got a usable explanation
+    # fell_through   nothing here could answer, the graph ran as it did before
+    #
+    # fell_through is the one that matters and it is why this counter exists:
+    # that path returns the reader to the OLD bad answer, so a regression here
+    # is indistinguishable from the original defect. Without a counter the only
+    # trace is a log line, and container logs on this platform are destroyed by
+    # every deploy.
+    ["outcome"],
+)

@@ -29,6 +29,7 @@ from app.insights.whitelist import (
     ENTITIES,
     MEASURES,
     normalize_bool,
+    normalize_ci_class,
     normalize_entity,
     normalize_severity,
     valid_dimensions,
@@ -69,9 +70,20 @@ def normalize_spec(spec: InsightQuerySpec) -> InsightQuerySpec:
     mapping is passed through unchanged and left for validate_spec to accept
     or refuse, never silently dropped.
     """
-    updates: dict[str, object] = {"entity": normalize_entity(spec.entity)}
-    if "severity" in spec.filters:
-        updates["filters"] = {**spec.filters, "severity": [normalize_severity(v) for v in spec.filters["severity"]]}
+    entity = normalize_entity(spec.entity)
+    updates: dict[str, object] = {"entity": entity}
+    filters = spec.filters
+    if "severity" in filters:
+        filters = {**filters, "severity": [normalize_severity(v) for v in filters["severity"]]}
+    # "how many servers" arrives as ci_class=['servers'] because that is the
+    # word the reader used. ClassName holds ServiceNow's sys_class_name, so an
+    # unmapped value matches nothing and the honest-looking answer is zero -
+    # the same shape of failure as answering "no record" over a populated
+    # table. Mapped here, one literal key at a time, like severity above.
+    if "ci_class" in filters:
+        filters = {**filters, "ci_class": [normalize_ci_class(v) for v in filters["ci_class"]]}
+    if filters is not spec.filters:
+        updates["filters"] = filters
     return spec.model_copy(update=updates)
 
 

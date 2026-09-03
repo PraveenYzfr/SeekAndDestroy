@@ -306,8 +306,111 @@ def _recall(prior: conversation.PriorInvestigation, conversation_id: str | None)
     }
 
 
+
+def _counted_answer(query: str, conversation_id: str | None) -> dict | None:
+    """A count question answered from SQL, shaped like any other chat answer.
+
+    THREE OUTCOMES, IN ORDER OF PREFERENCE.
+
+    1. DETERMINISTIC. A bare "how many servers" is a dictionary lookup and a
+       COUNT. simple_count answers it with no model call, in milliseconds
+       rather than twelve seconds, and cannot be broken by a provider outage.
+    2. PARSED. Anything with a condition in it - by environment, in a data
+       centre, opened last month - needs the spec parser. Two model calls, and
+       the numbers still come from SQL.
+    3. EXPLAINED. The parser refused the question. The reader gets what this
+       layer CAN break down, in reader words, and an example - not an error.
+
+    Returning None means "carry on as before": the caller falls through to
+    quick_reply and the graph.
+
+    WHY NOT SIMPLY FAIL WITH AN ERROR. This intercepts questions that already
+    reached the graph and got a poor answer. Replacing a poor answer with
+    "something went wrong" is a regression, so an unknown failure degrades to
+    the previous behaviour rather than to a stack trace.
+
+    WHY THAT IS NOT GOOD ENOUGH ON ITS OWN. A silent fall-through looks exactly
+    like the defect this was written to fix - the reader sees "I have no record
+    of how many servers" and reasonably concludes nothing shipped. So the two
+    failures we can actually describe (a refused spec, and a countable question
+    the parser could not map) are ANSWERED rather than swallowed, and every
+    outcome including the silent one increments sad_count_routing_total.
+    """
+    from app.agents.llm_factory import get_chat_model
+    from app.insights.query_builder import InsightValidationError
+    from app.insights.router import answer_free_text, simple_count
+    from app.insights.whitelist import dimension_labels
+    from app.observability.metrics import count_routing_total
+
+    def delivered(result: dict, outcome: str) -> dict:
+        headline = (result.get("headline") or "").strip()
+        narrative = (result.get("narrative") or "").strip()
+        if not headline and not narrative:
+            return None
+        # The caveats are part of the answer, not decoration. They exist for
+        # things a reader would otherwise get wrong - that VMs are not counted
+        # as servers, or that a CI mapping to two business services is counted
+        # under both so grouped totals can exceed the ungrouped one. Dropping
+        # them would produce a figure that does not reconcile, unexplained.
+        parts = [p for p in (headline, narrative, (result.get("insight") or "").strip()) if p]
+        for caveat in result.get("caveats") or []:
+            if caveat:
+                parts.append(f"Note: {caveat}")
+        reply = _conversation_reply("\n\n".join(parts), conversation_id)
+        reply["investigation_type"] = "Count"
+        reply["insight_table"] = result.get("table")
+        reply["filters_applied"] = result.get("filters_applied")
+        reply["deterministic"] = bool(result.get("deterministic"))
+        count_routing_total.labels(outcome=outcome).inc()
+        return reply
+
+    # 1. No model at all, where the question does not need one.
+    try:
+        fast = simple_count(query)
+        if fast is not None:
+            return delivered(fast, "deterministic")
+    except Exception as exc:  # noqa: BLE001
+        # A database failure here is not a reason to skip the parser - it may
+        # be transient, and the parser path issues its own query.
+        logger.warning("graph.simple_count_failed", error=str(exc)[:300], query=query[:120])
+
+    # 2. The parser, for anything with a condition in it.
+    try:
+        llm = get_chat_model()
+        return delivered(answer_free_text(llm, llm, query), "parsed")
+    except InsightValidationError as exc:
+        # 3. The one failure we can describe precisely. The parser named a
+        # dimension, entity or filter this layer does not have, and the reader
+        # is entitled to know what it DOES have rather than being told to
+        # rephrase and guess.
+        #
+        # LABELS, NOT COLUMNS. dimension_labels returns reader-facing words -
+        # "data classification", never "DataClassification". Saying what can be
+        # grouped is the vocabulary of the question; enumerating what the
+        # estate contains is inventory, and that stays out of user-facing text
+        # for the reason recorded in app.agents.query_capability.
+        logger.info("graph.count_spec_refused", error=str(exc)[:300], query=query[:120])
+        labels = dimension_labels("ci")
+        reply = _conversation_reply(
+            "I can count what is in the estate, but not broken down the way you asked.\n\n"
+            "What I can count by: " + ", ".join(labels) + ".\n\n"
+            "So \"how many servers in production\" or \"VMs by data centre\" both work. "
+            "If you tell me which of those you meant, I will run it - or ask for a plain "
+            "total and I will give you that first.",
+            conversation_id,
+        )
+        reply["investigation_type"] = "Count"
+        count_routing_total.labels(outcome="refused").inc()
+        return reply
+    except Exception as exc:  # noqa: BLE001 - see WHY NOT SIMPLY FAIL above
+        logger.warning("graph.count_routing_failed", error=str(exc)[:300], query=query[:120])
+        count_routing_total.labels(outcome="fell_through").inc()
+        return None
+
+
 def run_investigation(*, query: str, created_by: int, conversation_id: str | None = None) -> dict:
     from app.graph.nodes import quick_reply
+    from app.insights import router as insights_router
     from app.services import answer_evaluation
     from app.observability.metrics import investigations_total
 
@@ -362,6 +465,26 @@ def run_investigation(*, query: str, created_by: int, conversation_id: str | Non
     # infrastructure-shaped, and asking it to be more specific when the
     # specifics are sitting in the previous turn is the same unhelpfulness in
     # a different costume.
+    # "How many servers do we have" - counted in SQL, before the graph, because
+    # the graph cannot count. Retrieval returns the top-k chunks most similar to
+    # a question and no chunk holds a total, so this question used to run a full
+    # investigation and answer "I have no record of how many servers are in the
+    # database" over a table holding 10,943 of them. The Insighter has counted
+    # in SQL the whole time; it was reachable only from its own endpoint.
+    #
+    # Checked BEFORE quick_reply: "how many servers do we have" is
+    # infrastructure-shaped with no application code and no quantity, which is
+    # exactly the shape quick_reply asks to be more specific about. Asking a
+    # counting question to name an application is the same unhelpfulness the
+    # capability refusal was written to stop.
+    #
+    # Skipped for a follow-up, like quick_reply, so "how many of those" keeps
+    # the conversation's subject instead of being re-read as a fresh count.
+    if resolution.kind is None and insights_router.has_count_intent(query):
+        counted = _counted_answer(query, conversation_id)
+        if counted is not None:
+            return answered(counted)
+
     if resolution.kind is None:
         reply = quick_reply(query)
         if reply is not None:

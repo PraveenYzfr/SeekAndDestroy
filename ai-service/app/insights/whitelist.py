@@ -224,6 +224,89 @@ HOSTING_ENTITY = EntityConfig(
     },
 )
 
+
+#: THE ESTATE ITSELF, not something that happened to it.
+#:
+#: The other four entities are event or relationship tables - what broke, what
+#: was done, what recurs, what lives where. None of them can answer "how many
+#: servers do we have", and that question reached the chat, fell through to
+#: retrieval, and came back "I have no record of how many servers are in the
+#: database" while sad.ConfigurationItem held 10,943 rows of ClassName
+#: 'cmdb_ci_server'. Retrieval cannot count - it returns the top-k chunks most
+#: similar to a question - so the honest-sounding refusal was produced by a
+#: model that had genuinely been handed nothing, and the platform reported the
+#: absence of data it owns.
+#:
+#: ConfigurationItem is the right base table rather than CiServer or
+#: ClusterNode: it is the one place every class is countable on the same
+#: footing, so "how many servers", "how many VMs" and "how many CIs by class"
+#: are one query shape with a filter, not three special cases. The per-class
+#: detail tables carry different columns and would each need their own entity
+#: to answer the same question.
+#:
+#: NO free-text or identity columns - Name and SysId identify a specific box
+#: and are not dimensions anyone groups by. Deliberately absent for the same
+#: reason ShortDescription is absent from Incident.
+CI_ENTITY = EntityConfig(
+    table="ConfigurationItem", alias="ci",
+    #: FirstDiscovered, not LastDiscovered. "How many servers did we add last
+    #: month" is a question about when a CI entered the estate; LastDiscovered
+    #: moves every time discovery runs and would make a date filter mean
+    #: "scanned recently", which is a staleness question wearing the same
+    #: words. Staleness has its own report in app.insights.cmdb_health.
+    date_column="ci.FirstDiscovered",
+    joins={
+        "support_group": Join(
+            "LEFT JOIN sad.SupportGroup sg ON ci.SupportGroupId = sg.SupportGroupId"
+        ),
+    },
+    dimensions={
+        #: The classes are ServiceNow's sys_class_name values, CHECK-constrained
+        #: in migration_008. 'server' and 'vm' as spoken by a person are mapped
+        #: to these by CI_CLASS_SYNONYMS below - the model is never asked to
+        #: invent a class string.
+        "ci_class": Dimension("ci.ClassName", "CI class"),
+        "environment": Dimension("ci.Environment", "environment"),
+        "operational_status": Dimension("ci.OperationalStatus", "operational status"),
+        "install_status": Dimension("ci.InstallStatus", "install status"),
+        "data_classification": Dimension("ci.DataClassification", "data classification"),
+        "regulatory_scope": Dimension("ci.RegulatoryScope", "regulatory scope"),
+        "discovery_source": Dimension("ci.DiscoverySource", "discovery source"),
+        "support_group": Dimension("sg.GroupName", "support group", join="support_group"),
+    },
+)
+
+#: What a person says -> the sys_class_name they mean. Applied to FILTER VALUES
+#: on ci_class, so "how many servers" becomes ClassName = 'cmdb_ci_server'
+#: rather than a model guessing at a string it has never been shown.
+#:
+#: "server" does NOT include vm_instance. A person asking how many servers we
+#: have and a person asking how many VMs are asking different questions, and
+#: silently folding 30,105 VM instances into a server count would be a wrong
+#: answer delivered confidently. If someone wants both they can ask for both,
+#: and the narrator states which class it counted.
+CI_CLASS_SYNONYMS: dict[str, str] = {
+    "server": "cmdb_ci_server", "servers": "cmdb_ci_server",
+    "host": "cmdb_ci_server", "hosts": "cmdb_ci_server",
+    "vm": "cmdb_ci_vm_instance", "vms": "cmdb_ci_vm_instance",
+    "virtual machine": "cmdb_ci_vm_instance", "virtual machines": "cmdb_ci_vm_instance",
+    "application": "cmdb_ci_appl", "applications": "cmdb_ci_appl", "app": "cmdb_ci_appl",
+    "apps": "cmdb_ci_appl",
+    "cluster": "cmdb_ci_cluster", "clusters": "cmdb_ci_cluster",
+    "node": "cmdb_ci_cluster_node", "nodes": "cmdb_ci_cluster_node",
+    "database": "cmdb_ci_db_instance", "databases": "cmdb_ci_db_instance",
+    "db": "cmdb_ci_db_instance", "dbs": "cmdb_ci_db_instance",
+    "load balancer": "cmdb_ci_lb", "load balancers": "cmdb_ci_lb", "lb": "cmdb_ci_lb",
+    "data center": "cmdb_ci_datacenter", "data centre": "cmdb_ci_datacenter",
+    "data centers": "cmdb_ci_datacenter", "data centres": "cmdb_ci_datacenter",
+    "zone": "cmdb_ci_zone", "zones": "cmdb_ci_zone",
+    "service": "cmdb_ci_service", "services": "cmdb_ci_service",
+    "storage volume": "cmdb_ci_storage_volume", "storage volumes": "cmdb_ci_storage_volume",
+    "storage array": "cmdb_ci_storage_array", "storage arrays": "cmdb_ci_storage_array",
+    "network device": "cmdb_ci_netgear", "network devices": "cmdb_ci_netgear",
+}
+
+
 #: "incident"/"change"/"problem" are this schema's own words; "PRB" is the
 #: ITSM shorthand for a Problem record, same idea as the severity synonyms
 #: below - a question that says PRB should not silently come back empty
@@ -234,9 +317,17 @@ ENTITIES: dict[str, EntityConfig] = {
     "change": CHANGE_ENTITY,
     "problem": PROBLEM_ENTITY,
     "hosting": HOSTING_ENTITY,
+    "ci": CI_ENTITY,
 }
 
 ENTITY_SYNONYMS: dict[str, str] = {
+    #: The estate entity answers "how many X do we have". People say "CI",
+    #: "configuration item", "asset" and "inventory" for the same table, and
+    #: they say "server" for a row in it - the last is an entity hint AND a
+    #: class filter, which normalize_ci_class resolves separately.
+    "ci": "ci", "cis": "ci", "configuration item": "ci",
+    "configuration items": "ci", "asset": "ci", "assets": "ci",
+    "inventory": "ci", "estate": "ci",
     "prb": "problem", "problems": "problem",
     "incidents": "incident", "inc": "incident",
     "changes": "change", "chg": "change",
@@ -308,3 +399,52 @@ def valid_dimensions(entity: str) -> list[str]:
 
 def valid_measures() -> list[str]:
     return sorted(MEASURES)
+
+
+#: How a class is written back to the reader. The reader's own noun is what
+#: gets matched, but echoing it verbatim produces "30,105 vms." - correct and
+#: sloppy. A count is often pasted into a change record or a mail, so the
+#: sentence has to survive being read by someone who did not ask the question.
+CI_CLASS_DISPLAY: dict[str, str] = {
+    "cmdb_ci_server": "servers",
+    "cmdb_ci_vm_instance": "VMs",
+    "cmdb_ci_cluster_node": "cluster nodes",
+    "cmdb_ci_db_instance": "database instances",
+    "cmdb_ci_appl": "applications",
+    "cmdb_ci_cluster": "clusters",
+    "cmdb_ci_lb": "load balancers",
+    "cmdb_ci_datacenter": "data centres",
+    "cmdb_ci_zone": "zones",
+    "cmdb_ci_service": "business services",
+    "cmdb_ci_storage_volume": "storage volumes",
+    "cmdb_ci_storage_array": "storage arrays",
+    "cmdb_ci_netgear": "network devices",
+}
+
+
+def normalize_ci_class(value: str) -> str:
+    """Map a spoken class name onto a real sys_class_name, or pass it through.
+
+    "servers" -> "cmdb_ci_server". A value already in ServiceNow form, or one
+    with no mapping at all, is returned unchanged and left for validate_spec
+    to accept or refuse - never silently dropped, which would turn a filter
+    the reader asked for into a count of the whole estate.
+    """
+    return CI_CLASS_SYNONYMS.get(str(value).strip().casefold(), value)
+
+
+def dimension_labels(entity: str) -> list[str]:
+    """Reader-facing labels for an entity's dimensions, for use in a refusal.
+
+    Labels, never column names or keys. The Dimension dataclass carries a
+    label precisely so a message can say "data classification" rather than
+    "DataClassification", and this is the function that keeps that promise -
+    a refusal that names columns teaches the reader the schema, which is the
+    disclosure shape removed from capability_reply on 2026-09-04.
+
+    Saying what CAN be grouped is not the same as enumerating what the estate
+    CONTAINS. The first is the vocabulary of the question; the second is
+    inventory, and it stays out of user-facing text.
+    """
+    config = ENTITIES.get(entity)
+    return sorted(d.label for d in config.dimensions.values()) if config else []

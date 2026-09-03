@@ -364,3 +364,149 @@ def _bare_group_columns(result: dict) -> list[str]:
     if not result["rows"]:
         return []
     return [k for k in result["rows"][0] if k != "IncidentCount"]
+
+
+#: "How many X" - a question the ESTATE answers by counting rows, not one the
+#: placement engine or retrieval can answer at all.
+#:
+#: THE FAILURE THIS EXISTS FOR. "How many servers we have in our db" reached
+#: the chat graph, was classified Question, retrieved nothing useful, and came
+#: back "I have no record of how many servers are in the database" - with next
+#: steps advising the reader to "query the database management system", which
+#: is this platform's entire job. sad.ConfigurationItem held 10,943 rows of
+#: ClassName 'cmdb_ci_server' at the time.
+#:
+#: The cause was not a bad model. Retrieval returns the top-k chunks most
+#: similar to a question; no chunk contains a total, so counting by retrieval
+#: is impossible by construction and the model was answering honestly about
+#: what it had been handed. The Insighter - which counts in SQL - existed the
+#: whole time, reachable only from its own endpoint, never from the graph.
+#:
+#: DELIBERATELY NARROW. This intercepts a question ABOUT A QUANTITY OF THINGS,
+#: never a question about how much capacity a workload needs. "How many cores
+#: does APP-CRM need" is a requirement, "how many servers do we have" is a
+#: count, and the difference is whether the number describes the estate or the
+#: thing being placed. The negative lookahead carries that distinction.
+_COUNT_INTENT_RE = re.compile(
+    r"\b(?:how\s+many|how\s+much\s+of|number\s+of|count\s+of|total\s+(?:number\s+of|count))\b"
+    #  ... but not a capacity requirement, which is a quantity of RESOURCE
+    #  for one workload rather than a quantity of things in the estate.
+    r"(?!\s+(?:cpu|cpus|core|cores|ram|memory|gb|tb|storage|disk|iops)\b)",
+    re.IGNORECASE,
+)
+
+#: Things the estate contains. A count question has to be ABOUT something, and
+#: "how many did we do last quarter" names nothing this layer can count.
+#: Checked with mentions_any (word boundaries, closed inflections) rather than
+#: substring, for the reason recorded in query_capability: `"app" in "what
+#: happened"` is True and that single substring match refused four incident
+#: lookups in the golden set.
+_COUNTABLE_WORDS: tuple[str, ...] = (
+    "server", "host", "vm", "virtual machine", "machine", "node", "cluster",
+    "application", "app", "database", "db", "ci", "configuration item", "asset",
+    "incident", "change", "problem", "outage", "ticket", "data center",
+    "data centre", "datacenter", "datacentre", "dc", "zone", "load balancer",
+    "storage", "device", "service", "instance", "estate", "inventory",
+)
+
+
+def has_count_intent(question: str) -> bool:
+    """Whether this question is asking the estate for a quantity.
+
+    Both halves are required. "How many" alone matches "how many times do I
+    have to ask", and a countable noun alone matches every hosting request
+    ever written - it is the conjunction that identifies a counting question.
+    """
+    from app.agents.query_capability import mentions_any
+
+    return bool(_COUNT_INTENT_RE.search(question)) and mentions_any(question, _COUNTABLE_WORDS)
+
+
+#: "How many servers" and nothing else - the whole question, not a clause of a
+#: bigger one. Anchored at the front and allowed only a short, closed tail
+#: ("do we have", "are there", "in the cmdb"), because the moment a question
+#: carries a condition - in production, by data centre, opened last month - it
+#: needs the spec parser and this path must decline it.
+_SIMPLE_COUNT_RE = re.compile(
+    r"^\W*(?:and\s+|so\s+|ok(?:ay)?[,.\s]+|good[,.\s]+|thanks[,.\s]+)*"
+    r"(?:how\s+many|number\s+of|count\s+of|total\s+(?:number\s+of|count\s+of))\s+"
+    r"(?P<noun>[a-z][a-z \-]{1,30}?)"
+    r"(?:\s+(?:do|does|are|is|have|has|we|you|there|in|the|our|db|database|cmdb|estate|"
+    r"system|total|overall|right\s+now|currently|today))*\s*[?.!]*$",
+    re.IGNORECASE,
+)
+
+
+def simple_count(question: str) -> dict | None:
+    """Answer a bare "how many X" with SQL and NO model call at all.
+
+    Returns None when the question is not that simple, and None means "use the
+    spec parser" - this is a fast path, never a replacement for it.
+
+    WHY THIS EXISTS. Routing "how many servers do we have" through the parser
+    costs two provider calls and about twelve seconds to map one noun onto one
+    class name and then read a single integer aloud. Both calls are also
+    failure surface: a provider outage turned a question the database can
+    answer in milliseconds into no answer at all. The mapping is a dictionary
+    lookup and the sentence is fixed, so neither needs a model.
+
+    The count still goes through build_query and the whitelist. No raw SQL is
+    assembled here - the class name is a bound parameter and the entity,
+    dimension and filter are validated exactly as a parsed spec would be, so
+    this path is not a hole in the security boundary it is bypassing the
+    parser for.
+    """
+    from app.insights.whitelist import CI_CLASS_DISPLAY, CI_CLASS_SYNONYMS
+    from app.models.insights import InsightQuerySpec
+
+    match = _SIMPLE_COUNT_RE.match(question.strip())
+    if match is None:
+        return None
+
+    noun = " ".join(match.group("noun").split()).casefold()
+    ci_class = CI_CLASS_SYNONYMS.get(noun)
+    if ci_class is None:
+        # A countable thing this layer has no class for - incidents, changes,
+        # problems - belongs to the parser and its own entities, not here.
+        return None
+
+    result = run_query(InsightQuerySpec(entity="ci", measure="count", filters={"ci_class": [ci_class]}))
+    total = result["total_count"]
+
+    #: Never a bare number. The reader asked "how many servers" and the honest
+    #: answer states WHICH class was counted, because "server" and "VM" are
+    #: different rows and a total that silently merged them would be wrong in a
+    #: way nobody could see. Same rule the narrator follows; applied here in
+    #: Python because the sentence never varies.
+    label = CI_CLASS_DISPLAY.get(ci_class, noun)
+    headline = f"{total:,} {label}."
+    narrative = (
+        f"Counted directly from the CMDB: {total:,} configuration items of class "
+        f"{ci_class}. This is every one on record regardless of environment or "
+        f"lifecycle state - say the word and I can break it down by environment, "
+        f"data centre, operational status or support group."
+    )
+    caveats: list[str] = []
+    if ci_class == "cmdb_ci_server":
+        # The single most likely misreading of this number, stated before the
+        # reader acts on it rather than after they notice it does not add up.
+        caveats.append(
+            "Virtual machines are a separate class and are NOT included in this "
+            "figure. Ask about VMs if you want those counted too."
+        )
+
+    return {
+        "intent": "aggregate",
+        "headline": headline,
+        "narrative": narrative,
+        "insight": "",
+        "caveats": caveats,
+        "table": {"title": None, "columns": ["ci_class", "count"], "rows": [[ci_class, total]]},
+        "filters_applied": {"ci_class": [ci_class]},
+        "row_count": 1,
+        "total_count": total,
+        #: So the caller can say a model was never involved. A number produced
+        #: without one is a stronger claim than the same number with one, and
+        #: the reader is entitled to know which they are looking at.
+        "deterministic": True,
+    }
