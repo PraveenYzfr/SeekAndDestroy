@@ -27,3 +27,10 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["api-gateway:5090"]
+
+  # Host metrics: CPU, RAM, disk, IOPS. node-exporter runs in the hub compose
+  # (~/infra/docker-compose.yml) because it describes the whole machine, not just
+  # this system. Without it Grafana can say nothing about the box underneath.
+  - job_name: node
+    static_configs:
+      - targets: ["hub-node-exporter:9100"]
