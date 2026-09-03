@@ -61,7 +61,93 @@ runq() {
         bash -c '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$P" -C -I -b -d SeekandDestroy -h -1 -W -i /dev/stdin'
 }
 
+# A DIRTY DEPLOY CHECKOUT IS SOMEBODY'S WORK, NOT DEBRIS.
+#
+# This tree is shared. Sessions run pytest against a change by extracting files
+# into it (the runtime image ships no tests directory), and what they leave
+# behind aborts the next `git pull --ff-only` hours later, mid-deploy, with the
+# person who left it long gone.
+#
+# The tempting fixes are both wrong. `git checkout -- .` discards it, and on
+# 2026-09-04 that would have silently reverted a COMMITTED information-disclosure
+# fix in app/agents/query_capability.py - the file looked like litter and was
+# not. `git stash` unattended is no better: the build would then run against
+# different content than the tree anyone left, and a pop that conflicts ten
+# minutes later leaves a half-applied deploy nobody is watching.
+#
+# So the default is to REFUSE and say exactly what is in the way. --stash-local
+# performs the sequence that worked when done by hand, including the check that
+# actually matters: the tree must come back byte-identical, or this stops
+# rather than reporting a clean deploy over someone's lost work.
+STASH_LOCAL=0
+for arg in "$@"; do
+    case "$arg" in
+        --stash-local) STASH_LOCAL=1 ;;
+    esac
+done
+
 echo "==> 1. pull"
+DIRTY=$(git status --porcelain --untracked-files=no)
+if [ -n "$DIRTY" ]; then
+    echo "    the deploy checkout has uncommitted changes:"
+    echo "$DIRTY" | sed "s/^/      /"
+    if [ "$STASH_LOCAL" -ne 1 ]; then
+        cat <<'HELP'
+
+    Refusing to pull over them. They belong to somebody - verify before you act.
+
+      git -C ~/SeekAndDestroy diff -- <path>     read it first
+      bash scripts/deploy-app.sh --stash-local   set aside, deploy, restore, verify
+
+    Never `git checkout -- .` here. On 2026-09-04 that would have reverted a
+    committed fix that merely LOOKED like leftover test scaffolding.
+
+    To run tests against a change without dirtying this tree, stage it in /tmp
+    and `docker cp` it into the container.
+HELP
+        exit 1
+    fi
+    echo "    --stash-local: setting them aside"
+    #  TWO RECORDS, FOR TWO DIFFERENT JOBS.
+    #
+    #  The patch is the verification: what `git diff` said before, compared
+    #  against what it says after the pop. Both sides go through git, so a
+    #  checkout that normalises line endings cannot make an unchanged file
+    #  look changed. A raw byte-for-byte `cp` comparison DID exactly that in
+    #  testing - it reported the restore had altered a file it had not
+    #  touched, and a check that cries wolf is one somebody switches off.
+    #
+    #  The file copies are the recovery: if the pop fails or conflicts, the
+    #  content is still sitting somewhere a human can read it, which the
+    #  stash alone does not guarantee once a conflict has half-applied it.
+    BACKUP=$(mktemp -d)
+    git diff > "$BACKUP/.before.patch"
+    git status --porcelain --untracked-files=no | awk '{print $2}' > "$BACKUP/.files"
+    while read -r f; do
+        mkdir -p "$BACKUP/$(dirname "$f")" && cp "$f" "$BACKUP/$f"
+    done < "$BACKUP/.files"
+    git stash push -m "deploy-app.sh set aside $(date -u +%FT%TZ)" >/dev/null
+    STASHED=1
+    echo "    copies kept in $BACKUP"
+    trap 'if [ "${STASHED:-0}" = 1 ]; then
+            echo "==> restoring the changes that were set aside"
+            if git stash pop >/dev/null 2>&1; then
+                git diff > "$BACKUP/.after.patch"
+                if cmp -s "$BACKUP/.before.patch" "$BACKUP/.after.patch"; then
+                    echo "    restored, and identical to what was set aside:"
+                    sed "s/^/      /" "$BACKUP/.files"
+                else
+                    echo "    RESTORED BUT NOT IDENTICAL - do not assume this deploy was clean."
+                    echo "    compare: diff $BACKUP/.before.patch $BACKUP/.after.patch"
+                    echo "    originals: $BACKUP"
+                fi
+            else
+                echo "    STASH POP FAILED - the changes are NOT back in the tree."
+                echo "    originals: $BACKUP"
+                echo "    recover:   git stash list / git stash pop"
+            fi
+          fi' EXIT
+fi
 git pull --ff-only
 echo "    now at $(git rev-parse --short HEAD): $(git log -1 --format=%s)"
 
