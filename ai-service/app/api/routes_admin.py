@@ -25,9 +25,19 @@ class RoleAssignment(BaseModel):
     model: str = Field(min_length=1, max_length=200)
 
 
-def _fallback_for(role_name: str) -> dict:
-    """What answers for this role when its primary provider fails."""
-    from app.agents.llm_factory import resolve_role
+def _fallback_for(role_name: str, primary_provider: str) -> dict:
+    """What answers for this role when its primary provider fails.
+
+    ``chain`` is what runs when no explicit fallback was chosen - the estate
+    chain from SAD_LLM__FALLBACK_PROVIDERS, in the order it will be tried, read
+    from the SAME function the runtime uses so the screen cannot disagree with
+    the platform.
+
+    Sent even when ``configured`` is True, so the screen can show what an
+    operator's explicit choice REPLACES rather than presenting it as the only
+    thing standing behind the role.
+    """
+    from app.agents.llm_factory import configured_fallback_legs, resolve_role
 
     key = roles.fallback_role_name(role_name)
     resolved = resolve_role(key)
@@ -37,6 +47,10 @@ def _fallback_for(role_name: str) -> dict:
         "provider": resolved.get("provider") if configured else None,
         "model": resolved.get("model") if configured else None,
         "configured": configured,
+        "chain": [
+            {"provider": prov, "model": mdl}
+            for prov, mdl in configured_fallback_legs(primary_provider)
+        ],
     }
 
 
@@ -69,11 +83,15 @@ def get_model_roles(current: AuthenticatedEmployee = Depends(require_admin)):
                 # wrong for the others surfaces as a quiet change in output
                 # quality rather than an error.
                 #
-                # `configured` False means no backup was chosen. Deliberately not
-                # filled in with a default - a fallback nobody selected is a model
-                # nobody evaluated, and choosing one automatically turns an outage
-                # into a silent change in behaviour.
-                "fallback": _fallback_for(role.name),
+                # `configured` False means no backup was CHOSEN. It no longer
+                # means the role has none: an unconfigured role inherits the
+                # estate chain, which `fallback.chain` carries. A screen saying
+                # "not set" while three legs stood behind the role is the kind
+                # of quiet disagreement that gets "fixed" by pinning a fallback
+                # that was already there.
+                "fallback": _fallback_for(
+                    role.name, resolved.get(role.name, {}).get("provider", "")
+                ),
             }
             for role in roles.ROLES
         ],
@@ -153,11 +171,23 @@ def set_model_role(
     # The cache is keyed on (provider, model), so a stale entry would keep
     # serving the previous model until the process restarted.
     reset_role_model_cache()
+    # READ BACK WHAT WAS STORED, rather than echoing what was sent.
+    #
+    # The screen applies this response to its own row instead of re-fetching
+    # every role, so anything missing here is something the browser would have
+    # to invent - and a fabricated "set by" or timestamp is a small lie that
+    # survives until somebody relies on it. Symmetric with the DELETE below for
+    # the same reason.
+    from app.agents.llm_factory import resolve_role
+
+    stored = resolve_role(role_name)
     return {
         "role": role_name,
-        "provider": assignment.provider,
-        "model": assignment.model,
-        "source": "override",
+        "provider": stored.get("provider", assignment.provider),
+        "model": stored.get("model", assignment.model),
+        "source": stored.get("source", "override"),
+        "updated_by": stored.get("updated_by"),
+        "updated_at": stored.get("updated_at"),
         # True when the provider could not be reached to confirm the name. Said
         # plainly rather than implied, because an unverified save can still fail
         # at run time.
@@ -172,9 +202,25 @@ def clear_model_role(role_name: str, current: AuthenticatedEmployee = Depends(re
         raise ProblemDetailsError(404, "Unknown role", f"'{role_name}' is not a model role.")
     removed = llm_role_repository.clear(role_name)
     reset_role_model_cache()
+
+    # RESOLVED, NOT ASSUMED. This returned a hardcoded "config", true only while
+    # the tier slots were empty. Clearing an override now lands on "tier", and
+    # the judge lands on "judge_default" - so the screen would have shown the
+    # right model under the wrong reason for it. The reason is the entire point
+    # of this field: it is what tells an operator whether editing settings.py
+    # would affect the role at all.
+    from app.agents.llm_factory import resolve_role
+
+    now = resolve_role(role_name)
     # "was already the default" is a different answer from "reset", and the
     # screen should not claim to have changed something it did not.
-    return {"role": role_name, "removed": removed, "source": "config"}
+    return {
+        "role": role_name,
+        "removed": removed,
+        "provider": now.get("provider"),
+        "model": now.get("model"),
+        "source": now.get("source"),
+    }
 
 
 @router.get("/api/admin/evaluation")

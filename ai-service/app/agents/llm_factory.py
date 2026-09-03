@@ -356,6 +356,27 @@ def _model_for(provider: str, model: str) -> BaseChatModel:
     return build_chat_model_for_provider(provider, model_override=model)
 
 
+def configured_fallback_legs(primary_provider: str) -> list[tuple[str, str]]:
+    """The estate chain behind ``primary_provider``, in order, as (provider, model).
+
+    EXPORTED so the Model Settings screen can show the same legs the runtime
+    will actually try. That screen used to say "not set" for any role without an
+    explicit fallback, which stopped being true the moment an unconfigured role
+    began inheriting this chain - and a screen that UNDER-reports resilience
+    gets "fixed" by someone pinning a fallback that was already there.
+
+    One function, two callers, so the two cannot drift. A second implementation
+    on the API side would agree on the day it was written and quietly stop
+    agreeing at the first configuration change.
+    """
+    settings = get_settings().llm
+    return [
+        (name, settings.fallback_model_for(name))
+        for name in settings.fallback_provider_list
+        if name != primary_provider  # a provider is not its own backup
+    ]
+
+
 def _with_configured_fallbacks(primary_provider: str, primary: BaseChatModel) -> BaseChatModel:
     """Put the configured fallback chain behind an already-built primary.
 
@@ -364,15 +385,10 @@ def _with_configured_fallbacks(primary_provider: str, primary: BaseChatModel) ->
     nothing constructible degrades to the primary alone, which is where it
     started.
     """
-    settings = get_settings().llm
     members = [(primary_provider, primary)]
-    for name in settings.fallback_provider_list:
-        if name == primary_provider:
-            continue  # a provider is not its own backup
+    for name, model in configured_fallback_legs(primary_provider):
         try:
-            members.append(
-                (name, build_chat_model_for_provider(name, settings.fallback_model_for(name)))
-            )
+            members.append((name, build_chat_model_for_provider(name, model)))
         except Exception as exc:  # noqa: BLE001
             logger.warning("llm_factory.role_fallback_unavailable", provider=name, error=str(exc))
     if len(members) == 1:

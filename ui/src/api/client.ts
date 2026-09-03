@@ -102,14 +102,34 @@ export const api = {
   getTranscript: (investigationId: number) =>
     request<InvestigationTranscript>(`/admin/investigations/${investigationId}/transcript`),
 
+  /** Returns the STORED row, not the submitted one - so the screen can apply
+   *  it to its own state instead of re-fetching every role, without inventing
+   *  a "set by" or a timestamp the server never recorded. */
   setModelRole: (role: string, provider: string, model: string) =>
-    request<{ role: string; provider: string; model: string; unverified: boolean }>(
+    request<{
+      role: string;
+      provider: string;
+      model: string;
+      source: ModelRole["source"];
+      updated_by: string | null;
+      updated_at: string | null;
+      unverified: boolean;
+    }>(
       `/admin/model-roles/${role}`,
       { method: "PUT", body: JSON.stringify({ provider, model }) },
     ),
 
+  /** Carries what the role resolves to NOW that the override is gone, so the
+   *  screen need not re-fetch to find out - and so it shows the real reason
+   *  ("tier", "judge_default") rather than assuming "config". */
   clearModelRole: (role: string) =>
-    request<{ role: string; removed: boolean }>(`/admin/model-roles/${role}`, { method: "DELETE" }),
+    request<{
+      role: string;
+      removed: boolean;
+      provider: string;
+      model: string;
+      source: ModelRole["source"];
+    }>(`/admin/model-roles/${role}`, { method: "DELETE" }),
 
   getApplications: (environment?: string) =>
     request<CmdbApplication[]>(`/cmdb/applications${environment ? `?environment=${environment}` : ""}`),

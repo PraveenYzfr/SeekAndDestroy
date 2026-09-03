@@ -97,6 +97,28 @@ function RoleModelPicker({
   );
 }
 
+/** WHICH LAYER decided this role's model, in words an operator can act on.
+ *
+ *  Everything that was not an override used to read "from config", which is
+ *  where this screen sends someone to change it - and for a TIER resolution
+ *  that is the wrong file section: editing SAD_LLM__MODEL does nothing to a
+ *  role answering from the cheap slot. Three of the five layers were invisible.
+ */
+function sourceLabel(role: ModelRole): string {
+  switch (role.source) {
+    case "override":
+      return "overridden";
+    case "force_single":
+      return "forced single model";
+    case "judge_default":
+      return "judge default";
+    case "tier":
+      return role.tier ? `from config, ${role.tier} tier` : "from config, tier";
+    default:
+      return "from config";
+  }
+}
+
 /** Administrator screen: which model runs each role.
  *
  *  Three things this screen deliberately does:
@@ -124,8 +146,16 @@ export default function ModelSettings() {
   const [evaluation, setEvaluation] = useState<EvaluationResult | null>(null);
   const [grading, setGrading] = useState(false);
 
-  async function load(refreshProviders = false) {
-    setLoading(true);
+  /** `quiet` refreshes WITHOUT blanking the page.
+   *
+   *  Every save used to call load(), which set loading=true and replaced the
+   *  whole screen with "Loading model settings..." - so choosing a model threw
+   *  away every role card, every open dropdown and the scroll position, then
+   *  rebuilt them. That is the jitter. It also re-asked every provider for its
+   *  model list, which is the slowest thing this screen does, to redraw values
+   *  the save response already carried. */
+  async function load(refreshProviders = false, quiet = false) {
+    if (!quiet) setLoading(true);
     setError("");
     try {
       const [r, p] = await Promise.all([api.getModelRoles(), api.getModelProviders(refreshProviders)]);
@@ -145,6 +175,42 @@ export default function ModelSettings() {
     void load();
   }, []);
 
+  /** Fold one saved assignment into the roles already on screen.
+   *
+   *  `roleKey` is either a role's own name or "<role>.fallback", so this looks
+   *  in both places - the same key the API takes, rather than a second mapping
+   *  that could disagree with it.
+   *
+   *  Every field comes from the SERVER'S response. Nothing is assembled here:
+   *  a "set by" or a timestamp invented in the browser would look identical to
+   *  a stored one and outlive anyone's memory of where it came from. */
+  function applySaved(
+    roleKey: string,
+    saved: { provider: string; model: string; source: ModelRole["source"]; updated_by: string | null; updated_at: string | null },
+  ) {
+    setRoles((prev) =>
+      prev.map((r) => {
+        if (r.name === roleKey) {
+          return {
+            ...r,
+            provider: saved.provider,
+            model: saved.model,
+            source: saved.source,
+            updated_by: saved.updated_by,
+            updated_at: saved.updated_at,
+          };
+        }
+        if (r.fallback.role === roleKey) {
+          return {
+            ...r,
+            fallback: { ...r.fallback, provider: saved.provider, model: saved.model, configured: true },
+          };
+        }
+        return r;
+      }),
+    );
+  }
+
   async function assign(role: string, value: string) {
     if (!value) return;
     const [provider, ...rest] = value.split("::");
@@ -156,7 +222,10 @@ export default function ModelSettings() {
       setStatus(
         result.unverified
           ? `${role}: saved as ${provider} / ${model}, but ${provider} could not be reached to confirm the model exists.`
-          : `${role}: now ${provider} / ${model}. Applies to the next investigation.`,
+          // "Applies to the next investigation" was appended here and is ALREADY
+          // stated permanently in the subtitle above. Repeating it per save
+          // bought nothing and pushed the line into a second row.
+          : `${role}: now ${provider} / ${model}.`,
       );
       // Drop the pending pair only on success. Leaving it on failure keeps the
       // administrator's half-made choice on screen instead of snapping the row
@@ -167,7 +236,9 @@ export default function ModelSettings() {
         delete next[role];
         return next;
       });
-      await load();
+      // The save response already describes the stored row, so the screen
+      // updates in place. No refetch, no repaint, nothing to scroll back to.
+      applySaved(role, result);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     } finally {
@@ -180,13 +251,37 @@ export default function ModelSettings() {
     setStatus("");
     try {
       const result = await api.clearModelRole(role);
-      setStatus(result.removed ? `${role}: reset to the configured default.` : `${role}: was already the default.`);
+      setStatus(
+        result.removed
+          ? `${role}: reset to ${result.provider} / ${result.model}.`
+          : `${role}: was already the default.`,
+      );
       setPending((prev) => {
         const next = { ...prev };
         delete next[role];
         return next;
       });
-      await load();
+      // Same in-place update as a save. The response carries what the role
+      // resolves to now, INCLUDING which layer answered - so a reset that lands
+      // on the tier slot does not get labelled "from config".
+      setRoles((prev) =>
+        prev.map((r) => {
+          if (r.name === role) {
+            return {
+              ...r,
+              provider: result.provider,
+              model: result.model,
+              source: result.source,
+              updated_by: null,
+              updated_at: null,
+            };
+          }
+          if (r.fallback.role === role) {
+            return { ...r, fallback: { ...r.fallback, provider: null, model: null, configured: false } };
+          }
+          return r;
+        }),
+      );
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     } finally {
@@ -224,18 +319,37 @@ export default function ModelSettings() {
         </div>
       )}
 
-      {status && (
-        <div className="card" style={{ fontSize: 13 }}>
-          {status}
-        </div>
-      )}
+      {/* ALWAYS RENDERED, even with nothing to say.
+          Conditional rendering made this the third layout shift on every save:
+          a card appeared where none had been and pushed every role card down by
+          its height, so the row being edited moved out from under the pointer.
+          Reserving the space costs one blank line and removes the jump.
+
+          aria-live because the save is now SILENT - nothing flashes, nothing
+          reloads - and a confirmation nobody can perceive is not one. */}
+      <div
+        aria-live="polite"
+        style={{
+          // TWO LINES, because one was not enough. Reserving a single line still
+          // shifted the page by 12px (measured): the confirmation wraps at this
+          // width, so the band grew when it filled. Reserving the height the
+          // message actually takes is the whole point of reserving it.
+          minHeight: 38,
+          fontSize: 13,
+          margin: "8px 0",
+          opacity: status ? 1 : 0,
+          transition: "opacity 120ms ease-in",
+        }}
+      >
+        {status}
+      </div>
 
       {roles.map((role) => (
         <div className="card" key={role.name}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <strong>{role.title}</strong>
             <span className={`badge ${role.source === "override" ? "eligible" : ""}`}>
-              {role.source === "override" ? "overridden" : "from config"}
+              {sourceLabel(role)}
             </span>
           </div>
           <p style={{ fontSize: 13, margin: "6px 0" }}>{role.description}</p>
@@ -247,8 +361,15 @@ export default function ModelSettings() {
           <div className="form-row" style={{ maxWidth: 520 }}>
             <label>
               In effect: {role.provider} / {role.model}
-              {role.source === "override" && role.updated_by ? ` — set by ${role.updated_by}` : ""}
             </label>
+            {/* ITS OWN LINE, ALWAYS PRESENT.
+                Appended to the label above, "- set by E1001" wrapped it onto a
+                second line the moment a role became overridden, moving
+                everything below by one line height (16px, measured). A reserved
+                line costs that space once instead of paying it on every save. */}
+            <div style={{ minHeight: 16, fontSize: 12, opacity: 0.7 }}>
+              {role.source === "override" && role.updated_by ? `set by ${role.updated_by}` : ""}
+            </div>
             {/* TWO SELECTS, NOT ONE GROUPED LIST.
                 A single select with an optgroup per provider meant scrolling
                 one list of every model on every provider - openai alone
@@ -273,16 +394,29 @@ export default function ModelSettings() {
             />
           </div>
 
-          {role.source === "override" && (
-            <button
-              className="secondary"
-              disabled={busy === role.name}
-              onClick={() => void reset(role.name)}
-              style={{ marginTop: 8 }}
-            >
-              Reset to configured default
-            </button>
-          )}
+          {/* ALWAYS RENDERED, DISABLED WHEN IT DOES NOT APPLY.
+              Rendering this conditionally was the largest of the layout shifts:
+              saving a model made the role "overridden", which made this button
+              appear, which pushed every card below it down by 67px - measured.
+              So the reward for choosing a model was the rest of the page
+              jumping out from under the pointer.
+
+              Disabled rather than hidden because the affordance is worth
+              knowing about before it is usable: "this can be undone" is the
+              reassurance somebody wants BEFORE they change a model, not after. */}
+          <button
+            className="secondary"
+            disabled={busy === role.name || role.source !== "override"}
+            onClick={() => void reset(role.name)}
+            style={{ marginTop: 8 }}
+            title={
+              role.source === "override"
+                ? "Drop the override so this role follows configuration again"
+                : "Nothing to reset - this role already follows configuration"
+            }
+          >
+            Reset to configured default
+          </button>
 
           {/* WHAT ANSWERS WHEN THE PRIMARY FAILS - never chosen automatically.
               Per role rather than one estate-wide spare: extraction wants
@@ -296,7 +430,34 @@ export default function ModelSettings() {
           <div className="form-row" style={{ maxWidth: 520, marginTop: 14 }}>
             <label>
               Fallback, if {role.provider} / {role.model} fails:{" "}
-              {role.fallback.configured ? `${role.fallback.provider} / ${role.fallback.model}` : "not set"}
+              {role.fallback.configured ? (
+                `${role.fallback.provider} / ${role.fallback.model}`
+              ) : role.fallback.chain.length > 0 ? (
+                /* NOT "not set". An unconfigured role inherits the estate chain,
+                   and this label denied it - so the screen under-reported the
+                   platform's resilience, which invites pinning a fallback that
+                   was already there. Shown greyed to keep the distinction that
+                   matters: inherited, not chosen here. */
+                <span style={{ opacity: 0.75 }}>
+                  {role.fallback.chain.map((leg, i) => {
+                    const reachable = providers.some((p) => p.provider === leg.provider && p.available);
+                    return (
+                      <span key={leg.provider}>
+                        {i > 0 ? ", then " : ""}
+                        <span
+                          style={reachable ? undefined : { textDecoration: "line-through" }}
+                          title={reachable ? undefined : `${leg.provider} cannot be reached, so this leg is skipped`}
+                        >
+                          {leg.provider} / {leg.model}
+                        </span>
+                      </span>
+                    );
+                  })}
+                  {" (inherited)"}
+                </span>
+              ) : (
+                "none - this role answers alone if its provider fails"
+              )}
             </label>
             <RoleModelPicker
               roleKey={role.fallback.role}
@@ -310,16 +471,21 @@ export default function ModelSettings() {
             />
           </div>
 
-          {role.fallback.configured && (
-            <button
-              className="secondary"
-              disabled={busy === role.fallback.role}
-              onClick={() => void reset(role.fallback.role)}
-              style={{ marginTop: 8 }}
-            >
-              Clear fallback
-            </button>
-          )}
+          {/* Same reasoning as the reset above: appearing and disappearing is
+              what moved the page. */}
+          <button
+            className="secondary"
+            disabled={busy === role.fallback.role || !role.fallback.configured}
+            onClick={() => void reset(role.fallback.role)}
+            style={{ marginTop: 8 }}
+            title={
+              role.fallback.configured
+                ? "Drop this role's explicit fallback and inherit the configured chain"
+                : "No explicit fallback to clear - this role already inherits the configured chain"
+            }
+          >
+            Clear fallback
+          </button>
         </div>
       ))}
 

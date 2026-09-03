@@ -426,7 +426,13 @@ export interface ModelRoleFallback {
   role: string;
   provider: string | null;
   model: string | null;
+  /** An explicit per-role choice was made. NOT "the role has a backup" -
+   *  every role inherits `chain` when this is false. */
   configured: boolean;
+  /** The estate chain that answers when no explicit fallback was chosen, in
+   *  the order it will be tried. Read on the server from the same function the
+   *  runtime uses, so this cannot drift from what actually runs. */
+  chain: { provider: string; model: string }[];
 }
 
 export interface ModelRole {
@@ -436,7 +442,13 @@ export interface ModelRole {
   chains: string[];
   provider: string;
   model: string;
-  source: "config" | "override";
+  /** WHICH LAYER DECIDED, and all five are reachable. Typing this as
+   *  "config" | "override" hid three of them: a tier resolution rendered as
+   *  "from config", which points an operator at the wrong setting to edit. */
+  source: "force_single" | "override" | "judge_default" | "tier" | "config";
+  /** "cheap" or "costly" - which slot a tier resolution came from. Present on
+   *  every role; only meaningful when source is "tier". */
+  tier?: string;
   updated_by: string | null;
   updated_at: string | null;
   fallback: ModelRoleFallback;
