@@ -23,6 +23,16 @@ def round2(value: float | Decimal) -> Decimal:
     return Decimal(str(value)).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
 
 
+#: How far past the observed data a straight-line projection is still worth
+#: stating as a date. Ten years.
+#:
+#: Not a guard against overflow - though it prevents one. It is a statement about
+#: what the model can support: an OLS fit over weeks of utilisation says nothing
+#: credible about a decade out, and naming a specific day makes a number up.
+#: Beyond this the answer is "no exhaustion date on any horizon we can see".
+_MAX_PROJECTION_DAYS = 3650
+
+
 def _ols(x: list[float], y: list[float]) -> tuple[float, float, float, float]:
     """Returns (slope, intercept, r_squared, residual_std_error)."""
     n = len(x)
@@ -77,7 +87,29 @@ def forecast_resource(
         x_cross = (threshold_percent - intercept) / slope
         if x_cross > last_x:
             days_from_last = x_cross - last_x
-            exhaustion_date = ordered[-1][0] + timedelta(days=round(days_from_last))
+            # A POSITIVE SLOPE CAN BE VANISHINGLY SMALL, and dividing by it
+            # produces a crossing date millions of years out.
+            #
+            #     slope 1e-9, threshold 10 points away
+            #     -> 9,999,999,910 days -> 27 million years
+            #     -> OverflowError: Python int too large to convert to C int
+            #
+            # That crashed a real hosting investigation in the golden set. The
+            # whole case failed - no answer at all - because a utilisation
+            # series was almost perfectly flat, which is the most ordinary
+            # shape a healthy cluster has.
+            #
+            # Beyond the cap there is no exhaustion date to report. Not a
+            # far-future one: a linear extrapolation is credible for a bounded
+            # distance past the data it was fitted to, and 27 million years from
+            # 90 days of observations is arithmetic rather than a forecast.
+            # Reporting None says "not on any horizon we can see", which is both
+            # true and what the reader needs.
+            #
+            # `breaches` was already correct for this case - anything past the
+            # horizon is not a breach - so only the DATE was ever wrong.
+            if days_from_last <= _MAX_PROJECTION_DAYS:
+                exhaustion_date = ordered[-1][0] + timedelta(days=round(days_from_last))
             breaches = days_from_last <= horizon_days
         elif y[-1] >= threshold_percent:
             # Already at/over threshold as of the last observation.
