@@ -171,23 +171,44 @@ def set_model_role(
     # The cache is keyed on (provider, model), so a stale entry would keep
     # serving the previous model until the process restarted.
     reset_role_model_cache()
-    # READ BACK WHAT WAS STORED, rather than echoing what was sent.
+    # THE WRITE IS THE AUTHORITY HERE, NOT THE READ-BACK.
     #
     # The screen applies this response to its own row instead of re-fetching
     # every role, so anything missing here is something the browser would have
-    # to invent - and a fabricated "set by" or timestamp is a small lie that
-    # survives until somebody relies on it. Symmetric with the DELETE below for
-    # the same reason.
+    # to invent. But this read-back was trusted over the write, and that is
+    # backwards: set_override returned without raising, so the row IS stored,
+    # including the UpdatedBy this handler supplied.
+    #
+    # resolve_role SWALLOWS a failed overrides read by design - a broken table
+    # must not take narration offline - and answers from the tier or config
+    # instead. So a read that failed in the window between the write and the
+    # read-back reported the TIER model, with source "tier", after a save that
+    # had actually succeeded. The screen would show a model the operator did not
+    # choose, immediately after their choice, with no error: exactly the silent
+    # screen-versus-reality disagreement the rest of this change removes.
+    #
+    # `.get(key, default)` could not have caught it either. resolve_role always
+    # returns every key, so the default never fires - the value is PRESENT and
+    # WRONG, which is the case a default cannot express.
     from app.agents.llm_factory import resolve_role
 
     stored = resolve_role(role_name)
+    confirmed = (
+        stored.get("source") == "override"
+        and stored.get("provider") == assignment.provider
+        and stored.get("model") == assignment.model
+    )
     return {
         "role": role_name,
-        "provider": stored.get("provider", assignment.provider),
-        "model": stored.get("model", assignment.model),
-        "source": stored.get("source", "override"),
-        "updated_by": stored.get("updated_by"),
-        "updated_at": stored.get("updated_at"),
+        # What was written - which is what is stored.
+        "provider": assignment.provider,
+        "model": assignment.model,
+        "source": "override",
+        "updated_by": current.employee_number,
+        # The one field only the database knows. Omitted rather than guessed
+        # when the read-back did not confirm the write, because a timestamp
+        # invented here would be indistinguishable from a recorded one.
+        "updated_at": stored.get("updated_at") if confirmed else None,
         # True when the provider could not be reached to confirm the name. Said
         # plainly rather than implied, because an unverified save can still fail
         # at run time.

@@ -255,3 +255,55 @@ class TestTheJudgeIsIndependentByDefault:
         monkeypatch.setattr(settings, "judge_model", "claude-x", raising=False)
         monkeypatch.setattr(type(settings), "key_for", lambda self, p: "", raising=False)
         assert resolve_role("judge")["source"] != "judge_default"
+
+
+class TestASaveReportsWhatWasActuallyWritten:
+    """The read-back must never overrule the write.
+
+    resolve_role deliberately swallows a failed overrides read - a broken table
+    must not take narration offline - and answers from the tier instead. The
+    save handler trusted that answer, so a read failing in the window between
+    the write and the read-back reported the TIER model after a save that had
+    succeeded, and the screen showed a model the operator never chose.
+    """
+
+    def test_a_failed_read_back_does_not_rewrite_the_operators_choice(self, monkeypatch):
+        from app.agents import llm_factory
+        from app.api import routes_admin
+        from app.security.jwt_service import AuthenticatedEmployee
+
+        monkeypatch.setattr(
+            provider_models, "list_models",
+            lambda provider, refresh=False: {"available": True, "models": ["gpt-4o-mini"]},
+        )
+        # Exactly what resolve_role returns when the overrides table cannot be
+        # read: a complete, plausible, WRONG answer - never a missing key.
+        monkeypatch.setattr(
+            llm_factory, "resolve_role",
+            lambda name, overrides=None: {
+                "role": name, "tier": "cheap", "provider": "groq",
+                "model": "openai/gpt-oss-20b", "source": "tier",
+                "updated_by": None, "updated_at": None,
+            },
+        )
+
+        result = routes_admin.set_model_role(
+            "narration",
+            routes_admin.RoleAssignment(provider="openai", model="gpt-4o-mini"),
+            current=AuthenticatedEmployee(
+                employee_id=1, employee_number="E1001",
+                display_name="Test", email="t@example.com",
+            ),
+        )
+
+        assert result["provider"] == "openai", "reported the tier's provider, not the one saved"
+        assert result["model"] == "gpt-4o-mini", "reported the tier's model, not the one saved"
+        assert result["source"] == "override", "a stored override reported as a tier default"
+        assert result["updated_by"] == "E1001"
+        assert result["updated_at"] is None, "a timestamp the read-back never confirmed"
+
+    def test_the_override_really_was_written(self):
+        """The companion to the test above: proving the response is honest is
+        only worth something if the row actually landed."""
+        repo.set_override("narration", "openai", "gpt-4o-mini", "E1001")
+        assert repo.as_map()["narration"]["Model"] == "gpt-4o-mini"
