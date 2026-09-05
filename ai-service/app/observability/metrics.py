@@ -210,3 +210,68 @@ judge_not_applicable_total = Counter(
     # what the platform says is being intercepted before it investigates.
     ["kind"],
 )
+
+#: HOW LONG A MODEL CALL TOOK, which nothing measured until now.
+#:
+#: Before this there were exactly two Histograms in the platform - fidelity_score
+#: and judge_score - and both are quality. Nothing timed a call. Latency lived in
+#: AgentAuditLog.LatencyMs, queryable in SQL and invisible in Grafana, so "what is
+#: our p95" could only be answered by someone with a database prompt open.
+#:
+#: LABELLED BY TASK, which is the label the token counter still lacks and the
+#: reason this is worth more than a single global timer. Measured over two days,
+#: the tasks differ by more than 4x:
+#:
+#:     FinalRecommendationReport   avg 2.5s   max 7.0s   avg 16,864 prompt tokens
+#:     JudgeVerdict                avg 1.6s   max 2.0s   avg  1,187
+#:     CandidateExplanation        avg 1.0s   max 1.2s   avg  2,067
+#:     RightSizingExplanation      avg 0.6s   max 0.7s   avg    914
+#:
+#: A single number over all of them describes none of them.
+#:
+#: Buckets run to 120s deliberately. A cold investigation was taking 150 seconds
+#: a week ago, and buckets that stop at 10 would have put every one of those in
+#: +Inf and reported nothing about the problem being fixed.
+#:
+#: Cardinality: ~6 providers x ~10 models x ~8 task shapes, all bounded by
+#: configuration rather than by user input.
+llm_duration_seconds = Histogram(
+    "sad_llm_duration_seconds",
+    "Wall-clock duration of a completed model call, by provider, model and task",
+    ["provider", "model", "task"],
+    buckets=(0.25, 0.5, 1, 2, 3, 5, 8, 13, 21, 34, 60, 120),
+)
+
+#: THE SAME CALL'S TOKENS, LABELLED THE SAME WAY.
+#:
+#: sad_llm_tokens_total carries {provider, kind} only, so "which operation burns
+#: tokens" is unanswerable from it - and sad_llm_cost_usd_total already carries
+#: {provider, model}, which made the two inconsistent: spend was sliceable by
+#: model and the tokens underneath it were not.
+#:
+#: A SECOND SERIES RATHER THAN A RELABELLING of the original. Adding labels to a
+#: live counter resets it and silently rebases every rate() and increase() that
+#: reads it, including the ones on the dashboard. This one is emitted from the
+#: audit-completion path where the task is known; the original keeps emitting
+#: from the model classes, where it is not.
+llm_task_tokens_total = Counter(
+    "sad_llm_task_tokens_total",
+    "Tokens consumed by a completed model call, by provider, model, task and kind",
+    ["provider", "model", "task", "kind"],
+)
+
+#: END TO END, WHICH IS WHAT A PERSON ACTUALLY WAITS FOR.
+#:
+#: Model time is only part of it and frequently the smaller part. Investigation
+#: 132 took 59.7 seconds wall with 6.9 seconds of model time; investigation 49
+#: took 30 seconds wall with 0.1. Timing only the model calls would have reported
+#: both as fast.
+#:
+#: Labelled by type because a Count answers in milliseconds and a Hosting run
+#: does real work, and mixing them makes a percentile that describes neither.
+investigation_duration_seconds = Histogram(
+    "sad_investigation_duration_seconds",
+    "Wall-clock duration of a whole investigation, from request to answer",
+    ["investigation_type"],
+    buckets=(0.5, 1, 2, 5, 10, 20, 30, 60, 90, 120, 180, 300),
+)

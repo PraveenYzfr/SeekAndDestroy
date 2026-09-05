@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import structlog
 
-from app.repositories.base import T, execute, execute_insert
+from app.repositories.base import T, execute, execute_insert, fetch_all
 
 logger = structlog.get_logger(__name__)
 
@@ -94,6 +94,13 @@ def log_complete(
         },
     )
 
+    # AFTER the UPDATE, deliberately. This re-reads the row for StartedAt,
+    # CompletedAt and ToolName, and CompletedAt is written by the statement
+    # above - called before it, the read found NULL, the guard returned, and
+    # the metric silently never appeared. Which is exactly how it behaved on
+    # first write: no error, no sample, nothing to indicate why.
+    _observe_timing(audit_id, provider, model, prompt_tokens, completion_tokens)
+
 
 def _price(model, prompt_tokens, completion_tokens):
     """Cost of this call, or UNPRICED.
@@ -120,6 +127,60 @@ def _now():
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+
+def _observe_timing(audit_id, provider, model, prompt_tokens, completion_tokens) -> None:
+    """Export how long this call took and what it spent, labelled by TASK.
+
+    Emitted here rather than from the three chat-model classes for two reasons.
+    It is one site instead of three, so a provider added later cannot forget to
+    do it - the same argument _audited makes for graph nodes. And the task is
+    only knowable here: a chat model sees messages, not the schema it is filling
+    or the node that asked for it.
+
+    The row is re-read to get StartedAt and ToolName. That is one indexed
+    primary-key lookup on the completion path of a call that just spent seconds
+    talking to a provider, and it avoids threading a start timestamp and a tool
+    name through every caller of log_complete.
+
+    Never raises. A metric is a comment on work already done, and this file's
+    own rule is that recording what a call cost must not be able to fail it.
+    """
+    try:
+        from app.observability.metrics import llm_duration_seconds, llm_task_tokens_total
+
+        rows = fetch_all(
+            f"SELECT ToolName, StartedAt, CompletedAt FROM {T('AgentAuditLog')} WHERE AuditId = :id",
+            {"id": audit_id},
+        )
+        if not rows:
+            return
+        row = rows[0]
+        started, completed = row.get("StartedAt"), row.get("CompletedAt")
+        # A cache hit closes with no measurable elapsed time and no provider.
+        # Recording it as a 0-second model call would drag every percentile
+        # toward zero and describe a call that never happened.
+        if started is None or completed is None or not provider:
+            return
+        seconds = (completed - started).total_seconds()
+        if seconds < 0:
+            return
+
+        # "llm:FinalRecommendationReport" -> "FinalRecommendationReport". The
+        # prefix is a storage detail; a label carrying it would read as noise on
+        # every panel and every alert.
+        task = str(row.get("ToolName") or "unknown").removeprefix("llm:")
+        labels = {"provider": provider, "model": model or "unknown", "task": task}
+        llm_duration_seconds.labels(**labels).observe(seconds)
+        for kind, count in (("prompt", prompt_tokens), ("completion", completion_tokens)):
+            # None means NOT RECORDED, which is not zero - the same distinction
+            # the columns themselves keep. A provider that omits the usage block
+            # must not look like one that used no tokens.
+            if count is not None:
+                llm_task_tokens_total.labels(kind=kind, **labels).inc(float(count))
+    except Exception:  # noqa: BLE001 - never fail a call to describe it
+        pass
 
 
 def _observe_cost(provider: str | None, model: str | None, cost) -> None:
