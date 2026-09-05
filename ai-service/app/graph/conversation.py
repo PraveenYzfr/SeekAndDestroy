@@ -190,6 +190,36 @@ class PriorInvestigation:
     exclude_data_centers: list[str] = field(default_factory=list)
 
     @property
+    def cluster_subject(self) -> Optional[str]:
+        """The cluster this conversation is about, if it is about one.
+
+        THE FAILURE THIS EXISTS FOR. An engineer asked "explain me more about
+        msp-p194", then followed up with "is it stable enough for a production
+        hosting?" and "what are the incidents talk about?". Neither follow-up
+        contains the cluster code, and carry_subject had nothing to carry: it
+        knows about application codes and capacity requirements, and a cluster
+        is neither.
+
+        So retrieval ran on the bare pronoun text. Hybrid search is not at
+        fault - given "msp-p194 incidents" it returns msp-p194 documents at the
+        top, BM25 is on and the code tokenises to three sparse terms. It was
+        never given the code. Dense similarity then matched "stability" and
+        "incidents" generally, and returned INC1009430, INC1004913 and
+        INC1002631 - all on msp-p204 - plus INC1003924 on dal-p044.
+
+        msp-p194 has ZERO incidents. The platform reported four, said "two",
+        then "three", then insisted "the correct count is three, not two". None
+        of those numbers was right and the count changed because every turn
+        re-retrieved a different top-k for a different query.
+
+        Read from the query that started the thread rather than from the
+        candidate list: a right-sizing run names dozens of clusters and none of
+        them is the subject, whereas the code the engineer typed is.
+        """
+        match = _CLUSTER_CODE_RE.search(self.user_query or "")
+        return match.group(0) if match else None
+
+    @property
     def has_options(self) -> bool:
         return bool(self.candidate_scores)
 
@@ -354,7 +384,32 @@ def resolve(query: str, prior: Optional[PriorInvestigation]) -> Resolution:
             exclude_data_centers=excluded_data_centers(query, prior),
         )
 
-    return Resolution(kind=ABOUT_PREVIOUS, resolved_query=query, prior=prior)
+    # ABOUT_PREVIOUS GROUNDS ON THE PREVIOUS RUN'S EVIDENCE - AND A QUESTION HAS
+    # NONE.
+    #
+    # The design is sound where it applies: "why was that rejected?" is answered
+    # from the candidate list of the run the engineer is looking at, and a vector
+    # search has no way of knowing which run that was. But when the previous turn
+    # was itself a Question, there is no candidate list, prior_context_docs comes
+    # back empty, and retrieval falls through to a similarity search over the bare
+    # follow-up text.
+    #
+    # That is how a conversation about msp-p194 - a cluster with ZERO incidents -
+    # came to be told about four incidents belonging to msp-p204 and dal-p044.
+    # "is it stable enough for production hosting?" contains no cluster code, so
+    # the search matched on "stability" and "production" and returned whatever
+    # incident prose was nearest.
+    #
+    # So the subject is carried here too. It costs nothing when the previous turn
+    # DID produce evidence - the query simply names the thing it was already
+    # about - and it gives retrieval the one token that discriminates msp-p194
+    # from msp-p204 when it did not. Hybrid search resolves the code correctly
+    # once it is given it; BM25 tokenises msp-p194 to three sparse terms and
+    # ranks its documents top. It was never the retriever that failed.
+    carried = carry_subject(query, prior)
+    return Resolution(
+        kind=ABOUT_PREVIOUS, resolved_query=carried or query, prior=prior
+    )
 
 
 def excluded_data_centers(query: str, prior: PriorInvestigation) -> list[str]:
@@ -500,6 +555,19 @@ def carry_subject(query: str, prior: PriorInvestigation) -> Optional[str]:
     """
     if prior.application_code:
         return f"{query} (continuing the request to find hosting for {prior.application_code})"
+
+    # A CLUSTER IS A SUBJECT TOO. Checked after the application code because an
+    # application is the stronger referent - "find hosting for APP-CRM" is
+    # about the app, and the clusters are the answer, not the topic.
+    #
+    # The wording says "about", not "find hosting for", and that difference is
+    # load-bearing: classify_investigation_type reads these tokens, and phrasing
+    # this as a hosting request would turn "is it stable?" into a placement run
+    # for a cluster that already exists. It stays a Question and simply gains
+    # the noun it was missing.
+    cluster = prior.cluster_subject
+    if cluster:
+        return f"{query} (about cluster {cluster})"
 
     requirement = prior.requirement or {}
     cpu = requirement.get("cpu_cores")
