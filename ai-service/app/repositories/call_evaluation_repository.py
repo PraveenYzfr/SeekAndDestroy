@@ -100,23 +100,39 @@ def record_many(rows: list[dict]) -> int:
 
 
 def for_investigation(investigation_id: int) -> list[dict]:
-    """Every graded call in one investigation, newest grading first.
+    """EVERY call in one investigation, with its grade when it has one.
 
-    Joined to the audit row so the caller gets the prompt, the response and the
-    model beside the score - the whole point of storing per call rather than per
-    answer.
+    Driven from the audit log, not from the grades. That direction is the whole
+    fix: this used to read
+
+        FROM CallEvaluation e JOIN AgentAuditLog a ON a.AuditId = e.AuditId
+
+    which iterates GRADES and attaches the prompt, so a call that was never
+    graded could not appear at all. Grading is per narration call, so most calls
+    are not graded - and the screen built to show an engineer what the model was
+    sent showed nothing for exactly the conversations worth reading.
+
+    Measured before the change: investigation 131 had two audit rows and
+    get_transcript returned zero calls. The conversation that drifted onto
+    another cluster's incidents was the one it could not display.
+
+    A LEFT JOIN, so an ungraded call arrives with Grader NULL rather than being
+    dropped. The caller must treat that as "not graded", which is not the same
+    as a score of zero - the distinction this codebase keeps everywhere else.
     """
     return fetch_all(
         f"""
-        SELECT  e.CallEvaluationId, e.AuditId, e.Grader, e.Grounded, e.Total,
+        SELECT  e.CallEvaluationId, e.Grader, e.Grounded, e.Total,
                 e.Rate, e.UngroundedJson, e.GraderVersion, e.CreatedAt,
-                a.GraphNode, a.ToolName, a.ModelIdentity, a.Provider,
+                a.AuditId, a.GraphNode, a.ToolName, a.ModelIdentity, a.Provider,
                 a.StartedAt, a.CompletedAt, a.Success,
-                a.InputJson, a.OutputJson
-        FROM    {T('CallEvaluation')} e
-        JOIN    {T('AgentAuditLog')} a ON a.AuditId = e.AuditId
-        WHERE   e.InvestigationId = :investigation_id
-        ORDER BY e.AuditId, e.Grader
+                a.InputJson, a.OutputJson,
+                a.PromptTokens, a.CompletionTokens, a.CostUsd, a.LatencyMs
+        FROM    {T('AgentAuditLog')} a
+        LEFT JOIN {T('CallEvaluation')} e
+               ON e.AuditId = a.AuditId AND e.InvestigationId = a.InvestigationId
+        WHERE   a.InvestigationId = :investigation_id
+        ORDER BY a.AuditId, e.Grader
         """,
         {"investigation_id": investigation_id},
         max_rows=2000,

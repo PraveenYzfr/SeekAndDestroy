@@ -404,8 +404,22 @@ def get_transcript(investigation_id: int, current: AuthenticatedEmployee = Depen
             "success": r.get("Success"),
             "prompt": r.get("InputJson"),
             "output": r.get("OutputJson"),
+            # What the call COST, beside what it said. Already recorded per row
+            # and previously dropped on the way to the screen, so "which step
+            # was slow and expensive" needed SQL to answer.
+            "prompt_tokens": r.get("PromptTokens"),
+            "completion_tokens": r.get("CompletionTokens"),
+            "cost_usd": _as_float(r.get("CostUsd")),
+            "latency_ms": r.get("LatencyMs"),
             "grades": [],
         })
+        # Grader is NULL on the LEFT JOIN when this call was never graded. That
+        # is most calls - grading runs per narration call - and it is NOT a
+        # score of zero. Appending a row of Nones here would put an ungraded
+        # call and a perfectly-graded one in the same shape, which is the
+        # distinction the whole evaluation layer exists to keep.
+        if r.get("Grader") is None:
+            continue
         call["grades"].append({
             "grader": r["Grader"],
             "grounded": r["Grounded"],
