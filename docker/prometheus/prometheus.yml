@@ -34,3 +34,25 @@ scrape_configs:
   - job_name: node
     static_configs:
       - targets: ["hub-node-exporter:9100"]
+
+  # PROMETHEUS SCRAPING ITSELF. Without this it can evaluate every rule in the
+  # file and say nothing about its own health: up{job="prometheus"} returned an
+  # empty vector, so "is the thing that watches everything still watching"
+  # was unanswerable from the thing itself.
+  #
+  # It also gives the only view of rule-evaluation failures and scrape duration,
+  # which is how a silently-degrading Prometheus is normally caught.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # PER-CONTAINER CPU, MEMORY AND LIMITS. node-exporter describes the machine;
+  # on a single VM running fifteen containers, "the box is at 5.6%" is not the
+  # question anyone asks - "which container" is, and nothing could answer it.
+  # container_cpu_usage_seconds_total returned an empty vector before this.
+  #
+  # cAdvisor is read-only against the Docker socket and the host cgroup tree. It
+  # is mounted that way below and is not exposed off the loopback interface.
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]

@@ -335,6 +335,45 @@ services:
     # just retries scraping until a target exists; a target being down shows
     # up as "down" in Prometheus, which is normal, not an error.
 
+  # PER-CONTAINER METRICS. node-exporter says the host is busy; this says which
+  # of the fifteen containers is doing it. Added because
+  # container_cpu_usage_seconds_total was empty and "which container" had no
+  # answer on a single-VM estate.
+  #
+  # READ-ONLY EVERYWHERE. Every mount is :ro and the container needs no
+  # capabilities beyond reading cgroups - it observes, it never acts. The Docker
+  # socket is the one that matters: mounted read-only so a compromise here
+  # cannot start or stop anything, which is not true of a writable socket mount.
+  #
+  # privileged is deliberately NOT set. cAdvisor's own docs suggest it; on this
+  # kernel the read-only mounts below are sufficient, and privileged on a
+  # container holding the Docker socket is a host takeover waiting for a bug.
+  #
+  # No published port. Prometheus reaches it on the compose network by name, and
+  # cAdvisor's UI would otherwise be one more unauthenticated endpoint.
+  cadvisor:
+    profiles: ["observability"]
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    networks:
+      default:
+      hub:
+        aliases: ["cadvisor"]
+    command:
+      # Only the metrics this platform reads. The default set includes per-cpu
+      # and per-diskio series that multiply cardinality by the number of cores
+      # and devices for panels nobody has.
+      - --docker_only=true
+      - --housekeeping_interval=15s
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    restart: unless-stopped
+
   alertmanager:
     profiles: ["observability"]
     image: prom/alertmanager:latest
