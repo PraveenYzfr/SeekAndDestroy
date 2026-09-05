@@ -372,11 +372,13 @@ def load_application_requirements(state: InfrastructureRecommendationState) -> d
     if itype == InvestigationType.CAPACITY:
         extracted = _extract_capacity_requirement_via_llm(query)
         if extracted is not None:
+            #  THE TWO SECURITY-RELEVANT FALLBACKS FAIL CLOSED. See
+            #  _SECURITY_COERCIONS below for why they used to fail open.
             environment, env_ok = _coerce_enum(extracted.environment, Environment, Environment.PRODUCTION)
             platform, platform_ok = _coerce_enum(extracted.platform, TechnologyPlatform, TechnologyPlatform.KUBERNETES)
-            tier, tier_ok = _coerce_enum(extracted.availability_tier, AvailabilityTier, AvailabilityTier.TIER_2)
+            tier, tier_ok = _coerce_enum(extracted.availability_tier, AvailabilityTier, AvailabilityTier.TIER_1)
             classification, class_ok = _coerce_enum(
-                extracted.data_classification, DataClassification, DataClassification.INTERNAL
+                extracted.data_classification, DataClassification, DataClassification.RESTRICTED
             )
             coerced = [
                 name for name, ok in (
@@ -391,6 +393,10 @@ def load_application_requirements(state: InfrastructureRecommendationState) -> d
                     availability_tier=extracted.availability_tier,
                     data_classification=extracted.data_classification,
                 )
+            #  ASK, having already failed closed. The substituted value is the
+            #  strictest one, so an engineer who never answers is protected by
+            #  the narrow shortlist rather than by a promise to follow up.
+            clarification = _clarification_for(coerced, state.get("user_query") or "")
             # A dimension the engineer never mentioned comes back as null, and
             # null is resolved HERE rather than being forbidden in the contract.
             # The regex path has always defaulted-and-declared; this one used to
@@ -419,6 +425,7 @@ def load_application_requirements(state: InfrastructureRecommendationState) -> d
                 criticality="Medium",
             )
             return {
+                "clarification_prompt": clarification,
                 "capacity_requirements": {
                     **resolved,
                     "extraction_method": "llm",
@@ -433,6 +440,81 @@ def load_application_requirements(state: InfrastructureRecommendationState) -> d
         return _capacity_requirement_from_regex(query)
 
     return {}
+
+
+#: The coerced fields whose fallback CHANGES WHO MAY HOST THE WORKLOAD, with
+#: the question to ask and the options to offer. environment and platform are
+#: deliberately absent: Production is the strict end of RULE-001, and a wrong
+#: platform narrows to a family rather than widening the estate.
+_SECURITY_COERCIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "data_classification": (
+        "I could not tell the data classification, so I assumed Restricted - "
+        "the strictest - and searched only clusters certified to hold it. "
+        "Which is it really?",
+        ("Restricted", "Confidential", "Internal", "Public"),
+    ),
+    "availability_tier": (
+        "I could not tell the availability tier, so I assumed Tier-1 - the "
+        "strictest. Which is it really?",
+        ("Tier-1", "Tier-2", "Tier-3"),
+    ),
+}
+
+
+def _clarification_for(coerced: list[str], user_query: str) -> dict | None:
+    """The question to put back to the engineer when a value that decides
+    ELIGIBILITY had to be invented, or None when nothing security-relevant was.
+
+    WHY THIS EXISTS, AND WHY IT IS NOT JUST A BETTER DEFAULT.
+
+    data_classification used to fall back to Internal, which is level 1 of 4 in
+    CLASSIFICATION_LEVEL, and RULE-005 admits a cluster when
+    cluster_level >= data_level. So an unparseable classification did not merely
+    guess - it guessed in the direction that WIDENS the estate. A workload whose
+    real classification was Restricted was offered clusters certified only for
+    Internal, and the control whose entire purpose is preventing that had failed
+    open. availability_tier -> Tier-2 had the same direction against RULE-004,
+    where rank(candidate) <= rank(required).
+
+    Praveen's instruction was: ask, and fall back to the most restrictive value
+    if nobody answers. Both halves are here and the ORDER matters. The strict
+    value is applied FIRST, so the investigation that runs is already safe; the
+    question is then asked about a shortlist that has already been narrowed.
+    An engineer who ignores the prompt is protected by what was searched, not by
+    a promise to come back to it.
+
+    That inverts the failure mode rather than removing it. A Restricted-by-
+    default search will often return nothing on this estate, and "no clusters
+    qualify" is a worse answer than a wrong one is dangerous - which is exactly
+    why the prompt says WHICH assumption produced the empty result, instead of
+    leaving the engineer to conclude the platform is broken.
+
+    ``user_query`` travels with the prompt so the caller can compose a complete
+    follow-up rather than a bare word. A button that sends "Restricted" on its
+    own would be resolved against the previous turn by the conversation layer,
+    which is a different mechanism owned elsewhere; sending the original
+    sentence plus the stated classification needs nothing from it.
+    """
+    fields = [f for f in coerced if f in _SECURITY_COERCIONS]
+    if not fields:
+        return None
+    field = fields[0]
+    question, options = _SECURITY_COERCIONS[field]
+    return {
+        "field": field,
+        "question": question,
+        "assumed": (
+            DataClassification.RESTRICTED if field == "data_classification"
+            else AvailabilityTier.TIER_1
+        ),
+        "options": [
+            {"label": opt, "query": f"{user_query.strip()} The {field.replace('_', ' ')} is {opt}."}
+            for opt in options
+        ],
+        #  Every field that was invented, not just the one being asked about,
+        #  so the reviewer sees the whole of what the platform supplied.
+        "also_assumed": [f for f in coerced if f != field],
+    }
 
 
 def _coerce_enum(value: str | None, enum_cls, fallback: str) -> tuple[str, bool]:
@@ -1384,6 +1466,23 @@ def build_review_payload(state: InfrastructureRecommendationState | dict) -> dic
         #: rather than a number the browser invented.
         "page_size": policy.top_clusters,
         "confidence": state.get("confidence"),
+        #  WHAT THE PLATFORM SUPPLIED ON THE ENGINEER'S BEHALF, in front of the
+        #  person approving the placement.
+        #
+        #  coerced_fields was already computed and written into
+        #  capacity_requirements - and capacity_requirements is referenced
+        #  nowhere outside graph/state.py. Not persisted, not in this payload,
+        #  not in the UI. So a data classification the model could not parse was
+        #  replaced by the platform and the approver had no way to know, on a
+        #  platform whose purpose is keeping classified workloads off
+        #  under-certified infrastructure. The only trace was a log line on
+        #  stdout, gone at the next deploy.
+        "assumptions": {
+            "coerced_fields": (state.get("capacity_requirements") or {}).get("coerced_fields") or [],
+            "assumed_defaults": (state.get("capacity_requirements") or {}).get("assumed_defaults") or [],
+            "data_classification": (state.get("requirement") or {}).get("data_classification"),
+            "availability_tier": (state.get("requirement") or {}).get("availability_tier"),
+        },
         "message": _review_message(steps, dc_choice),
         # What to offer when the shortlist is not good enough. This is a search:
         # when the results are usable the engineer picks one and leaves, and

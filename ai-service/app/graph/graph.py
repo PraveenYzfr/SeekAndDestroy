@@ -205,6 +205,7 @@ def _summarize(final_state: dict) -> dict:
         # would be built correctly and then dropped on the way out, which is the
         # quietest possible way for a feature to not exist.
         "rejection_prompt": final_state.get("rejection_prompt"),
+        "clarification_prompt": final_state.get("clarification_prompt"),
         "errors": final_state.get("errors", []),
     }
 

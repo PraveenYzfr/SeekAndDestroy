@@ -29,7 +29,11 @@ from __future__ import annotations
 from app.agents.mock_llm import MockChatModel
 from app.graph import nodes
 from app.models.agent_contracts import CapacityRequirement
-from app.models.enums import InvestigationType
+from app.models.enums import (
+    CLASSIFICATION_LEVEL,
+    DataClassification,
+    InvestigationType,
+)
 
 
 def test_capacity_extraction_uses_regex_under_mock_llm(monkeypatch):
@@ -149,7 +153,25 @@ def test_defaults_for_unstated_dimensions_are_declared_not_hidden(monkeypatch):
     # A null classification lands on the documented fallback rather than
     # exploding - _coerce_enum already accepted None, which is why the contract
     # was the only thing standing in the way.
-    assert result["requirement"]["data_classification"] == "Internal"
+    #
+    # THAT FALLBACK USED TO BE "Internal" AND IS NOW "Restricted". Internal is
+    # level 1 of 4 in CLASSIFICATION_LEVEL and RULE-005 admits a cluster when
+    # cluster_level >= data_level, so the old default was the second most
+    # PERMISSIVE value available: an unparseable classification widened the
+    # estate, and a Restricted workload could be offered clusters certified
+    # only for Internal. Asserted as the maximum level rather than as the
+    # literal string, so a future edit cannot quietly walk it back down.
+    assert result["requirement"]["data_classification"] == DataClassification.RESTRICTED
+    assert CLASSIFICATION_LEVEL[result["requirement"]["data_classification"]] == max(
+        CLASSIFICATION_LEVEL.values()
+    )
+
+    # And having failed closed, it ASKS - Praveen's instruction was to ask with
+    # the strict value as the fallback if nobody answers, so the prompt must
+    # accompany the narrowed search rather than replace it.
+    prompt = result["clarification_prompt"]
+    assert prompt["field"] == "data_classification"
+    assert prompt["options"][0]["label"] == "Restricted"
 
 
 # ---------------------------------------------------------------------------
