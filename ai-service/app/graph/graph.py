@@ -18,6 +18,7 @@ of the same question. See app.graph.conversation.
 from __future__ import annotations
 
 import sqlite3
+import time
 from functools import lru_cache, wraps
 
 import structlog
@@ -413,7 +414,12 @@ def run_investigation(*, query: str, created_by: int, conversation_id: str | Non
     from app.graph.nodes import quick_reply
     from app.insights import router as insights_router
     from app.services import answer_evaluation
-    from app.observability.metrics import investigations_total
+    from app.observability.metrics import (
+        investigation_duration_seconds,
+        investigations_total,
+    )
+
+    graph_started = time.perf_counter()
 
     # What this turn refers to, if anything. Resolved before the Investigation
     # row exists, because two of the three answers below do not want a row at
@@ -517,13 +523,39 @@ def run_investigation(*, query: str, created_by: int, conversation_id: str | Non
     compiled = get_compiled_graph()
     config = _thread_config(investigation_id)
     result = compiled.invoke(state, config=config)
-    investigations_total.labels(investigation_type=result.get("investigation_type", "Unknown")).inc()
+    itype = result.get("investigation_type", "Unknown")
+    investigations_total.labels(investigation_type=itype).inc()
+    # END TO END, which is what the person waited for. Model time is only
+    # part of it and often the smaller part: investigation 132 took 59.7s
+    # wall against 6.9s of model time, and investigation 49 took 30s wall
+    # against 0.1s. A dashboard timing only the model calls would have
+    # called both of those fast.
+    investigation_duration_seconds.labels(investigation_type=itype).observe(
+        time.perf_counter() - graph_started
+    )
 
     if result.get("__interrupt__"):
         return answered({
             "investigation_id": investigation_id, "conversation_id": conversation_id,
             "status": "AwaitingReview",
             "review_payload": result["__interrupt__"][0].value if result["__interrupt__"] else None,
+            #  THE INTERRUPT PATH IS A SECOND ENVELOPE, and anything not named
+            #  here is dropped no matter how correctly it was built.
+            #
+            #  _summarize already carries a comment warning about exactly this
+            #  for rejection_prompt - "built correctly and then dropped on the
+            #  way out, which is the quietest possible way for a feature to not
+            #  exist". The warning was right and it was in the wrong place: this
+            #  return does not go through _summarize, so adding a key there
+            #  covers the Completed path only.
+            #
+            #  Which is how the clarification prompt shipped inert. It was
+            #  generated during extraction, stored on state, added to
+            #  _summarize, tested, deployed - and never appeared, because a
+            #  coerced classification happens on a placement request and a
+            #  placement request interrupts for review. The one path it had to
+            #  survive was the one path that rebuilds the response by hand.
+            "clarification_prompt": result.get("clarification_prompt"),
         })
     return answered({**_summarize(result), "conversation_id": conversation_id})
 

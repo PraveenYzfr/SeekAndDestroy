@@ -101,3 +101,40 @@ class TestItAsksAsWellAsFailingClosed:
     def test_every_invented_field_is_still_reported(self):
         p = _clarification_for(["data_classification", "platform"], "q")
         assert p["also_assumed"] == ["platform"]
+
+
+# ---------------------------------------------------------------------------
+# The prompt has to survive the way out
+# ---------------------------------------------------------------------------
+# It did not, first time. The prompt was generated during extraction, stored on
+# state, added to _summarize, tested and deployed - and never reached the
+# caller, because run_investigation has TWO return envelopes and the interrupt
+# one is rebuilt by hand. A coerced classification happens on a placement
+# request, and a placement request interrupts for review, so the single path it
+# had to survive was the one that does not go through _summarize.
+#
+# graph.py already carried a comment warning about this for rejection_prompt.
+# The warning was correct and sat on the wrong return.
+
+
+def test_both_return_envelopes_carry_the_clarification_prompt():
+    """Asserted against the source of both envelopes rather than by running the
+    graph, because the defect was structural - a key missing from a dict
+    literal - and a mocked graph run would have passed while production
+    dropped it."""
+    import inspect
+
+    from app.graph import graph as graph_module
+
+    src = inspect.getsource(graph_module)
+
+    summarize = src[src.index("def _summarize"):]
+    summarize = summarize[: summarize.index("\ndef ")]
+    assert '"clarification_prompt"' in summarize, "the Completed envelope drops it"
+
+    interrupt = src[src.index('if result.get("__interrupt__"):'):]
+    interrupt = interrupt[: interrupt.index("return answered({**_summarize")]
+    assert '"clarification_prompt"' in interrupt, (
+        "the AwaitingReview envelope drops it - which is the ONLY path a "
+        "coerced classification actually takes"
+    )
