@@ -159,7 +159,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Sits above the thread, right-aligned, so "New chat" is reachable without
    competing with the conversation itself. */
-.chat-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+/* space-between, not flex-end: the session id sits at the left as the
+   identity of what you are looking at, and New chat stays at the right
+   where a destructive-ish action belongs. */
+.chat-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.chat-session { font-size: 13px; opacity: 0.85; }
 
 .chat-window {
   flex: 1;

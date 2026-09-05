@@ -129,6 +129,16 @@ export default function Chat() {
    *  persisted across reloads - a reload starts a fresh conversation, which is
    *  honest, because the message history on screen is gone too. */
   const [conversationId, setConversationId] = useState<string | null>(null);
+
+  /** How many investigations this session has produced.
+   *
+   *  DERIVED, not counted as it goes: a separate tally would drift from the
+   *  messages the moment one failed or was answered without an investigation
+   *  behind it. Distinct ids, because a follow-up answered from an earlier
+   *  investigation's results carries that same id and is not a new one. */
+  const investigationCount = new Set(
+    messages.map((m) => m.investigationId).filter((id): id is number => id != null),
+  ).size;
   const examples = buildExamples();
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -282,6 +292,28 @@ export default function Chat() {
 
       {messages.length > 0 && (
         <div className="chat-toolbar">
+          {/* THE SESSION IS THE IDENTITY, AND IT WAS INVISIBLE.
+              conversationId has always existed, been tracked, and been the
+              thing AnswerQuality groups by - it was just never rendered, held
+              in state only to send back with the next request. So the screen
+              showed a dozen investigation numbers and nothing tying them
+              together, and the obvious reading was that something had split
+              one conversation into twelve.
+              Nothing had. Each exchange gets its own investigation record on
+              purpose - that is what approval and audit hang off - but the
+              SESSION is what a person is sitting in, and it belongs at the top
+              rather than nowhere. */}
+          {conversationId && (
+            <div className="chat-session" title={conversationId}>
+              <span className="stat-label">Session</span>{" "}
+              <span style={{ fontFamily: "monospace" }}>{conversationId.slice(0, 8)}</span>
+              {investigationCount > 0 && (
+                <span className="stat-label">
+                  {" "}· {investigationCount} investigation{investigationCount === 1 ? "" : "s"}
+                </span>
+              )}
+            </div>
+          )}
           {/* Starting a new chat is a real action, not cosmetic: it drops the
               conversation id, so the next message is resolved against nothing
               rather than against a shortlist the engineer has moved on from. */}
