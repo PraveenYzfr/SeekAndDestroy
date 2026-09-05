@@ -114,10 +114,46 @@ _LABEL_RE = re.compile(r"\b(?:Tier[- ]?\d|Sev[- ]?\d|P[1-4])\b", re.IGNORECASE)
 #: and entity_fidelity is the natural place for it.
 _RECORD_ID_RE = re.compile(r"\b(?:INC|CHG|PRB|RITM|TASK)\d{4,}\b", re.IGNORECASE)
 
+#: A HOST ADDRESS IS NOT A MEASUREMENT.
+#:
+#: 10.4.185.2 tokenised to "10.4" and "185.2" - two figures nobody claimed, both
+#: unmatchable, both counted against the rate. Every node answer quotes an IP, so
+#: every node answer was marked down for saying where the node is. Investigation
+#: 125 scored 0.000 on number fidelity almost entirely on this, and its answer
+#: was correct.
+#:
+#: Four dotted groups, not a validated address: 999.1.1.1 is not a real host but
+#: it is equally not a measurement, and a grader that let it through on a
+#: technicality would be scoring the wrong property. Placed before the date
+#: pattern in _numbers_in for the same reason record ids go first - a longer,
+#: more specific shape must claim its digits before a looser one can.
+_IP_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+
+#: A TIMESTAMP IS NOT A MEASUREMENT EITHER, AND THE OLD PATTERN STOPPED AT THE T.
+#:
+#: The previous version ended each date branch with ``\b``, which works on
+#: "2026-06-24" and fails on "2026-06-24T07:35:00" - between "4" and "T" both
+#: characters are word characters, so there is no boundary there and the match
+#: was rejected. The whole timestamp then reached the tokeniser and produced SIX
+#: spurious figures: 2026, -06, -24, 07, 35, 00.
+#:
+#: Every incident in this estate carries an ISO timestamp, so this was the
+#: largest single contributor to the number-fidelity rate - a grader reporting
+#: on when things happened rather than on what the model claimed.
+#:
+#: The trailing boundary is now a negative lookahead for a digit rather than
+#: ``\b``: it still refuses to match a prefix of "2026-06-241", but it does not
+#: care that the next character is a letter.
+#:
+#: The bare-time branch exists because a time can appear without its date once
+#: prose has been through a summariser. It is deliberately narrow - [0-2]?\d and
+#: [0-5]\d - so that a genuine ratio like "75:25" is still read as figures.
 _DATE_RE = re.compile(
-    r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b"       # 2026-07-01, 2026/7/1
-    r"|\b\d{1,2}[-/]\d{1,2}[-/]\d{4}\b"      # 01-07-2026, 1/7/2026
-    r"|\bQ[1-4]\b",                           # Q3 - the 3 is not a measurement
+    r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}"          # 2026-07-01, 2026/7/1
+    r"(?:[T ]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?Z?)?(?!\d)"   # ... T07:35:00.123Z
+    r"|\b\d{1,2}[-/]\d{1,2}[-/]\d{4}(?!\d)"   # 01-07-2026, 1/7/2026
+    r"|\b[0-2]?\d:[0-5]\d(?::[0-5]\d)?\b"     # 07:35, 20:29:15 - a clock, not a rate
+    r"|\bQ[1-4]\b",                            # Q3 - the 3 is not a measurement
     re.IGNORECASE,
 )
 
@@ -153,6 +189,10 @@ def _numbers_in(text: str) -> list[str]:
     """
     stripped = _LABEL_RE.sub(" ", _RULE_ID_RE.sub(" ", text or ""))
     stripped = _ENTITY_RE.sub(" ", stripped)
+    # IP before date: 10.4.185.2 contains no date, but stripping longest and most
+    # specific shapes first is the rule this pipeline already follows, and an
+    # address must never be left for _NUMBER_RE to split into two figures.
+    stripped = _IP_RE.sub(" ", stripped)
     return _NUMBER_RE.findall(_DATE_RE.sub(" ", _RECORD_ID_RE.sub(" ", stripped)))
 
 
@@ -478,6 +518,21 @@ def evidence_is_structured(evidence: Any) -> bool:
     return longest < _FREE_TEXT_CHARS
 
 
+
+def _investigation_id_of(evidence: Any) -> float:
+    """The investigation's own id, which is in the evidence but grounds nothing.
+
+    Returned as a float so the caller can subtract it from the grounding set in
+    one expression. -1 when absent: a real id is never negative, so an evidence
+    object without one is unaffected by the subtraction.
+    """
+    if isinstance(evidence, dict):
+        value = evidence.get("investigation_id")
+        if isinstance(value, (int, float)):
+            return float(value)
+    return -1.0
+
+
 def number_fidelity(prose: str, evidence: Any) -> GradeResult:
     """How many figures in the prose are traceable to the evidence.
 
@@ -496,6 +551,31 @@ def number_fidelity(prose: str, evidence: Any) -> GradeResult:
     # "all 12 evaluated rules passed" - a count of a list the model was handed.
     # Structural, so it cannot be forged by text inside the evidence.
     known |= _collection_sizes(evidence)
+
+    # STRUCTURED IS NOT THE SAME AS POPULATED, and the gate above only checks
+    # shape. A Question-path answer is handed a placement-shaped envelope with
+    # every placement field EMPTY - top_candidates [], forecast_results {},
+    # capacity_calculations {}, decision None - because no placement ran. That
+    # dict is structured, so evidence_is_structured passes it, and
+    # _evidence_numbers then finds exactly one number in it: the investigation
+    # id. Measured, not reasoned: inv 104 -> {104.0}, inv 125 -> {125.0}.
+    #
+    # Every figure in the prose is therefore ungrounded by construction, and the
+    # rate reported ~0.05-0.22 for answers that were correct. It was not
+    # measuring the model, it was measuring "this was not a placement" - the
+    # same class of error evidence_is_structured was written to stop, arriving
+    # through a shape it does not recognise.
+    #
+    # The figures in that prose came from RETRIEVED DOCUMENTS, and widening
+    # _evidence_numbers to read them is the one fix not available: work notes
+    # are attacker-writable and that exclusion is the injection defence.
+    #
+    # So: absent is not zero. An evidence object that can ground nothing beyond
+    # the id of the investigation it describes reports NOT APPLICABLE, which is
+    # what this module's own docstring already promises and what
+    # GradeResult.applies exists to express.
+    if not (known - {float(_investigation_id_of(evidence))}):
+        return result
 
     for token in _numbers_in(prose):
         value = _as_float(token)
