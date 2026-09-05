@@ -495,7 +495,15 @@ def _clarification_for(coerced: list[str], user_query: str) -> dict | None:
     which is a different mechanism owned elsewhere; sending the original
     sentence plus the stated classification needs nothing from it.
     """
-    fields = [f for f in coerced if f in _SECURITY_COERCIONS]
+    #  ASK ABOUT THE MOST DANGEROUS ONE FIRST, not whichever happened to be
+    #  coerced first. `coerced` is built in field order - environment,
+    #  platform, availability_tier, data_classification - so taking [0] asked
+    #  about the TIER while silently assuming a classification, which is the
+    #  more consequential of the two: getting the tier wrong costs
+    #  availability, getting the classification wrong puts regulated data on
+    #  infrastructure not certified to hold it. Verified on production: inv 140
+    #  coerced all four and asked about availability_tier.
+    fields = [f for f in _SECURITY_COERCIONS if f in coerced]
     if not fields:
         return None
     field = fields[0]

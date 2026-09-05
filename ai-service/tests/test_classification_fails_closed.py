@@ -138,3 +138,15 @@ def test_both_return_envelopes_carry_the_clarification_prompt():
         "the AwaitingReview envelope drops it - which is the ONLY path a "
         "coerced classification actually takes"
     )
+
+
+def test_it_asks_about_classification_before_tier():
+    """Both coerced: the question must be the consequential one. `coerced` is
+    built in field order, so taking the first element asked about the tier -
+    observed on production, inv 140 - while the classification it had also
+    invented went unmentioned."""
+    p = _clarification_for(
+        ["environment", "platform", "availability_tier", "data_classification"], "q"
+    )
+    assert p["field"] == "data_classification"
+    assert "availability_tier" in p["also_assumed"]
