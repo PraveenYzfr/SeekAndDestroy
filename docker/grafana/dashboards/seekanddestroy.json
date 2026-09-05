@@ -61,7 +61,7 @@
       "id": 25,
       "type": "timeseries",
       "title": "Fidelity score distribution",
-      "description": "A DISTRIBUTION, not a mean. An average fidelity of 0.97 can be 97 perfect answers and 3 broken ones, or 100 answers each carrying a wrong figure - those need different responses and a mean cannot tell them apart.",
+      "description": "A DISTRIBUTION, not a mean. An average fidelity of 0.97 can be 97 perfect answers and 3 broken ones, or 100 answers each carrying a wrong figure - those need different responses and a mean cannot tell them apart.\n\nFidelity is not scored here when nothing was graded. This panel stays EMPTY rather than drawing a zero, because a fidelity of 0 means every figure was ungrounded - the opposite of 'nothing was measured'.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -82,13 +82,19 @@
           "legendFormat": "{{grader}} {{le}}",
           "refId": "A"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "not measured"
+        },
+        "overrides": []
+      }
     },
     {
       "id": 26,
       "type": "timeseries",
       "title": "Judge scores by dimension",
-      "description": "The LLM judge, kept separate from the deterministic graders on purpose. Graders are arithmetic; the judge is an opinion. Averaging them gives a 'quality score' that cannot be acted on, because a drop could be a fabricated figure or a model being less chatty and only one of those is an incident. p10 matters more than p50 - it is the bad tail.\n\nEMPTY? Check 'Judge verdicts excluded' to the right. Every role defaults to the same model, which makes the judge the author of what it is grading - those verdicts are stored and disqualified, never averaged in. Point the judge role at a different provider on Model Settings and this fills in.",
+      "description": "The LLM judge, kept separate from the deterministic graders on purpose. Graders are arithmetic; the judge is an opinion. Averaging them gives a 'quality score' that cannot be acted on, because a drop could be a fabricated figure or a model being less chatty and only one of those is an incident. p10 matters more than p50 - it is the bad tail.\n\nEMPTY? Check 'Judge verdicts excluded' to the right. Every role defaults to the same model, which makes the judge the author of what it is grading - those verdicts are stored and disqualified, never averaged in. Point the judge role at a different provider on Model Settings and this fills in.\n\nEMPTY IS NOT ZERO, and this panel deliberately does not zero-fill. A p50 of 0 would read as 'the judge rates these answers 0 out of 5' when the truth is that no verdict exists. Check 'Judge verdicts, last 24h' beside it: 0 there means the judge produced nothing, which is why this is blank.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -118,13 +124,19 @@
           "legendFormat": "p10 {{dimension}}",
           "refId": "B"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "not measured"
+        },
+        "overrides": []
+      }
     },
     {
       "id": 22,
       "type": "timeseries",
       "title": "Narration checks by schema",
-      "description": "Which explanation type is drifting. A rate concentrated in one schema points at that chain's evidence rather than at the model - it usually means the prompt is asking for a figure the evidence does not carry, which is a fixable bug rather than a bad model.",
+      "description": "Which explanation type is drifting. A rate concentrated in one schema points at that chain's evidence rather than at the model - it usually means the prompt is asking for a figure the evidence does not carry, which is a fixable bug rather than a bad model.\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. No narration was checked in this window - not a drift of zero.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -141,7 +153,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (schema, outcome) (rate(sad_narration_drift_total[15m]))",
+          "expr": "sum by (schema, outcome) (rate(sad_narration_drift_total[15m])) or vector(0)",
           "legendFormat": "{{schema}} {{outcome}}",
           "refId": "A"
         }
@@ -240,7 +252,7 @@
       "id": 27,
       "type": "timeseries",
       "title": "Judge failures",
-      "description": "A judge that silently stops running leaves every quality panel showing its last good score forever, which reads as health. This is the panel that says the instrument itself is broken.",
+      "description": "A judge that silently stops running leaves every quality panel showing its last good score forever, which reads as health. This is the panel that says the instrument itself is broken.\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero judge failures is the healthy state, and now renders as one.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -257,7 +269,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (reason) (rate(sad_judge_failures_total[15m]))",
+          "expr": "sum by (reason) (rate(sad_judge_failures_total[15m])) or vector(0)",
           "legendFormat": "{{reason}}",
           "refId": "A"
         }
@@ -316,10 +328,11 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(sad_llm_calls_total[5m])) by (provider, outcome)",
+          "expr": "sum(rate(sad_llm_calls_total[5m])) by (provider, outcome) or vector(0)",
           "legendFormat": "{{provider}} [{{outcome}}]"
         }
-      ]
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero model calls in the window."
     },
     {
       "id": 4,
@@ -333,10 +346,11 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(sad_embedding_calls_total[5m])) by (provider, outcome)",
+          "expr": "sum(rate(sad_embedding_calls_total[5m])) by (provider, outcome) or vector(0)",
           "legendFormat": "{{provider}} [{{outcome}}]"
         }
-      ]
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero embedding calls in the window."
     },
     {
       "id": 5,
@@ -350,10 +364,11 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(sad_llm_fallback_total[5m])) by (from_provider)",
+          "expr": "sum(rate(sad_llm_fallback_total[5m])) by (from_provider) or vector(0)",
           "legendFormat": "from {{from_provider}}"
         }
-      ]
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero fallbacks means every primary answered - the healthy state."
     },
     {
       "id": 28,
@@ -394,10 +409,11 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(sad_narration_cache_total[5m])) by (result)",
+          "expr": "sum(rate(sad_narration_cache_total[5m])) by (result) or vector(0)",
           "legendFormat": "{{result}}"
         }
-      ]
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero cache events in the window."
     },
     {
       "id": 7,
@@ -411,16 +427,17 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(sad_budget_denied_total[5m])) by (namespace)",
+          "expr": "sum(rate(sad_budget_denied_total[5m])) by (namespace) or vector(0)",
           "legendFormat": "{{namespace}}"
         }
-      ]
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero budget denials is the healthy state."
     },
     {
       "id": 23,
       "type": "timeseries",
       "title": "Spend per hour by model",
-      "description": "Priced from sad.ModelPrice at the moment of each call, so a later price change does not rewrite history. Calls whose model has no price row appear as UNPRICED - a spend graph reading zero because a model was unknown is worse than one reading low, because the second is visibly incomplete.",
+      "description": "Priced from sad.ModelPrice at the moment of each call, so a later price change does not rewrite history. Calls whose model has no price row appear as UNPRICED - a spend graph reading zero because a model was unknown is worse than one reading low, because the second is visibly incomplete.\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero spend. Read it beside 'Real LLM calls': zero spend WITH calls happening means the calls are unpriced, not that they were free.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -437,7 +454,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (model) (increase(sad_llm_cost_usd_total[1h]))",
+          "expr": "sum by (model) (increase(sad_llm_cost_usd_total[1h])) or vector(0)",
           "legendFormat": "{{model}}",
           "refId": "A"
         }
@@ -453,7 +470,7 @@
       "id": 24,
       "type": "timeseries",
       "title": "Cost per investigation",
-      "description": "The number that decides whether a faster model is worth it. Latency and cost move together when roles are switched, and this is the half that shows up on a bill.",
+      "description": "The number that decides whether a faster model is worth it. Latency and cost move together when roles are switched, and this is the half that shows up on a bill.\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero spend per investigation, subject to the same caveat as the panel beside it.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -470,7 +487,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(sad_llm_cost_usd_total[1h])) / clamp_min(sum(increase(sad_investigations_total[1h])), 1)",
+          "expr": "sum(increase(sad_llm_cost_usd_total[1h])) / clamp_min(sum(increase(sad_investigations_total[1h])), 1) or vector(0)",
           "legendFormat": "USD per investigation",
           "refId": "A"
         }
@@ -508,10 +525,11 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(sad_investigations_total[5m])) by (investigation_type)",
+          "expr": "sum(rate(sad_investigations_total[5m])) by (investigation_type) or vector(0)",
           "legendFormat": "{{investigation_type}}"
         }
-      ]
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero investigations created in the window."
     },
     {
       "id": 1,
