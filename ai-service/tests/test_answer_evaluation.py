@@ -84,7 +84,7 @@ class TestMissingIsNotZero:
         must leave NULLs, not zeros: an average that counts an outage as a bad
         answer reports a quality collapse that never happened."""
         monkeypatch.setattr(
-            answer_evaluation, "_evidence_and_author_for", lambda _id: ({"clusters": [{"code": "c1"}]}, {})
+            answer_evaluation, "_evidence_and_author_for", lambda _id: ({"clusters": [{"code": "c1"}]}, {}, None)
         )
         monkeypatch.setattr(
             "app.evaluation.judge.judge_answer",
@@ -108,7 +108,7 @@ class TestMissingIsNotZero:
         anyway answers confidently from nothing. Recorded as a failure with a
         reason rather than as a low score."""
         called = []
-        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: (None, {}))
+        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: (None, {}, "no_evidence_gathered"))
         monkeypatch.setattr(
             "app.evaluation.judge.judge_answer", lambda *a, **k: called.append(1)
         )
@@ -161,7 +161,7 @@ class TestMissingIsNotZero:
         eventually probe wrong, and the KeyError lands far from the cause."""
         from app.repositories import answer_evaluation_repository as repo
 
-        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: ({"e": 1}, {}))
+        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: ({"e": 1}, {}, None))
         monkeypatch.setattr(
             "app.evaluation.judge.judge_answer",
             lambda *a, **k: JudgeResult(
@@ -177,7 +177,7 @@ class TestMissingIsNotZero:
 
 class TestSelfJudgingIsDisclosedNotExported:
     def test_self_judged_verdict_is_stored(self, captured, no_audit, monkeypatch):
-        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: ({"e": 1}, {}))
+        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: ({"e": 1}, {}, None))
         monkeypatch.setattr(
             "app.evaluation.judge.judge_answer",
             lambda *a, **k: JudgeResult(
@@ -219,7 +219,7 @@ class TestNothingCanBreakTheCaller:
     def test_a_database_failure_does_not_raise(self, no_audit, monkeypatch):
         """The answer has already been returned to the user. Losing a verdict is
         strictly better than turning a completed investigation into an error."""
-        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: ({"e": 1}, {}))
+        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: ({"e": 1}, {}, None))
         monkeypatch.setattr(
             "app.evaluation.judge.judge_answer",
             lambda *a, **k: JudgeResult(
@@ -323,7 +323,7 @@ class TestTheJudgeIsToldWhoWroteTheAnswer:
         )
         monkeypatch.setattr(
             answer_evaluation, "_evidence_and_author_for",
-            lambda _id: ({"clusters": []}, {"provider": "deepseek", "model": "deepseek-v4-flash"}),
+            lambda _id: ({"clusters": []}, {"provider": "deepseek", "model": "deepseek-v4-flash"}, None),
         )
         monkeypatch.setattr("app.evaluation.judge.judge_answer", _spy)
 
@@ -350,5 +350,58 @@ class TestTheJudgeIsToldWhoWroteTheAnswer:
         monkeypatch.setattr(
             "app.evaluation.graders.evidence_from_prompt", lambda _s: {"a": 1}
         )
-        _, author = answer_evaluation._evidence_and_author_for(1)
+        _, author, _why = answer_evaluation._evidence_and_author_for(1)
         assert author == {"provider": "groq", "model": "gpt-oss-20b"}
+
+
+class TestWhichKindOfNothing:
+    """One label was hiding three unrelated defects.
+
+    "no_evidence" fired for an unreachable database, a pipeline that gathered
+    nothing, and evidence in a shape the parser did not recognise. An
+    infrastructure fault, a graph defect and a contract break, all raising one
+    alarm that could not say which one to go and fix.
+
+    Production settled it. Investigation 124 - "which 3 clusters are the best
+    right-sizing candidates" - had ONE audit row, the final report, with no
+    grounded answer and no narration behind it, and no investigation in that
+    window had zero audit rows. So the answer was not that evidence went
+    missing. The pipeline DELIVERED AN ANSWER IT NEVER GATHERED EVIDENCE FOR,
+    and the judge was the only thing that noticed.
+    """
+
+    def test_an_unreachable_database_is_not_a_missing_report(self, monkeypatch):
+        def _boom(*a, **k):
+            raise RuntimeError("database is down")
+
+        monkeypatch.setattr("app.repositories.base.fetch_all", _boom)
+        evidence, author, why = answer_evaluation._evidence_and_author_for(1)
+        assert evidence is None and author == {}
+        assert why == "evidence_read_failed", (
+            "an unreachable database must not be reported as a pipeline defect - "
+            "one is fixed by restarting infrastructure, the other by changing the graph"
+        )
+
+    def test_no_audit_rows_means_the_pipeline_gathered_nothing(self, monkeypatch):
+        """Investigation 124's shape: an answer delivered with nothing behind it."""
+        monkeypatch.setattr("app.repositories.base.fetch_all", lambda *a, **k: [])
+        evidence, _author, why = answer_evaluation._evidence_and_author_for(1)
+        assert evidence is None
+        assert why == "no_evidence_gathered"
+
+    def test_rows_that_carry_no_typed_evidence_are_a_contract_break(self, monkeypatch):
+        """The calls happened and were recorded. What they carried was not
+        evidence this platform recognises - which is a different fix again."""
+        monkeypatch.setattr(
+            "app.repositories.base.fetch_all",
+            lambda *a, **k: [{"InputJson": "{}", "Provider": "groq", "ModelIdentity": "m"}],
+        )
+        monkeypatch.setattr("app.evaluation.graders.evidence_from_prompt", lambda _s: None)
+        evidence, _author, why = answer_evaluation._evidence_and_author_for(1)
+        assert evidence is None
+        assert why == "evidence_unparseable"
+
+    def test_the_three_reasons_are_distinct(self):
+        """The point of the split. If any two collapse, the alarm goes back to
+        being unactionable and nobody will notice until it fires."""
+        assert len({"evidence_read_failed", "no_evidence_gathered", "evidence_unparseable"}) == 3

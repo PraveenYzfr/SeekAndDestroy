@@ -298,13 +298,19 @@ def _judge(question: str, prose: str, investigation_id: int | None) -> dict:
     """
     from app.evaluation.judge import judge_answer
 
-    evidence, author = _evidence_and_author_for(investigation_id)
+    evidence, author, why = _evidence_and_author_for(investigation_id)
     if evidence is None:
         # No recoverable evidence means groundedness is unanswerable, and a
         # judge asked anyway will answer confidently from nothing. Recorded as
         # a failure with a reason rather than as a low score.
-        _count_failure("no_evidence")
-        return {"JudgeError": "evidence for the answer could not be recovered"}
+        #
+        # THE REASON IS SPECIFIC NOW. "no_evidence" covered an unreachable
+        # database, a pipeline that gathered nothing, and evidence in an
+        # unrecognised shape - an infrastructure fault, a graph defect and a
+        # contract break, all raising one alarm that could not tell you which
+        # one to go and fix.
+        _count_failure(why or "no_evidence")
+        return {"JudgeError": f"evidence for the answer could not be recovered ({why})"}
 
     try:
         # The author is passed, and until now it was NOT - judge_answer was
@@ -353,8 +359,14 @@ def _judge(question: str, prose: str, investigation_id: int | None) -> dict:
     }
 
 
-def _evidence_and_author_for(investigation_id: int | None) -> tuple[Any | None, dict]:
-    """The evidence the final narration was given, and WHO wrote it.
+def _evidence_and_author_for(
+    investigation_id: int | None,
+) -> tuple[Any | None, dict, str | None]:
+    """The evidence the final narration was given, WHO wrote it, and why not.
+
+    The third element is None on success and otherwise names WHICH kind of
+    nothing was found. It exists because one label was hiding three unrelated
+    defects - see the comment at the bottom of this function.
 
     Both come from the same audit row on purpose. The evidence is what the
     answer must be grounded in; the author is the model that was given that
@@ -368,7 +380,7 @@ def _evidence_and_author_for(investigation_id: int | None) -> tuple[Any | None, 
     judge to a model that did not write it.
     """
     if not investigation_id:
-        return None, {}
+        return None, {}, "no_investigation"
     from app.evaluation.graders import evidence_from_prompt
     from app.repositories.base import T, fetch_all
 
@@ -381,7 +393,7 @@ def _evidence_and_author_for(investigation_id: int | None) -> tuple[Any | None, 
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("answer_evaluation.evidence_read_failed", error=str(exc)[:200])
-        return None, {}
+        return None, {}, "evidence_read_failed"
 
     for row in rows:
         evidence = evidence_from_prompt(row.get("InputJson"))
@@ -389,8 +401,23 @@ def _evidence_and_author_for(investigation_id: int | None) -> tuple[Any | None, 
             return evidence, {
                 "provider": row.get("Provider"),
                 "model": row.get("ModelIdentity"),
-            }
-    return None, {}
+            }, None
+
+    # NOTHING RECOVERED - and WHICH nothing matters, so say which.
+    #
+    # These two used to be one label, "no_evidence", and their first real firing
+    # in production showed why that is not good enough. Investigation 124
+    # answered "which 3 clusters are the best right-sizing candidates" with ONE
+    # audit row - the final report - and no grounded answer and no narration
+    # behind it. The judge was handed a delivered answer with nothing supporting
+    # it and correctly refused to score groundedness.
+    #
+    # That is not a lost audit row. It is the pipeline DELIVERING AN ANSWER IT
+    # NEVER GATHERED EVIDENCE FOR, which is a worse defect and a different one -
+    # it needs a fix in the graph, not in the database.
+    if not rows:
+        return None, {}, "no_evidence_gathered"
+    return None, {}, "evidence_unparseable"
 
 
 # ---------------------------------------------------------------------------

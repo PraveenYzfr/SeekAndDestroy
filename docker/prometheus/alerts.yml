@@ -66,9 +66,26 @@ groups:
           summary: "The answer judge is failing to produce verdicts"
           description: >
             Quality panels will keep rendering from older data and will look
-            healthy. Check the judge role's provider on the Model Settings
-            screen; reason label says whether it was the provider, the evidence,
-            or the parse.
+            healthy. THE reason LABEL SAYS WHICH DEFECT THIS IS, and they are
+            not close to each other:
+              exception             the judge call threw - provider, credential
+                                    or timeout. Check the judge role's provider
+                                    on the Model Settings screen.
+              no_verdict            the judge answered and produced nothing
+                                    parseable. A schema or parse problem, not
+                                    an outage.
+              evidence_read_failed  the database could not be read. An
+                                    infrastructure fault; the judge is fine.
+              no_evidence_gathered  THE PIPELINE DELIVERED AN ANSWER IT NEVER
+                                    GATHERED EVIDENCE FOR. Not a judge problem
+                                    at all - a report was written about a
+                                    selection that was never made. Fix the
+                                    graph. First seen on investigation 124, a
+                                    right-sizing question with one audit row
+                                    and no narration behind it.
+              evidence_unparseable  the calls happened and were recorded, but
+                                    carried nothing this platform recognises as
+                                    evidence. A contract break.
 
       # Fidelity is a rate over figures, so a p10 below 0.9 means one answer in
       # ten carried a figure its evidence did not support. Alerting on the tail

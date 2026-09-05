@@ -137,17 +137,33 @@ class TestItIsCountedAsNotApplicableNotAsAFailure:
 
 class TestARealInvestigationIsStillGraded:
     def test_missing_evidence_on_a_real_investigation_stays_a_judge_failure(self, monkeypatch):
-        """Production row 38: inv=108, calls=0, evidence unrecoverable. That
-        means an audit row went missing and it is a genuine signal. Suppressing
-        every "no evidence" would have hidden it to silence a false alarm."""
+        """A real investigation with unrecoverable evidence is still a failure.
+        Suppressing every "no evidence" would have hidden it to silence a false
+        alarm - that part of this test was right and has not changed.
+
+        THE EXPLANATION HAS. This said "calls=0 means an audit row went
+        missing", and production disproved it. The first real firing was
+        investigation 124, "which 3 clusters are the best right-sizing
+        candidates": ONE audit row, the final report, with no grounded answer
+        and no narration behind it. No investigation in that window had zero
+        audit rows, so nothing was lost.
+
+        calls=0 does not mean the evidence went missing. It means THE PIPELINE
+        NEVER GATHERED ANY - a report written about a selection that was never
+        made. That is a defect in the graph, not in the database, and the label
+        now says which.
+        """
         from app.observability.metrics import judge_failures_total
 
-        monkeypatch.setattr(answer_evaluation, "_evidence_and_author_for", lambda _id: (None, {}))
-        before = _counter_value(judge_failures_total, reason="no_evidence")
+        monkeypatch.setattr(
+            answer_evaluation, "_evidence_and_author_for",
+            lambda _id: (None, {}, "no_evidence_gathered"),
+        )
+        before = _counter_value(judge_failures_total, reason="no_evidence_gathered")
         verdict = answer_evaluation._judge("q", "some prose", 108)
 
         assert "JudgeError" in verdict
-        assert _counter_value(judge_failures_total, reason="no_evidence") == before + 1
+        assert _counter_value(judge_failures_total, reason="no_evidence_gathered") == before + 1
 
     def test_a_graded_answer_still_reaches_the_repository(self, monkeypatch):
         written: dict = {}
