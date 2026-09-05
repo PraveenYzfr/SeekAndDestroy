@@ -77,15 +77,25 @@ groups:
               evidence_read_failed  the database could not be read. An
                                     infrastructure fault; the judge is fine.
               no_evidence_gathered  THE PIPELINE DELIVERED AN ANSWER IT NEVER
-                                    GATHERED EVIDENCE FOR. Not a judge problem
-                                    at all - a report was written about a
-                                    selection that was never made. Fix the
-                                    graph. First seen on investigation 124, a
-                                    right-sizing question with one audit row
-                                    and no narration behind it.
-              evidence_unparseable  the calls happened and were recorded, but
-                                    carried nothing this platform recognises as
-                                    evidence. A contract break.
+                                    GATHERED EVIDENCE FOR - no audit row at
+                                    all. Not a judge problem: a report was
+                                    written about a selection that was never
+                                    made. Fix the graph. NOT YET OBSERVED in
+                                    production.
+              evidence_truncated    the audit writer CUT the prompt itself -
+                                    _audit_payload caps a record at 64 KB and
+                                    flags what it cuts. Expected on large
+                                    reports rather than broken, and the fix is
+                                    the cap or storing evidence beside the
+                                    prompt, not the judge. Watch it: the final
+                                    report carries the most evidence of any
+                                    call, so the answer a user actually reads
+                                    is the one this most often silences.
+              evidence_unparseable  a row exists, is not flagged truncated, and
+                                    still carries nothing readable as evidence.
+                                    A genuine contract break. Seen on
+                                    investigation 124, a right-sizing question
+                                    whose only call was the final report.
 
       # Fidelity is a rate over figures, so a p10 below 0.9 means one answer in
       # ten carried a figure its evidence did not support. Alerting on the tail

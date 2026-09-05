@@ -170,9 +170,13 @@ def evaluate(
     # suppressed the row and left the counter tick in place.
     #
     # NOT the same as an investigation whose evidence cannot be recovered -
-    # that IS a judge failure, it keeps its no_evidence label, and it is a real
-    # signal that an audit row went missing. Conflating the two is what made
-    # the alert unreadable.
+    # that IS a judge failure and must keep firing. The distinction is the
+    # point and it still stands; two details in the original wording do not.
+    #
+    # It no longer "keeps its no_evidence label" - it gets one of four, naming
+    # which kind of nothing was found. And "a real signal that an audit row
+    # went missing" was disproved in production: the first real firing had its
+    # audit row present and its evidence unreadable inside it.
     if investigation_id is None:
         _count_not_applicable(str(result.get("investigation_type") or "Conversation"))
         return None
@@ -405,19 +409,50 @@ def _evidence_and_author_for(
 
     # NOTHING RECOVERED - and WHICH nothing matters, so say which.
     #
-    # These two used to be one label, "no_evidence", and their first real firing
-    # in production showed why that is not good enough. Investigation 124
-    # answered "which 3 clusters are the best right-sizing candidates" with ONE
-    # audit row - the final report - and no grounded answer and no narration
-    # behind it. The judge was handed a delivered answer with nothing supporting
-    # it and correctly refused to score groundedness.
+    # CORRECTED BY PRODUCTION, TWICE. The first version of this had one label,
+    # "no_evidence". Splitting it was right; my guess about which bucket the
+    # real case fell into was wrong, and prod said so within the hour.
     #
-    # That is not a lost audit row. It is the pipeline DELIVERING AN ANSWER IT
-    # NEVER GATHERED EVIDENCE FOR, which is a worse defect and a different one -
-    # it needs a fix in the graph, not in the database.
+    # Investigation 124 - "which 3 clusters are the best right-sizing
+    # candidates" - answered with ONE audit row, the final report, and no
+    # narration behind it. I predicted no_evidence_gathered. Re-running the same
+    # question after the split shipped returned evidence_unparseable: the row
+    # EXISTS and carries a prompt, and the evidence inside it could not be read.
+    #
+    # The reason is almost certainly TRUNCATION, and the platform already knows
+    # it. _audit_payload caps the record at AUDIT_LIMIT (64 KB) and, when it
+    # cuts, writes "truncated": true into the very row being read here. The
+    # final report carries the most evidence of any call in the graph, so it is
+    # the likeliest to be cut - which means THE ONE ANSWER A USER ACTUALLY READS
+    # is the one whose groundedness the judge can least often check.
+    #
+    # So the flag is read rather than ignored. "We deliberately cut this and
+    # recorded that we did" is a known condition with a known fix; "this is
+    # malformed and we do not know why" is a contract break. Reporting them
+    # alike is the same defect as the single label, one level down.
     if not rows:
         return None, {}, "no_evidence_gathered"
+    if _any_truncated(rows):
+        return None, {}, "evidence_truncated"
     return None, {}, "evidence_unparseable"
+
+
+def _any_truncated(rows: list) -> bool:
+    """Did the audit writer cut any of these prompts itself?
+
+    Reads the flag _audit_payload already stores, rather than inferring
+    truncation from a parse failure - inferring would also catch genuinely
+    malformed rows and hide the contract break behind the expected condition.
+    """
+    import json as _json
+
+    for row in rows:
+        try:
+            if _json.loads(row.get("InputJson") or "{}").get("truncated"):
+                return True
+        except (ValueError, TypeError):
+            continue
+    return False
 
 
 # ---------------------------------------------------------------------------

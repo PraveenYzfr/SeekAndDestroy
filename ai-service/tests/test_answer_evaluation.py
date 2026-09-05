@@ -383,15 +383,26 @@ class TestWhichKindOfNothing:
         )
 
     def test_no_audit_rows_means_the_pipeline_gathered_nothing(self, monkeypatch):
-        """Investigation 124's shape: an answer delivered with nothing behind it."""
+        """NOT investigation 124 - I attributed this case to it and was wrong.
+
+        Re-running inv 124's question after the split shipped returned
+        evidence_unparseable, not this. Its audit row exists; the evidence
+        inside it could not be read. Corrected here because a test docstring
+        naming the wrong real-world case is how a wrong diagnosis gets
+        inherited by whoever reads it next.
+        """
         monkeypatch.setattr("app.repositories.base.fetch_all", lambda *a, **k: [])
         evidence, _author, why = answer_evaluation._evidence_and_author_for(1)
         assert evidence is None
         assert why == "no_evidence_gathered"
 
     def test_rows_that_carry_no_typed_evidence_are_a_contract_break(self, monkeypatch):
-        """The calls happened and were recorded. What they carried was not
-        evidence this platform recognises - which is a different fix again."""
+        """THIS is investigation 124's shape, confirmed by re-running its exact
+        question against the deployed split.
+
+        The call happened and was recorded. What it carried was not evidence
+        this platform could read - a different fix again, and the one the real
+        case needed."""
         monkeypatch.setattr(
             "app.repositories.base.fetch_all",
             lambda *a, **k: [{"InputJson": "{}", "Provider": "groq", "ModelIdentity": "m"}],
@@ -401,7 +412,31 @@ class TestWhichKindOfNothing:
         assert evidence is None
         assert why == "evidence_unparseable"
 
-    def test_the_three_reasons_are_distinct(self):
+    def test_a_prompt_the_audit_writer_cut_says_so(self, monkeypatch):
+        """Truncation is a KNOWN condition with a known fix, and the platform
+        records it at the moment it happens - _audit_payload writes
+        "truncated": true into the row this reads. Reporting it as a generic
+        parse failure throws away the one thing that says what to do about it.
+
+        This matters most for the final report, which carries more evidence
+        than any other call and is therefore the likeliest to be cut - so the
+        answer a user actually reads is the one the judge can least often
+        ground-check."""
+        monkeypatch.setattr(
+            "app.repositories.base.fetch_all",
+            lambda *a, **k: [{
+                "InputJson": '{"truncated": true, "human": "Evidence: {\\"a\\": 1"}',
+                "Provider": "groq", "ModelIdentity": "m",
+            }],
+        )
+        monkeypatch.setattr("app.evaluation.graders.evidence_from_prompt", lambda _s: None)
+        _evidence, _author, why = answer_evaluation._evidence_and_author_for(1)
+        assert why == "evidence_truncated", (
+            "a prompt we cut ourselves is not an unexplained contract break"
+        )
+
+    def test_the_four_reasons_are_distinct(self):
         """The point of the split. If any two collapse, the alarm goes back to
         being unactionable and nobody will notice until it fires."""
-        assert len({"evidence_read_failed", "no_evidence_gathered", "evidence_unparseable"}) == 3
+        assert len({"evidence_read_failed", "no_evidence_gathered",
+                    "evidence_unparseable", "evidence_truncated"}) == 4
