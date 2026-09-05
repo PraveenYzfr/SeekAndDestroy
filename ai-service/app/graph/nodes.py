@@ -96,7 +96,38 @@ _REFUSAL_KEYWORDS = [
 _FORECAST_KEYWORDS = ["forecast"]
 _RIGHTSIZING_KEYWORDS = ["right-siz", "right siz", "underutilized", "under-utilized", "high-cost", "high cost", "overprovisioned"]
 _CONSOLIDATION_KEYWORDS = ["consolidat"]
-_QUESTION_KEYWORDS = ["why was", "why is", "compare", "show clusters", "at least", "generate a", "report"]
+#: Wordings that mean "this is a question about the estate", whatever else the
+#: sentence contains. Retrospective ("why was"), comparative, or a request for a
+#: document rather than a placement.
+_QUESTION_KEYWORDS = ["why was", "why is", "compare", "show clusters", "generate a"]
+
+#: Question-ish, but WEAKER THAN AN EXPLICIT PROVISIONING REQUEST.
+#:
+#: "at least" reads as a filter - "which clusters have at least 20% headroom" -
+#: and it is also how people state a floor when they are asking for capacity:
+#: "I need at least 32 cores and 128 GB RAM". Matched at the same strength as
+#: "why was", it sent that second sentence to grounded Q&A, which answers a
+#: placement request with prose and no shortlist.
+#:
+#: So it is tested AFTER the capacity check rather than before it. A sentence
+#: carrying both a resource quantity and a provisioning verb is someone asking
+#: for infrastructure; one carrying "at least" and neither is asking a question.
+_SOFT_QUESTION_KEYWORDS = ["at least"]
+
+#  "report" USED TO BE IN THE HARD LIST, AS A BARE SUBSTRING, AND IT MATCHED
+#  "reporting".
+#
+#  So "where can I host a Tier-2 reporting service needing 10 cores, 40 GB RAM
+#  and 600 GB storage" classified as QUESTION, went to grounded Q&A, and came
+#  back with no shortlist at all - reproducibly, three runs out of three, while
+#  "batch analytics workload" and "internal web app" both returned twelve
+#  options. Every application named "<something> reporting service" - which in
+#  a bank is a great many of them - had been unplaceable since the first
+#  commit.
+#
+#  It is gone rather than tightened: "generate a" above already catches the
+#  case it was for ("generate a report"), and no other phrasing of "produce a
+#  document" reaches this classifier without it.
 
 #: A number attached to a resource unit - "32 core", "8 vCPU", "64GB RAM",
 #: "500 GB storage". This is what a capacity request actually looks like when
@@ -264,8 +295,14 @@ def classify_investigation_type(query: str) -> str:
     # core box", "I need 8 vCPU and 64GB". The old test required the literal
     # words "cpu" AND ("ram" OR "memory" OR "storage") together, which missed
     # every phrasing that used "core" or gave a single dimension.
+    #
+    # ABOVE the soft question words on purpose: both signals present means
+    # somebody is asking for infrastructure and happens to have used the word
+    # "at least" to state a floor.
     if _RESOURCE_QUANTITY_RE.search(lower) and any(w in lower for w in _PROVISIONING_WORDS):
         return InvestigationType.CAPACITY
+    if any(k in lower for k in _SOFT_QUESTION_KEYWORDS):
+        return InvestigationType.QUESTION
     # Kept as a fallback for the multi-dimension phrasing even when no
     # provisioning verb is present ("8 CPU, 32 GB RAM, 500 GB storage").
     if "cpu" in lower and ("ram" in lower or "memory" in lower or "storage" in lower):
