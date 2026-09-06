@@ -226,6 +226,20 @@ def main() -> int:
     parser.add_argument("--fail-on-regression", action="store_true",
                         help="exit non-zero when a case that passed in the baseline now fails")
     parser.add_argument("--triggered-by", default=None, help="who or what started this run")
+    #  WHY THIS RUN IS THE BASELINE, in the row itself.
+    #
+    #  Notes already carries the machine verdict ("Passed - ..."), which says
+    #  what happened and never why the run was made. A baseline is re-pinned
+    #  when the RULER changed, and that fact lives nowhere else: on 2026-09-06
+    #  three separate changes altered how number_fidelity is computed - a
+    #  U+2011 dash fix, a not-applicable guard, and an absence column that
+    #  changed what a NULL means - so any comparison spanning that day reads
+    #  three changed rulers as a regression.
+    #
+    #  Appended to the verdict rather than replacing it, because both matter
+    #  and the verdict is what --fail-on-regression is judged against.
+    parser.add_argument("--note", default=None,
+                        help="why this run was made - appended to the recorded verdict")
     args = parser.parse_args()
 
     # A comparison needs both runs stored, so asking for one turns recording on
@@ -365,7 +379,7 @@ def main() -> int:
             judge_mean=(round(sum(r["judge"]["scores"]["mean"] for r in usable) / len(usable), 2)
                         if usable else None),
             judge_excluded=excluded,
-            notes=reason,
+            notes=(f"{reason} | {args.note}" if args.note else reason),
         )
         print()
         print(f"  run #{run_id}: {status} - {reason}")
