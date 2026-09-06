@@ -162,6 +162,40 @@ class TestTheRefusalWordingThatCostFourCases:
             investigation_type="Question",
         )
 
+    def test_the_one_genuine_defect_must_not_turn_green(self):
+        """THE TEST THIS CHANGE IS BUILT AROUND.
+
+        unhosted-app-cards-api0753 is the suite's one real open defect: it named
+        atl-p075 for an application with no ApplicationHosting row, citing an
+        incident. All five must_refuse cases go through the same function, so a
+        phrase list loose enough to fix the four false failures is loose enough
+        to pass this one - and a grading change that turns a genuine defect
+        green has gone too far, whatever it fixed on the way.
+
+        The answer below declines in words and answers in substance. It is not a
+        refusal.
+        """
+        assert not golden_runner._refused(
+            "There is no formal hosting record for APP-CARDS-API0753 in the CMDB, and the "
+            "evidence does not contain a definitive placement - but incident INC-4471 "
+            "indicates it runs on atl-p075.",
+            intercepted=False,
+            investigation_type="Question",
+            query="Which cluster is APP-CARDS-API0753 running on today?",
+        )
+
+    def test_a_refusal_may_still_echo_the_cluster_it_was_asked_about(self):
+        """The other half, and without it the check would fail every refusal
+        that names its own subject. "What did clt-p125 cost to build?" is
+        declined by saying so about clt-p125 - the code is in the question, so
+        repeating it volunteers nothing."""
+        assert golden_runner._refused(
+            "The evidence does not contain any information about the build cost for clt-p125.",
+            intercepted=False,
+            investigation_type="Question",
+            query="What did clt-p125 cost to build?",
+        )
+
     def test_a_real_answer_using_similar_words_is_not_read_as_a_refusal(self):
         """Matched on "evidence does not contain", not the looser "does not
         contain" - a genuine answer can say that about the estate, and reading

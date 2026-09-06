@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -69,7 +70,38 @@ def load_cases() -> list[dict]:
     return data.get("cases", [])
 
 
-def _refused(text: str, *, intercepted: bool, investigation_type: str | None = None) -> bool:
+#: Real cluster codes: atl-03, cmh-p212, tok-p500. Same shape the conversation
+#: resolver uses, and deliberately not a pattern invented here - a regex
+#: describing a corpus somebody imagined has already shipped twice in this repo
+#: and matched nothing either time.
+_CLUSTER_IN_TEXT_RE = re.compile(r"\b[a-z]{3}-p?\d{2,3}\b", re.IGNORECASE)
+
+
+def _named_a_cluster_not_asked_about(text: str, query: str) -> bool:
+    """Whether the answer volunteered a cluster the question never mentioned.
+
+    THE FOURTH STRUCTURAL SIGNAL, and it exists to stop the phrase list from
+    passing a genuine defect.
+
+    Every marker below is a string a WRONG answer can also contain. Given
+    "Which cluster is APP-CARDS-API0753 running on today?" - an application with
+    no hosting row - an answer reading "there is no formal hosting record, but
+    incident INC-4471 places it on atl-p075" both declines in words and answers
+    in substance. It named a cluster. That is not a refusal however it is
+    phrased, and grading it as one turns the suite's one genuine open defect
+    green, which is worse than the false failures this change set out to fix.
+
+    NOT ASKED ABOUT is the whole point. A correct refusal echoes the subject -
+    "the CMDB holds no build cost for clt-p125" names clt-p125 because the
+    question did. Only a code the question never contained is the platform
+    volunteering an answer.
+    """
+    asked = {m.lower() for m in _CLUSTER_IN_TEXT_RE.findall(query)}
+    return any(m.lower() not in asked for m in _CLUSTER_IN_TEXT_RE.findall(text))
+
+
+def _refused(text: str, *, intercepted: bool, investigation_type: str | None = None,
+             query: str = "") -> bool:
     """Whether the platform declined rather than answered.
 
     Structural first. When quick_reply intercepts a query, the platform has by
@@ -106,6 +138,15 @@ def _refused(text: str, *, intercepted: bool, investigation_type: str | None = N
     # the same reason.
     if (investigation_type or "").lower() in {"refused", "rejected"}:
         return True
+
+    #  OVERRULES EVERY SIGNAL BELOW, which is why it sits above them.
+    #
+    #  Both remaining checks can fire on an answer that is wrong. A hedged wrong
+    #  answer may carry no citations and Low confidence, and any phrase in the
+    #  list can appear in prose that also names a cluster. When a code the
+    #  question never mentioned is present, the naming is the load-bearing half.
+    if query and _named_a_cluster_not_asked_about(text, query):
+        return False
 
     # Second structural signal, for refusals the graph itself produces.
     # GroundedAnswer carries citations and a confidence; an answer with no
@@ -156,7 +197,6 @@ def _refused(text: str, *, intercepted: bool, investigation_type: str | None = N
             #  is why the two structural checks above exist and why the next
             #  fix should be a third one rather than a fifth string.
             "evidence does not contain", "not contain any information",
-            "no evidence", "not recorded in",
         )
     )
 
@@ -328,6 +368,7 @@ def run_case(case: dict, *, use_judge: bool) -> dict:
         passed = _refused(
             answer, intercepted=intercepted,
             investigation_type=result.get("investigation_type"),
+            query=query,
         )
         result["hard"].append(
             {"check": "must_refuse", "passed": passed,
