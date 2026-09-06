@@ -121,3 +121,68 @@ class TestWhatMustNotBeCarried:
     def test_no_prior_means_nothing_is_invented(self):
         resolution = c.resolve("is it stable ?", None)
         assert resolution.resolved_query == "is it stable ?"
+
+
+class TestThePlatformCanAcceptTheAnswerToItsOwnQuestion:
+    """A real conversation, session 60301f49:
+
+        user  get me a best server
+        SAD   I need a bit more to work with. Either name the application or
+              give me the resources it needs.
+        user  for java app
+        SAD   I don't have an earlier result in this conversation to refer back to.
+        user  its a brand new java app
+        SAD   I don't have an earlier result in this conversation to refer back to.
+
+    A closed loop. The engineer answered the platform's own question, twice, and
+    was told there was nothing to refer back to - with no way out except
+    abandoning the thread and typing one fully-formed sentence.
+
+    THE CAUSE. That clarifying reply comes from quick_reply, which deliberately
+    creates NO Investigation row: "hi" should not produce one. So prior is None,
+    "for java app" resolves as INHERIT_SUBJECT with nothing to inherit, and
+    _NO_REFERENT fires. "No prior INVESTIGATION" and "no prior CONVERSATION" are
+    different facts, and the message conflated them.
+
+    Declining to assert a referent that does not exist is not a guess about
+    intent. It hands the turn back to quick_reply and capability_reply, which
+    answer it properly.
+    """
+
+    @pytest.mark.parametrize(
+        "query", ["for java app", "its a brand new java app", "and with 128 GB RAM", "what about staging?"]
+    )
+    def test_a_follow_up_with_no_prior_is_not_refused(self, query):
+        resolution = c.resolve(query, None)
+        assert resolution.reply is None, "the platform must not claim amnesia about its own question"
+        assert resolution.kind is None, "with nothing to refer to, it is an ordinary query"
+
+    def test_the_query_reaches_the_pipeline_unchanged(self):
+        """Nothing is inferred or appended - there is no prior to draw on, and
+        inventing one would be worse than the refusal it replaces."""
+        assert c.resolve("for java app", None).resolved_query == "for java app"
+
+    @pytest.mark.parametrize(
+        "query", ["show me those options again", "give me the options again", "repeat that"]
+    )
+    def test_recall_with_no_prior_still_refuses(self, query):
+        """Here the refusal is true and useful: a first message asking to repeat
+        a shortlist has no shortlist to repeat, and saying so is the entire
+        point of _NO_REFERENT. This fix must not take that with it."""
+        resolution = c.resolve(query, None)
+        assert resolution.kind == c.RECALL
+        assert resolution.reply is not None
+        assert "earlier result" in resolution.reply
+
+    def test_the_java_turns_reach_the_capability_refusal(self):
+        """The honest answer to "for java app" is not a recall failure - it is
+        that this CMDB records a hosting platform and not a language. Proving
+        the turn reaches that path, rather than merely no longer being refused
+        for the wrong reason."""
+        from app.graph.nodes import quick_reply
+
+        for query in ("for java app", "its a brand new java app"):
+            assert c.resolve(query, None).reply is None
+            answer = quick_reply(query)
+            assert answer is not None, f"{query!r} fell through to a full investigation"
+            assert "runtime language" in answer

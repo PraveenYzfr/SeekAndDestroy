@@ -378,7 +378,43 @@ def resolve(query: str, prior: Optional[PriorInvestigation]) -> Resolution:
         return Resolution(kind=None, resolved_query=query, prior=None)
 
     if prior is None:
-        return Resolution(kind=kind, resolved_query=query, prior=None, reply=_NO_REFERENT)
+        # THE PLATFORM ASKED A QUESTION AND THEN COULD NOT ACCEPT THE ANSWER.
+        #
+        #     user  get me a best server
+        #     SAD   I need a bit more to work with. Either name the application
+        #           or give me the resources it needs.
+        #     user  for java app
+        #     SAD   I don't have an earlier result in this conversation to refer
+        #           back to.
+        #     user  its a brand new java app
+        #     SAD   I don't have an earlier result in this conversation to refer
+        #           back to.
+        #
+        # A closed loop with no way out except abandoning the thread and typing
+        # one fully-formed sentence. The engineer answered correctly, twice, and
+        # was told the platform had no memory of the question it had just asked.
+        #
+        # The cause: that clarifying reply comes from quick_reply, which
+        # deliberately creates NO Investigation row - "hi" should not produce
+        # one. So prior is None, "for java app" resolves as INHERIT_SUBJECT with
+        # nothing to inherit, and _NO_REFERENT fires. "No prior INVESTIGATION"
+        # and "no prior CONVERSATION" are different facts and this conflated
+        # them.
+        #
+        # RECALL KEEPS THE REFUSAL, because there it is true and useful: "show me
+        # those options again" as a first message has no options to show, and
+        # saying so is the whole point of _NO_REFERENT.
+        #
+        # Everything else falls through as an ordinary query. That is not a
+        # guess about intent - it is declining to assert a referent that does
+        # not exist. quick_reply and capability_reply then answer it properly:
+        # "for java app" gets the ask for an application or a size, and "its a
+        # brand new java app" reaches the capability refusal that explains this
+        # CMDB records a hosting platform and not a language. Both are the
+        # honest answer to what was typed.
+        if kind == RECALL:
+            return Resolution(kind=RECALL, resolved_query=query, prior=None, reply=_NO_REFERENT)
+        return Resolution(kind=None, resolved_query=query, prior=None)
 
     if kind == RECALL:
         if not prior.has_options:
