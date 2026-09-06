@@ -20,20 +20,13 @@ from app.api import auth, routes_admin, routes_cmdb, routes_forecast, routes_hos
 from app.api.auth import get_current_employee
 from app.api.errors import register_exception_handlers
 from app.config import get_settings
+from app.observability.logging import configure_logging
 
 settings = get_settings()
 
-_log_level = getattr(logging, settings.service.log_level.upper(), logging.INFO)
-
-structlog.configure(
-    processors=[
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer() if settings.service.log_json else structlog.dev.ConsoleRenderer(),
-    ],
-    wrapper_class=structlog.make_filtering_bound_logger(_log_level),
-)
+# Shared with the indexer, which runs a different command against this same
+# image and therefore never imports this module. See app/observability/logging.py.
+configure_logging()
 
 logger = structlog.get_logger(__name__)
 

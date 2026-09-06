@@ -42,6 +42,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.agents.guards import NumberDriftError
+from app.services.spend_budget import BudgetExceededError
 from app.repositories.base import RowLimitExceeded
 
 logger = structlog.get_logger(__name__)
@@ -92,6 +93,32 @@ def register_exception_handlers(app: FastAPI) -> None:
         return _problem_response(
             request, 422, "Validation failed", "The request failed schema validation.",
             errors=exc.errors(),
+        )
+
+    @app.exception_handler(BudgetExceededError)
+    async def handle_budget_exceeded(request: Request, exc: BudgetExceededError):
+        """A DELIBERATE GUARDRAIL, NOT AN ERROR - and it used to look like one.
+
+        BudgetExceededError subclasses plain Exception and was caught NOWHERE, so
+        a spend limit doing exactly its job surfaced to the user as a generic 500
+        "unexpected error". The one outcome the platform is certain about read as
+        the one it understands least.
+
+        429 rather than 500: the request was refused, not broken, and it may
+        succeed tomorrow. The limit and the count go to the LOG - they are
+        estate configuration, and a caller who can read the ceiling can probe
+        for it.
+        """
+        logger.warning(
+            "api.budget_denied",
+            namespace=exc.namespace, limit=exc.limit, used=exc.used,
+            path=str(request.url.path),
+        )
+        return _problem_response(
+            request, 429, "Daily budget reached",
+            "This platform's daily allowance of real model calls has been spent, "
+            "so the request was refused rather than charged. It will reset at "
+            "00:00 UTC. Nothing was wrong with the request.",
         )
 
     @app.exception_handler(NumberDriftError)

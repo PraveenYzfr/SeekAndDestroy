@@ -16,11 +16,16 @@ provider's quota, not a precise metering system.
 
 from __future__ import annotations
 
+import structlog
+
 from datetime import datetime, timezone
 
 from app.cache.store import get_cache_store
 
 _SECONDS_PER_DAY_WITH_MARGIN = 90_000  # a little over 24h so a stale key can't outlive its calendar day
+
+
+logger = structlog.get_logger(__name__)
 
 
 class BudgetExceededError(Exception):
@@ -52,6 +57,11 @@ def check_and_increment(namespace: str, daily_limit: int) -> int:
     used = int(current) if current is not None else 0
     if used >= daily_limit:
         _record_denied(namespace)
+        logger.warning(
+            "spend_budget.denied", namespace=namespace, limit=daily_limit, used=used,
+            detail="daily call budget already spent; the request was refused before "
+                   "reaching a provider",
+        )
         raise BudgetExceededError(namespace, daily_limit, used)
 
     new_count = store.incr(key, ttl_seconds=_SECONDS_PER_DAY_WITH_MARGIN)
@@ -60,6 +70,11 @@ def check_and_increment(namespace: str, daily_limit: int) -> int:
         # atomic increment - the increment itself is never lost or wrong, but
         # this specific call still needs to be denied.
         _record_denied(namespace)
+        logger.warning(
+            "spend_budget.denied", namespace=namespace, limit=daily_limit,
+            used=new_count - 1,
+            detail="daily call budget reached on this increment",
+        )
         raise BudgetExceededError(namespace, daily_limit, new_count - 1)
     return new_count
 

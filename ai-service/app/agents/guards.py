@@ -7,13 +7,29 @@ against the frozen evidence dict it was given and raises
 explanation-generating chain in app/agents calls this immediately after
 parsing the model's structured output, before the result is returned to a
 caller or persisted.
+
+AND IT NOW LEAVES A TRACE. This module imported no logger, and the handler that
+turns the rejection into a response did not log either - so the single most
+safety-critical event in the platform was legible ONLY to the person who
+triggered it. api/errors.py has logged the handled case since 28c7f75; this logs
+at the point of detection, which is the only place that sees a drift caught by a
+caller that swallows it.
+
+Both, deliberately. A caller catching NumberDriftError and continuing is exactly
+the path where no handler runs, and that is the path where a silent drift would
+matter most.
 """
 
 from __future__ import annotations
 
 import re
 
+import structlog
+
 from pydantic import BaseModel
+
+
+logger = structlog.get_logger(__name__)
 
 
 class NumberDriftError(ValueError):
@@ -73,6 +89,17 @@ def assert_no_number_drift(explanation: BaseModel, evidence: dict, *, tolerance:
             # added next - and the miss would look like an improvement in the
             # hallucination rate.
             _count_drift(explanation, "drift")
+            # LOGGED WHERE IT IS DETECTED. The figures go to the operator; the
+            # caller gets a message that says what happened without saying what
+            # the number was - see app/api/errors.py::handle_number_drift.
+            logger.warning(
+                "guards.number_drift_rejected",
+                schema=type(explanation).__name__,
+                field=field_name,
+                model_value=value,
+                evidence_key=evidence_key,
+                evidence_value=expected_f,
+            )
             raise NumberDriftError(
                 f"LLM output field '{field_name}' = {value} does not match evidence "
                 f"'{evidence_key}' = {expected_f}. Rejecting explanation - numbers must come "

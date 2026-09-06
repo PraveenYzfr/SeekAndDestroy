@@ -23,6 +23,23 @@
 # it's supposed to be stopping and silently does nothing:
 #   docker compose -f docker/docker-compose.yml --profile core --profile observability down
 
+#: Log rotation, referenced by every service below.
+#:
+#: The default json-file driver has NO SIZE LIMIT. Every container on this VM
+#: was writing an unbounded log, on a box that also holds SQL Server, Qdrant and
+#: the Prometheus TSDB - so the first symptom of a chatty container would have
+#: been a full disk taking the database down with it, which is a far worse
+#: outcome than losing old log lines.
+#:
+#: 50m x 5 is 250 MB per container. Declared once as an anchor rather than
+#: copied per service: a per-service block is one a new service gets added
+#: without, and unbounded is the default it falls back to.
+x-logging: &default_logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   # SQL Server as a container rather than a host install. Two things this buys
   # beyond convenience: the image is SQL-authentication only, so the "enable
@@ -34,6 +51,7 @@ services:
   # Set SAD_DB_HOST=host.docker.internal in docker/.env to point at an external
   # SQL Server instead and this service simply goes unused.
   sqlserver:
+    logging: *default_logging
     profiles: ["core"]
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
@@ -70,6 +88,7 @@ services:
   # Guarded so a restart never re-seeds - schema.sql creates tables
   # unconditionally and seed.sql would duplicate all 96k rows.
   db-init:
+    logging: *default_logging
     profiles: ["core"]
     # The server image, not a separate tools image: it already ships sqlcmd at
     # /opt/mssql-tools18/bin (the healthcheck above uses it), so this pulls no
@@ -92,6 +111,7 @@ services:
     restart: "no"
 
   qdrant:
+    logging: *default_logging
     profiles: ["core"]
     image: qdrant/qdrant:latest
     # Bound to loopback, NOT 0.0.0.0. Qdrant ships with no authentication, so
@@ -117,6 +137,7 @@ services:
       retries: 5
 
   redis:
+    logging: *default_logging
     profiles: ["core"]
     image: redis:7-alpine
     # Loopback only - Redis has no auth here either, and an open 6379 is one
@@ -132,6 +153,7 @@ services:
       retries: 5
 
   ai-service:
+    logging: *default_logging
     networks:
       default:
       hub:
@@ -146,6 +168,13 @@ services:
     ports:
       - "127.0.0.1:8088:8088"
     environment: &ai_environment
+      # JSON LOGS, BECAUSE PROD WAS EMITTING ANSI COLOUR CODES. log_json
+      # defaults to False, which is right for a terminal and wrong for a
+      # container: the renderer writes escape sequences into the docker log,
+      # where nothing reads them and every shipper has to strip them. Not
+      # cosmetic - a log line wrapped in escape codes is a log line no
+      # structured query can filter on, so the fields are there and unusable.
+      SAD_SERVICE__LOG_JSON: "${SAD_LOG_JSON:-true}"
       # Defaults to the sqlserver container. Set SAD_DB_HOST=host.docker.internal
       # in docker/.env to use an external instance instead.
       SAD_DB__SERVER: "${SAD_DB_HOST:-sqlserver}"
@@ -239,6 +268,7 @@ services:
   # write vectors into a collection nothing searches, and nothing would error.
   # ---------------------------------------------------------------------------
   ai-indexer:
+    logging: *default_logging
     networks:
       default:
       hub:
@@ -267,6 +297,7 @@ services:
     stop_grace_period: 60s
 
   api-gateway:
+    logging: *default_logging
     networks:
       default:
       hub:
@@ -302,6 +333,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   ui:
+    logging: *default_logging
     networks:
       default:
       hub:
@@ -316,6 +348,7 @@ services:
       - api-gateway
 
   prometheus:
+    logging: *default_logging
     networks:
       default:
       hub:
@@ -364,6 +397,7 @@ services:
     # up as "down" in Prometheus, which is normal, not an error.
 
   alertmanager:
+    logging: *default_logging
     profiles: ["observability"]
     #: Pinned with prometheus - see the note there.
     image: prom/alertmanager:v0.28.0
@@ -383,6 +417,7 @@ services:
     # Alertmanager receiving nothing is a normal state rather than an error.
 
   grafana:
+    logging: *default_logging
     networks:
       default:
       hub:

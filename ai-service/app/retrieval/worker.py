@@ -26,6 +26,7 @@ import time
 import structlog
 
 from app.repositories import index_run_repository
+from app.observability.logging import configure_logging
 from app.retrieval import index_queue, pipeline
 
 logger = structlog.get_logger(__name__)
@@ -146,4 +147,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Without this the worker's log events come out under structlog's
+    # defaults - unfiltered and unrendered - while every other process in this
+    # image uses the platform's configuration. Two shapes from one platform.
+    configure_logging()
     sys.exit(main())
