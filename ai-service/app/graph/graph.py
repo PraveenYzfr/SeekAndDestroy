@@ -597,62 +597,177 @@ def run_investigation(*, query: str, created_by: int, conversation_id: str | Non
     return answered({**_summarize(result), "conversation_id": conversation_id})
 
 
+def _num(value):
+    """A float, or None. Decimal, str and missing all arrive here."""
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _find_candidate(scores: list | None, code: str | None) -> dict | None:
+    if not scores or not code:
+        return None
+    wanted = code.split("/")[0].strip().lower()
+    for c in scores:
+        if str(c.get("cluster_code", "")).strip().lower() == wanted:
+            return c
+    return None
+
+
+def _describe(c: dict | None) -> dict:
+    """The figures this platform computed for one candidate. No prose."""
+    if not c:
+        return {}
+    proj = c.get("projected") or {}
+    sub = c.get("subscores") or {}
+    snap = c.get("snapshot") or {}
+    return {
+        "code": c.get("cluster_code"),
+        "rank": c.get("rank"),
+        "score": _num(c.get("overall_score")),
+        "headroom": _num(proj.get("projected_headroom_percent")),
+        "risk": _num(sub.get("risk")),
+        "historical": _num(sub.get("historical")),
+        "lifecycle": snap.get("lifecycle_status") or c.get("lifecycle_status"),
+    }
+
+
+def _delta(mine, theirs, *, higher_is_better: bool, unit: str = "") -> str:
+    if mine is None or theirs is None:
+        return "not comparable"
+    diff = mine - theirs
+    if abs(diff) < 0.005:
+        return f"the same ({mine:.2f}{unit})"
+    better = (diff > 0) == higher_is_better
+    word = "better" if better else "worse"
+    return f"{mine:.2f}{unit} vs {theirs:.2f}{unit} - {abs(diff):.2f}{unit} {word}"
+
+
 def _report_after_decision(report: dict | None, *, decision: str,
-                           cluster: str | None, host: str | None) -> dict | None:
-    """Correct a report that was written BEFORE the reviewer chose.
+                           cluster: str | None, host: str | None,
+                           candidate_scores: list | None = None) -> dict | None:
+    """Rewrite the report to be about the candidate the reviewer CHOSE.
 
-    THE DEFECT THIS FIXES, reported from production. The reviewer approved
-    den-p097 / den-p097-NODE-03. The report on screen still read:
+    THE DEFECT, reported twice from production. The report is generated once
+    during the investigation, before any decision exists, so after a reviewer
+    picks a candidate it still argued for the ranked winner - by name, in its
+    recommendation, and in next steps that told somebody to allocate onto a
+    cluster that had just been declined.
 
-        Top recommendation: Cluster cmh-p225 (Columbus-DC1)
-        Next steps: Allocate the required 4 CPU cores ... on cluster cmh-p225.
-                    Update the application deployment manifest to target the
-                    cmh-p225 cluster code.
+    The first fix corrected the recommendation and the steps and left the prose.
+    That was not enough and Praveen said so: the summary still explained all five
+    clusters and concluded that the ranked winner "provides the most robust
+    environment", the heading still read "Top recommendation" over something he
+    had chosen himself, and the risks listed every candidate including four he
+    had not taken.
 
-    The shortlist knew - den-p097 said Approved, everything else said Superseded.
-    The REPORT did not, because it is generated once during the investigation and
-    never revisited. So the platform issued written instructions to deploy onto a
-    cluster the reviewer had just rejected.
+    So the whole report is now ABOUT HIS CHOICE:
 
-    DETERMINISTIC, NOT REGENERATED. Which candidate was chosen is a FACT the
-    platform owns, not something to ask a model about - the same boundary that
-    stops the LLM computing a score. Re-narrating would cost a call, add latency
-    to a click, and could drift from the decision it was meant to describe.
+        what he selected, and where it ranked
+        what the platform ranked first, and by how much
+        the trade-off between the two, computed not narrated
+        risks for HIS candidate only
 
-    The model's own prose is KEPT AND LABELLED rather than edited. Rewriting
-    sentences it wrote would produce text nobody authored and nobody checked; the
-    honest thing is to say plainly that the analysis below preceded the decision.
+    EVERY FIGURE IS COMPUTED FROM candidate_scores. No model call: which
+    candidate was chosen and how the two compare are facts this platform owns,
+    and asking a model to restate arithmetic it was given is the exact boundary
+    the number-drift guard exists to hold.
+
+    The model's original multi-cluster analysis is NOT rewritten and NOT kept in
+    the summary. It described a decision that has since been made differently;
+    editing its sentences would produce text nobody authored, and leaving them
+    means the reader is arguing with a document instead of reading one. The full
+    shortlist and every finding stay on screen underneath.
     """
     if not report or not isinstance(report, dict):
         return report
     corrected = dict(report)
-    chosen = " / ".join(p for p in (cluster, host) if p)
+    chosen_label = " / ".join(x for x in (cluster, host) if x)
 
-    if decision == "Approve" and chosen:
-        previous = (report.get("top_recommendation") or "").strip()
-        corrected["top_recommendation"] = chosen
-        # The steps named the ranked winner. They are instructions, so a stale
-        # one is worse than none: it tells somebody to build on the wrong box.
-        corrected["next_steps"] = [
-            f"Place the workload on {chosen}.",
-            "Confirm the target capacity figures on that candidate before allocating.",
-        ]
-        note = f"REVIEWER SELECTED {chosen}."
-        if previous and previous.lower() not in chosen.lower():
-            note += (
-                f" The analysis below was written before that choice and ranked "
-                f"{previous} highest; it is retained as the reasoning that was "
-                f"available at the time, not as current advice."
-            )
-        corrected["executive_summary"] = note + "\n\n" + (report.get("executive_summary") or "")
-    elif decision != "Approve":
+    if decision != "Approve":
         corrected["top_recommendation"] = None
         corrected["next_steps"] = ["No placement was approved from this shortlist."]
+        corrected["risks"] = []
         corrected["executive_summary"] = (
-            f"REVIEWER DECISION: {decision}. No candidate below was accepted. The "
-            "analysis is retained as the reasoning that was available at the time.\n\n"
-            + (report.get("executive_summary") or "")
+            f"DECISION: {decision}. No candidate was accepted, so nothing here is "
+            "recommended. The shortlist and its findings remain below as the "
+            "analysis that was available at the time."
         )
+        return corrected
+
+    if not chosen_label:
+        return corrected
+
+    mine = _describe(_find_candidate(candidate_scores, cluster))
+    top = _describe(next((c for c in (candidate_scores or []) if c.get("rank") == 1), None))
+
+    lines = [f"YOU SELECTED {chosen_label}."]
+    total = len(candidate_scores or [])
+    if mine.get("rank"):
+        # "of N" only when the arithmetic holds. A rank higher than the list
+        # length prints "#3 of 2", which reads as a bug in the ranking rather
+        # than a short list, and undermines the figures beside it.
+        lines[0] += (
+            f" It was ranked #{mine['rank']} of {total}."
+            if total and mine["rank"] <= total else f" It was ranked #{mine['rank']}."
+        )
+
+    same = top.get("code") and mine.get("code") and top["code"] == mine["code"]
+    if top.get("code") and not same:
+        lines.append(
+            f"SeekAndDestroy ranked {top['code']} first"
+            + (f" (score {top['score']:.2f})." if top.get("score") is not None else ".")
+        )
+        lines.append("")
+        lines.append(f"YOUR CHOICE VERSUS {top['code']}:")
+        # DIRECTION VERIFIED IN app/scoring/subscores.py, NOT ASSUMED. Getting
+        # one of these backwards would print a confident comparison that says
+        # the opposite of the truth, which is worse than printing nothing:
+        #
+        #   operational_risk_score accumulates penalties from zero - Deprecated
+        #     alone adds 30 - and its own header says "higher = worse; the
+        #     overall formula uses 100 - risk". So LOWER risk is better, and my
+        #     first version of this table called 3.42 worse than 33.40.
+        #   historical_performance_subscore starts at 100 and SUBTRACTS for
+        #     weighted incidents, so higher is better. It is a performance score
+        #     derived from incidents, not a utilisation figure, and calling it
+        #     "utilisation" was wrong as well as backwards.
+        for label, key, higher, unit in (
+            ("overall score", "score", True, ""),
+            ("capacity headroom", "headroom", True, "%"),
+            ("operational risk", "risk", False, ""),
+            ("historical performance", "historical", True, ""),
+        ):
+            lines.append(f"  {label:<24} {_delta(mine.get(key), top.get(key), higher_is_better=higher, unit=unit)}")
+        if top.get("lifecycle") and str(top["lifecycle"]).lower() == "deprecated":
+            lines.append(
+                f"  lifecycle                {top['code']} is Deprecated; "
+                f"{mine.get('code')} is {mine.get('lifecycle') or 'not flagged'}."
+            )
+    elif same:
+        lines.append("That was also the platform's top-ranked candidate.")
+
+    corrected["executive_summary"] = "\n".join(lines)
+    corrected["top_recommendation"] = None
+    corrected["your_selection"] = chosen_label
+    corrected["platform_top_choice"] = top.get("code")
+    corrected["selected_rank"] = mine.get("rank")
+
+    # RISKS FOR THE CHOSEN CANDIDATE ONLY. Listing all five told the reader about
+    # four clusters they had declined, and buried the one fact that applies to
+    # what they are about to build on.
+    kept = []
+    code = (mine.get("code") or "").lower()
+    for risk in report.get("risks") or []:
+        if code and code in str(risk).lower():
+            kept.append(risk)
+    corrected["risks"] = kept
+
+    corrected["next_steps"] = [
+        f"Place the workload on {chosen_label}.",
+        "Confirm the target capacity figures on that candidate before allocating.",
+    ]
     return corrected
 
 
@@ -694,6 +809,7 @@ def resume_investigation(
     summary["final_report"] = _report_after_decision(
         summary.get("final_report"), decision=decision,
         cluster=selected_cluster_code, host=selected_host_name,
+        candidate_scores=summary.get("candidate_scores"),
     )
     return {**summary, "conversation_id": conversation_id}
 

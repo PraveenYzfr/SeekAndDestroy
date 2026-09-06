@@ -207,8 +207,33 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    Deliberately quiet: a control that shouts competes with the answer it is
    asking about, and the reading matters more than the rating. */
 .answer-feedback { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; font-size: 13px; }
-.feedback-vote { padding: 2px 12px; font-size: 13px; border-radius: 12px; }
-.feedback-vote.chosen { outline: 2px solid var(--accent, #4c8bf5); }
+/* Unchosen votes are OUTLINES, not filled buttons. Both were solid blue and
+   the chosen one only a darker shade of it - after ten clicks the reporter
+   still could not tell which he had picked, which is the whole job of this
+   control. Outline vs fill is a difference you do not have to compare two
+   things side by side to see. */
+.feedback-vote {
+  padding: 2px 12px;
+  font-size: 13px;
+  border-radius: 12px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  color: inherit;
+  opacity: 0.8;
+}
+/* THE CHOSEN ONE MUST BE OBVIOUS AT A GLANCE. This was a 2px outline in
+   var(--accent), which on the dark theme was close to invisible - after ten
+   clicks both buttons still looked identical and neither looked picked, so the
+   only evidence a rating had registered was a line of text beside them.
+   Filled, bright, and the unchosen one dimmed: two signals, not one. */
+.feedback-vote.chosen {
+  opacity: 1;
+  font-weight: 600;
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+.feedback-vote.chosen::before { content: "¹3 "; }
 /* Reserved width, so the confirmation appearing does not shuffle the buttons
    sideways under the pointer at the moment of clicking. */
 .feedback-status { min-width: 150px; opacity: 0.85; }

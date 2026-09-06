@@ -143,6 +143,10 @@ export default function Chat() {
   ).size;
   const examples = buildExamples();
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  //: The caret belongs in the question box. Kept so focus can be restored after
+  //: a send, and after the answer lands - a reply arriving should not take the
+  //: keyboard away from somebody already typing the follow-up.
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   /** The most recent shortlist still awaiting a decision - the only one whose
    *  controls should do anything. Derived rather than stored: a decision, a new
@@ -215,6 +219,9 @@ export default function Chat() {
     if (!text || busy) return;
     setInput("");
     setBusy(true);
+    // Enter must leave the caret where it was. Without this a submit that
+    // re-renders the list can move focus to the document body.
+    inputRef.current?.focus();
     const userMsg: ChatMessage = { id: newId(), role: "user", text };
     const assistantId = newId();
     setMessages((prev) => [...prev, userMsg, { id: assistantId, role: "assistant", status: "loading" }]);
@@ -269,6 +276,7 @@ export default function Chat() {
       });
     } finally {
       setBusy(false);
+      inputRef.current?.focus();
     }
   }
 
@@ -368,13 +376,22 @@ export default function Chat() {
       </div>
 
       <div className="chat-input-bar">
+        {/* NOT disabled while busy, and that is the fix rather than an
+            oversight. A disabled element LOSES FOCUS, so pressing Enter threw
+            the caret out of the box and the next question had to be started by
+            clicking back into it. send() already refuses to run while busy, so
+            disabling bought nothing and cost the one thing a chat box must
+            keep.
+
+            It also means the next question can be typed while the current one
+            is still running, which is how anybody actually uses this. */}
         <textarea
+          ref={inputRef}
           rows={2}
           placeholder="Ask about hosting, capacity, right-sizing, forecasts..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
-          disabled={busy}
         />
         <button disabled={busy || !input.trim()} onClick={() => send(input)}>
           {busy ? "Working..." : "Send"}
