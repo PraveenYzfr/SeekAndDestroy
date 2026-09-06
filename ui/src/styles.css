@@ -242,3 +242,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .feedback-reasons .secondary { font-size: 12px; padding: 2px 10px; }
 .feedback-reasons .secondary.chosen { outline: 2px solid var(--accent, #4c8bf5); }
 .feedback-detail textarea { width: 100%; max-width: 520px; font-size: 13px; }
+
+/* The closed state: one sentence saying what was stored, and the way back. */
+.feedback-recorded { font-size: 13px; opacity: 0.9; }
+.feedback-change { font-size: 12px; padding: 1px 8px; }
+.feedback-actions { display: flex; gap: 8px; margin-top: 6px; }
+.feedback-actions button { font-size: 12px; padding: 2px 12px; }

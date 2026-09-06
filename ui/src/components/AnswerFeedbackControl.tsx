@@ -9,23 +9,21 @@ import { FEEDBACK_REASONS } from "@/types";
  *  opinion of another model's work. Not one of them has ever been checked
  *  against a person who actually needed the answer.
  *
- *  The table, the repository, the endpoints and their tests all existed before
- *  this file did. There was no control and no gateway route, so nobody could
- *  submit a rating and the only column that could settle "is the judge worth
- *  what it costs" stayed empty.
+ *  THE LOOP HAS TO CLOSE, and the first version never did. Reported from
+ *  production: after ten clicks both buttons still looked live, choosing a
+ *  reason left the panel open as though nothing had happened, and the comment
+ *  box had no way to submit - it saved on blur, which is invisible, so the only
+ *  way to know anything had been recorded was to guess.
  *
- *  THREE THINGS THIS DELIBERATELY DOES NOT DO:
+ *  Every path now ENDS somewhere: a rating collapses to a sentence saying what
+ *  was recorded, and that sentence carries the way back if the reader wants to
+ *  change it. "It stays changeable" was the right instinct and was implemented
+ *  as "it never finishes", which is a different thing.
  *
- *  - It does not demand a reason. Rating is one click; the reason and comment
- *    appear afterwards and can be ignored. Requiring an explanation is how a
- *    feedback control stops being used, and a thumbs-up with nothing attached
- *    is still the data point that matters.
- *  - It does not offer a middle option. "Fine, I suppose" is not a signal
- *    anybody can act on, and its presence invites the answer that costs least
- *    to give. Helpful or not helpful, and the option to say nothing at all.
- *  - It does not disappear once used. The rating stays visible and changeable,
- *    because the moment somebody most wants to revise a verdict is after they
- *    have tried to act on the answer.
+ *  What it still deliberately does not do: demand a reason (rating is one click,
+ *  and a thumbs-up with nothing attached is still the data point that matters),
+ *  or offer a middle option ("fine, I suppose" is not a signal anybody can act
+ *  on, and offering it invites the answer that costs least to give).
  */
 export default function AnswerFeedbackControl({
   investigationId,
@@ -39,11 +37,9 @@ export default function AnswerFeedbackControl({
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  //: Shown only after a negative rating, and only until it is sent. Asking
-  //: what was wrong is useful; asking before knowing whether anything was is
-  //: an interrogation.
+  //: Open only while the reader is actually answering "what went wrong". Closed
+  //: the moment they pick a reason, save a comment, or say they are done.
   const [detailOpen, setDetailOpen] = useState(false);
-  const [saved, setSaved] = useState(false);
   //: Fetched from the server, which owns the list. FEEDBACK_REASONS is the
   //: fallback if that call fails - a control with no reasons is worse than a
   //: slightly stale one, and staleness costs a label rather than a rejected
@@ -52,9 +48,6 @@ export default function AnswerFeedbackControl({
 
   useEffect(() => {
     let cancelled = false;
-    // Render in the state this person left it. Without this the control resets
-    // on every re-render and invites a second, contradictory vote from someone
-    // who already voted.
     api
       .getFeedbackReasons()
       .then((r) => {
@@ -63,6 +56,8 @@ export default function AnswerFeedbackControl({
       // Falling back to the bundled list is the point - see the state above.
       .catch(() => undefined);
 
+    // Render in the state this person left it, so a rating already given is not
+    // silently invited a second time.
     api
       .getMyAnswerFeedback(investigationId)
       .then((existing) => {
@@ -78,7 +73,8 @@ export default function AnswerFeedbackControl({
     };
   }, [investigationId]);
 
-  async function send(next: number, nextReason: string | null, nextComment: string) {
+  async function send(next: number, nextReason: string | null, nextComment: string,
+                      { close }: { close: boolean }) {
     setBusy(true);
     setError("");
     try {
@@ -89,63 +85,91 @@ export default function AnswerFeedbackControl({
         conversationId,
       });
       setRating(next);
-      setSaved(true);
+      setReason(nextReason);
+      if (close) setDetailOpen(false);
       // NOT swallowed on the server either: a rating is a deliberate act, and
       // dropping it silently means somebody clicked, saw nothing, and stopped
       // bothering - taking with them the data that would have shown the judge
       // was wrong.
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      // The panel STAYS OPEN on failure. Closing it would report success by
+      // disappearing, which is the worst possible acknowledgement of an error.
+      setDetailOpen(nextReason !== null || next === -1);
     } finally {
       setBusy(false);
     }
   }
 
+  const reasonLabel = reasons.find((r) => r.id === reason)?.label;
+
+  // ------------------------------------------------------------- recorded
+  // The loop closed. One sentence saying what was stored, and the way back.
+  if (rating !== null && !detailOpen) {
+    return (
+      <div className="answer-feedback">
+        <span className="feedback-recorded">
+          {rating === 1 ? "You marked this useful." : "You marked this not useful."}
+          {rating === -1 && reasonLabel ? ` ${reasonLabel}.` : ""}
+          {comment.trim() ? " Comment saved." : ""}
+        </span>
+        <button
+          type="button"
+          className="secondary feedback-change"
+          disabled={busy}
+          onClick={() => {
+            // Reopening is not a new vote. It shows the detail again with the
+            // existing answers in place, so changing one thing does not require
+            // re-entering the rest.
+            if (rating === -1) setDetailOpen(true);
+            else void send(-1, reason, comment, { close: false });
+          }}
+        >
+          {rating === 1 ? "Change to not useful" : "Change"}
+        </button>
+        {error && <span className="rule-fail">{error}</span>}
+      </div>
+    );
+  }
+
+  // ------------------------------------------------------------ still asking
   return (
     <div className="answer-feedback">
-      <span className="stat-label">Was this useful?</span>
+      {rating === null && (
+        <>
+          <span className="stat-label">Was this useful?</span>
+          <button
+            type="button"
+            className="feedback-vote"
+            disabled={busy}
+            title="This answer helped"
+            onClick={() => void send(1, null, "", { close: true })}
+          >
+            Yes
+          </button>
+          <button
+            type="button"
+            className="feedback-vote"
+            disabled={busy}
+            title="This answer did not help"
+            onClick={() => {
+              // Recorded FIRST, then the detail is offered. Somebody who closes
+              // the tab without choosing a reason has still been counted, which
+              // is the half that matters.
+              setDetailOpen(true);
+              void send(-1, reason, comment, { close: false });
+            }}
+          >
+            No
+          </button>
+        </>
+      )}
 
-      <button
-        type="button"
-        className={`feedback-vote${rating === 1 ? " chosen" : ""}`}
-        disabled={busy}
-        aria-pressed={rating === 1}
-        title="This answer helped"
-        onClick={() => {
-          setDetailOpen(false);
-          void send(1, null, "");
-        }}
-      >
-        Yes
-      </button>
-
-      <button
-        type="button"
-        className={`feedback-vote${rating === -1 ? " chosen" : ""}`}
-        disabled={busy}
-        aria-pressed={rating === -1}
-        title="This answer did not help"
-        onClick={() => {
-          // Recorded FIRST, then the detail is offered. If the person closes
-          // the tab without picking a reason, the rating still counted - which
-          // is the half that matters.
-          setDetailOpen(true);
-          void send(-1, reason, comment);
-        }}
-      >
-        No
-      </button>
-
-      {/* Reserved rather than conditional: this line appearing would push the
-          next message down at the moment of clicking, which is the same jitter
-          the Model Settings screen had. */}
-      <span className="feedback-status" aria-live="polite">
-        {error ? <span className="rule-fail">{error}</span> : saved ? "Thanks - recorded." : ""}
-      </span>
-
-      {detailOpen && rating === -1 && (
+      {detailOpen && (
         <div className="feedback-detail">
-          <div className="stat-label">What went wrong? (optional)</div>
+          <div className="stat-label">
+            Recorded as not useful. What went wrong? (optional)
+          </div>
           <div className="feedback-reasons">
             {reasons.map((r) => (
               <button
@@ -153,10 +177,10 @@ export default function AnswerFeedbackControl({
                 key={r.id}
                 className={`secondary${reason === r.id ? " chosen" : ""}`}
                 disabled={busy}
-                onClick={() => {
-                  setReason(r.id);
-                  void send(-1, r.id, comment);
-                }}
+                // CLOSES on success. Picking a reason is an answer to the
+                // question that was asked, so the question should stop being
+                // asked - it used to sit there afterwards looking unanswered.
+                onClick={() => void send(-1, r.id, comment, { close: true })}
               >
                 {r.label}
               </button>
@@ -168,10 +192,28 @@ export default function AnswerFeedbackControl({
             value={comment}
             disabled={busy}
             onChange={(e) => setComment(e.target.value)}
-            onBlur={() => {
-              if (comment.trim()) void send(-1, reason, comment);
-            }}
           />
+          {/* AN EXPLICIT BUTTON, because the box used to save on BLUR. A save
+              nobody can see happen is a save nobody trusts happened, and there
+              was no way to end the interaction at all. */}
+          <div className="feedback-actions">
+            <button
+              type="button"
+              disabled={busy || !comment.trim()}
+              onClick={() => void send(-1, reason, comment, { close: true })}
+            >
+              Save comment
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={() => setDetailOpen(false)}
+            >
+              Done
+            </button>
+          </div>
+          {error && <div className="rule-fail">{error}</div>}
         </div>
       )}
     </div>
