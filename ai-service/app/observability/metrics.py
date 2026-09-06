@@ -322,3 +322,21 @@ hallucination_by_check_total = Counter(
     "Individual grader checks that failed on a delivered answer, by check",
     ["check"],
 )
+
+
+#: Queries that tried to talk the platform out of its own rules, refused before
+#: anything ran. Labelled by WHICH SHAPE was recognised, not by the query text -
+#: the text is attacker-controlled and would be unbounded cardinality, and the
+#: shape is the part an operator can act on: a rise in `role_reassignment` and a
+#: rise in `disregard_instructions` are different campaigns.
+#:
+#: ABSENT IS NOT ZERO here, and this counter is more prone to it than most. A
+#: labelled Counter emits no series at all until the first increment, and the
+#: healthy state of this one is *never having fired*. So a panel over it needs
+#: `or vector(0)` or a quiet platform and a missing code path render identically
+#: - see the same defect on the judge panels in the plan.
+override_framing_total = Counter(
+    "sad_override_framing_total",
+    "Queries refused for trying to override the platform's own instructions, by shape",
+    ["shape"],
+)
