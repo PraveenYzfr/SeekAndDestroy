@@ -46,13 +46,20 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # PER-CONTAINER CPU, MEMORY AND LIMITS. node-exporter describes the machine;
-  # on a single VM running fifteen containers, "the box is at 5.6%" is not the
-  # question anyone asks - "which container" is, and nothing could answer it.
-  # container_cpu_usage_seconds_total returned an empty vector before this.
-  #
-  # cAdvisor is read-only against the Docker socket and the host cgroup tree. It
-  # is mounted that way below and is not exposed off the loopback interface.
-  - job_name: cadvisor
-    static_configs:
-      - targets: ["cadvisor:8080"]
+# PER-CONTAINER METRICS ARE STILL MISSING, and this is where they would go.
+#
+# cAdvisor v0.49.1 was added, started healthy, and exported exactly ONE series -
+# the root cgroup, with no `name` label - while logging for every container:
+#
+#     failed to identify the read-write layer ID for container <id>
+#     open /rootfs/var/lib/docker/image/overlayfs/layerdb/mounts/<id>/mount-id
+#
+# It resolves Docker's layer metadata relative to the rootfs it is given, and
+# neither mounting /var/lib/docker at its own path nor additionally at
+# /rootfs/var/lib/docker made that path resolve on this host. Removed rather
+# than left in: a container reporting itself healthy while exporting nothing is
+# the exact shape of failure this platform keeps being bitten by, and the panels
+# keyed on `name` would have read "No data" with nothing to say why.
+#
+# So "which of the fifteen containers is busy" is still unanswerable. node-
+# exporter below covers the machine, not the containers on it.
