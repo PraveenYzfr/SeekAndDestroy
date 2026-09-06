@@ -234,14 +234,23 @@ def run_case(case: dict, *, use_judge: bool) -> dict:
     return result
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Split out of main() so the flags can be exercised without running a suite.
+
+    Whether a run records itself decides whether the deploy guard can see it,
+    which is not something to leave to a test that reimplements the expression
+    and then agrees with itself.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", help="run one case by id")
     parser.add_argument("--no-judge", action="store_true", help="deterministic checks only")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--fail-on-hard", action="store_true", help="exit non-zero on any hard-check failure")
     parser.add_argument("--record", action="store_true",
-                        help="store this run in sad.EvalRun so it can be compared later")
+                        help="store this run in sad.EvalRun - already the default for a "
+                             "full-suite run; use this to record a --case run as well")
+    parser.add_argument("--no-record", action="store_true",
+                        help="do not store this run; a full-suite run is recorded by default")
     parser.add_argument("--baseline", metavar="RUN_ID|last-passing",
                         help="compare against a previous run; implies --record")
     parser.add_argument("--fail-on-regression", action="store_true",
@@ -261,12 +270,42 @@ def main() -> int:
     #  and the verdict is what --fail-on-regression is judged against.
     parser.add_argument("--note", default=None,
                         help="why this run was made - appended to the recorded verdict")
-    args = parser.parse_args()
+    return parser
 
+
+def recording_wanted(args: argparse.Namespace) -> bool:
     # A comparison needs both runs stored, so asking for one turns recording on
     # rather than failing with an argument error. Nobody asks to compare against
     # a baseline and also wants this run thrown away.
-    record = args.record or bool(args.baseline)
+    #
+    # A FULL-SUITE RUN RECORDS ITSELF, and that is not a convenience.
+    #
+    # --record used to be opt-in, so `python -m app.evaluation.golden_runner`
+    # wrote no EvalRun row at all - and everything that answers "is a suite
+    # running" reads that table. The deploy guard in scripts/deploy-app.sh asks
+    # it by name. So a hundred cases could be executing on prod while the guard
+    # saw an idle box and let the deploy through. That is what killed run 27 at
+    # case 67 and run 40, and it read as a flaky suite rather than as a guard
+    # looking at the wrong thing, because a run nobody recorded leaves nothing
+    # behind to argue with.
+    #
+    # The guard's comment says "the row is written BEFORE the first case". True,
+    # and it was reached only when somebody remembered a flag. An invariant that
+    # holds subject to an optional argument is not an invariant, and the failure
+    # is invisible from both ends: the runner prints its results either way, and
+    # the guard reports nothing running because nothing is - as far as it can see.
+    #
+    # A SINGLE CASE STAYS UNRECORDED. It is debugging, it takes seconds, and a
+    # history filled with one-case runs makes the baseline harder to find rather
+    # than the record more complete. --record forces it on when that one case is
+    # worth keeping; --no-record turns a full run off for the same reason in
+    # reverse. The default now matches what the run costs and who is watching it.
+    return bool(args.record or args.baseline or not (args.no_record or args.case))
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    record = recording_wanted(args)
 
     cases = load_cases()
     if args.case:
