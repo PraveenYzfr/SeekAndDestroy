@@ -35,10 +35,31 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "ai-service"))
+#: PACKAGE-RELATIVE, so this runs wherever the package does.
+#:
+#: It used to be REPO_ROOT / "ai-service" / "app" / "evaluation" / ... with
+#: REPO_ROOT derived from the script's own location under scripts/. In a
+#: container that resolved to /app/ai-service/app/evaluation/, which does not
+#: exist: the image is built from ai-service/ as its context, so it ships app/ at
+#: the root and has no scripts/ directory at all.
+#:
+#: So the suite could not run inside the deployed image, and the workaround was
+#: to docker cp the script in and symlink /app/ai-service/app/evaluation ->
+#: /app/app/evaluation on every deploy - scaffolding that the next container
+#: recreate wiped, which is why "run the golden suite on prod" sat unstarted for
+#: days without ever being the thing that blocked anyone.
+#:
+#: The yaml sits beside this file in the package and always has. Asking the
+#: package where it is removes the repo layout from the question entirely.
+_HERE = Path(__file__).resolve().parent
 
-GOLDEN_SET = REPO_ROOT / "ai-service" / "app" / "evaluation" / "golden_set.yaml"
+GOLDEN_SET = _HERE / "golden_set.yaml"
+
+#: Only when running from a source checkout, where app/ is not yet importable.
+#: Inside the image the package IS the working directory and this is a no-op.
+_REPO_AI_SERVICE = _HERE.parents[1]
+if str(_REPO_AI_SERVICE) not in sys.path:
+    sys.path.insert(0, str(_REPO_AI_SERVICE))
 
 
 def load_cases() -> list[dict]:
@@ -260,7 +281,6 @@ def main() -> int:
     if record:
         import time as _time
 
-        sys.path.insert(0, str(REPO_ROOT / "ai-service"))
         from app.repositories import eval_run_repository as repo
 
         if args.baseline == "last-passing":
