@@ -388,10 +388,27 @@ services:
       hub:
         aliases: ["grafana"]
     profiles: ["observability"]
-    #: Pinned with prometheus - see the note there. Grafana in particular
-    #: writes its admin password into grafana_data on FIRST INIT ONLY, so a
-    #: version change that recreates the volume silently resets that too.
-    image: grafana/grafana:11.5.1
+    #: PINNED TO THE VERSION PROD WAS ALREADY RUNNING, and the number matters.
+    #:
+    #: I first pinned this to 11.5.1, chosen because the tag exists. Prod was on
+    #: 13.2.1, so the deploy was a TWO-MAJOR-VERSION DOWNGRADE of a stateful
+    #: service, against a grafana.db that 13.2.1 had already migrated forward.
+    #: Grafana does not support downgrades. It happened to start - migrator ran,
+    #: no panic, datasource healthy, dashboards still serving - but "it started"
+    #: and "it is correct" are different claims, and every hour it ran added
+    #: state written by a version that could not have written it.
+    #:
+    #: VERIFYING A TAG EXISTS IS NOT VERIFYING IT IS SAFE TO MOVE TO. I checked
+    #: all three against Docker Hub and felt covered; the check that mattered was
+    #: `docker inspect` against the running container, which I never ran.
+    #:
+    #: So the rule for this file: pin to what the estate is PROVEN to run. That
+    #: is the only version this deployment has evidence for.
+    #:
+    #: Grafana also writes its admin password into grafana_data on FIRST INIT
+    #: ONLY, so a version change that recreates the volume silently resets that
+    #: too - which is why a "harmless" pin bump here is never harmless.
+    image: grafana/grafana:13.2.1
     ports:
       - "127.0.0.1:3000:3000"
     environment:
