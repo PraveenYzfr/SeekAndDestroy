@@ -40,11 +40,65 @@ INTENT_PARSER_SYSTEM = SYSTEM_BASE + (
     "a short step-by-step investigation plan. Do not perform the investigation yourself."
 )
 
-REQUIREMENT_EXTRACTION_SYSTEM = SYSTEM_BASE + (
-    "\n\nExtract structured hosting/capacity requirements from the user's natural-language "
-    "request. Leave any field the user did not specify as null - never guess a number that "
-    "was not stated or clearly implied."
-)
+#  THE VOCABULARY IS DERIVED FROM THE ENUMS, NOT TYPED OUT HERE.
+#
+#  app.graph.nodes._coerce_enum forces every categorical answer onto a real
+#  enum member and replaces anything that misses with a fallback. The model was
+#  never TOLD what the members are, so it was marked wrong against a vocabulary
+#  it had never been given.
+#
+#  Measured on production before this, twice per sentence, identical both runs:
+#
+#      "an INTERNAL Java app, 8 cores, 32 GB"      -> data_classification None
+#      "a RESTRICTED payments app, 16 cores"       -> data_classification Restricted
+#      "a Tier-1 CONFIDENTIAL workload, 32 cores"  -> data_classification Confidential
+#
+#  Restricted and Confidential are unambiguous security words. "Internal" reads
+#  as an ordinary adjective unless you know it is a permitted value - so the
+#  classification an engineer in a bank is most likely to type was the one the
+#  model dropped. Since 691b5ed an unparseable classification fails closed to
+#  Restricted, so this was about to start narrowing real searches for people
+#  who HAD said what they meant.
+#
+#  Built from the enums rather than written out, so a new member cannot fall
+#  out of the prompt while _coerce_enum carries on accepting it.
+def _members(enum_cls) -> str:
+    return ", ".join(str(m) for m in enum_cls)
+
+
+def _requirement_extraction_system() -> str:
+    from app.models.enums import (
+        AvailabilityTier,
+        DataClassification,
+        Environment,
+        TechnologyPlatform,
+    )
+
+    return SYSTEM_BASE + (
+        "\n\nExtract structured hosting/capacity requirements from the user's natural-language "
+        "request. Leave any field the user did not specify as null - never guess a number that "
+        "was not stated or clearly implied."
+        #  UNITS. storage_gb and memory_gb are GIGABYTES, and the field name was
+        #  the only thing that ever said so. An engineer writing "2 TB storage"
+        #  HAD stated it; the model returned null, reasonably, having been told
+        #  not to guess and not told the unit. Storage came back null on every
+        #  probe including two that named it explicitly, and _CAPACITY_DEFAULTS
+        #  then supplied 500 GB - a quarter of the request, silently replaced.
+        "\n\nUNITS: memory_gb and storage_gb are in GIGABYTES. Convert what the user "
+        "wrote - 2 TB is 2048, 512 MB is 0.5. cpu_cores is a count of cores. "
+        "Converting a stated unit is not guessing; leaving it null loses it."
+        "\n\nPERMITTED VALUES - use one of these exactly, or null if the user did not say:"
+        f"\n  environment: {_members(Environment)}"
+        f"\n  platform: {_members(TechnologyPlatform)}"
+        f"\n  availability_tier: {_members(AvailabilityTier)}"
+        f"\n  data_classification: {_members(DataClassification)}"
+        '\nA word like "Internal" or "Restricted" IS a data classification when the user '
+        "uses it to describe the workload. A programming language is not a platform - "
+        '"a Java app" says nothing about the platform, so leave it null.'
+    )
+
+
+REQUIREMENT_EXTRACTION_SYSTEM = _requirement_extraction_system()
 
 CANDIDATE_EXPLANATION_SYSTEM = SYSTEM_BASE + (
     "\n\nExplain why this infrastructure candidate is suitable or unsuitable for the workload, "
