@@ -1,0 +1,137 @@
+[project]
+name = "seekanddestroy-ai-service"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+# =============================================================================
+# ruff
+# =============================================================================
+#
+# A SMALL RULE SET THAT PASSES CLEAN, NOT A LARGE ONE WITH A BASELINE.
+#
+# Measured before choosing. The full default rule set reports 701 issues and the
+# E/F/I set reports 1,958 - but 1,852 of those are E501 line-too-long, and that
+# number is the argument against enabling it rather than for. The long lines are
+# explanatory comments, and those comments are the most valuable thing in this
+# repository: they carry the measurement behind each decision and the defect
+# that prompted it. Reflowing them to 88 columns would damage the asset to
+# satisfy the linter.
+#
+# What is left after E501 is 89 issues, 88 of them auto-fixable. That is small
+# enough to fix outright, which is why there is no baseline file here. A
+# baseline is a list of accepted violations, and a list of accepted violations
+# is a list nobody reads after the first month - the same failure as a stale
+# allowlist re-permitting what it was written to stop.
+#
+# Rules deliberately NOT enabled, each with a reason, so the next person does
+# not turn them on and spend a day discovering it:
+#
+#   E501  line-too-long          see above - 1,852, all prose
+#   B008  function-call-in-default   36, every one is FastAPI Depends()
+#   FURB157 verbose-decimal-constructor  210 - Decimal("1.0") is deliberate;
+#                                "fixing" it to Decimal(1.0) introduces float
+#   BLE001 blind-except          8, each documented "never fail a call to
+#                                describe it" - the metric paths
+#   S110  try-except-pass        8, same paths
+#   DTZ001 datetime-without-tzinfo  13 - storage is naive UTC by design
+#   UP045 non-pep604-annotation  248, cosmetic
+[tool.ruff]
+line-length = 100          # advisory only; E501 is not selected
+target-version = "py312"
+extend-exclude = ["__pycache__", ".state"]
+
+[tool.ruff.lint]
+# F = pyflakes: genuine defects - unused imports, redefinitions, dead variables.
+# I = isort:    import ordering, deterministic and mechanical.
+select = ["F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# A re-export is not an unused import. These modules exist to present a surface.
+"__init__.py" = ["F401"]
+
+# conftest sets os.environ BEFORE importing anything that reads settings, and
+# inserts two paths on sys.path. Sorting or hoisting those imports breaks the
+# suite in a way that looks like a configuration bug.
+"tests/conftest.py" = ["E402", "I001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+# =============================================================================
+# mypy - deliberately NOT configured yet
+# =============================================================================
+#
+# 29,493 lines with almost no annotations. Turning mypy on across all of it
+# produces a number nobody acts on, and an ignore list long enough to be
+# meaningless. It wants a per-module opt-in starting with the layer where a type
+# error would actually cost something - app/scoring and app/rules, where the
+# numbers come from - and that is a separate piece of work with its own
+# measurement. Left out rather than half-configured, because a mypy section that
+# passes because it checks nothing is worse than no mypy section.
+
+# =============================================================================
+# import-linter
+# =============================================================================
+#
+# WHY CONTRACTS AND NOT ONE LAYERED ARCHITECTURE.
+#
+# A single top-to-bottom "layers" contract was the obvious thing and it does not
+# hold: insights imports evaluation while evaluation imports insights, and
+# services imports evaluation while evaluation imports graph which imports
+# services. Those cycles are real. Declaring a layer order the code does not
+# have would produce a contract that fails on day one everywhere, and a gate
+# that fails everywhere is a gate somebody deletes.
+#
+# So these encode the rules that MATTER and that are true today, and leave the
+# cycles visible rather than papered over. A contract that passes is a rule; a
+# contract with a long ignore list is a wish.
+[tool.importlinter]
+root_package = "app"
+
+# THE ONE THAT MATTERS. This is the trust boundary in executable form.
+#
+# app.scoring, app.rules and app.models are where the platform's numbers come
+# from. The entire claim that a recommendation can be believed rests on nothing
+# else being able to reach in and change one - which is the same claim
+# assert_no_number_drift enforces at runtime and test_no_money_in_rightsizing
+# enforces on the vocabulary. This enforces it on the import graph.
+#
+# It passes today only because app.scoring.exposure was created for it:
+# subscores reached up into app.services.change_exposure for exposure_multiplier
+# via a function-local import written to break the cycle. The function was pure
+# arithmetic sitting next to the query that feeds it. It now sits with the rest
+# of the arithmetic and this contract is what stops it drifting back.
+[[tool.importlinter.contracts]]
+name = "The deterministic core depends on nothing above it"
+type = "forbidden"
+source_modules = ["app.scoring", "app.rules", "app.models"]
+forbidden_modules = [
+    "app.api", "app.graph", "app.services", "app.repositories",
+    "app.agents", "app.retrieval", "app.insights", "app.evaluation",
+    "app.observability",
+]
+
+# Persistence must not reach up. Two exceptions, both function-local imports
+# written to break a cycle, both listed here so the number is visible and can
+# only go down:
+#
+#   audit_repository -> services.model_pricing
+#       Prices a call at the moment it is logged. Pricing lives in services
+#       because it reads sad.ModelPrice through another repository.
+#
+#   eval_run_repository -> agents.llm_factory
+#       Captures the resolved model config onto the run row, so a score can be
+#       attributed to the models that produced it.
+#
+# Neither is cosmetic to fix - both need the shared piece moved to a layer both
+# callers can see - so they are named rather than silently permitted. THIS LIST
+# MAY SHRINK AND MUST NOT GROW.
+[[tool.importlinter.contracts]]
+name = "Repositories do not reach up into services, agents or the graph"
+type = "forbidden"
+source_modules = ["app.repositories"]
+forbidden_modules = ["app.api", "app.graph", "app.services", "app.agents"]
+ignore_imports = [
+    "app.repositories.audit_repository -> app.services.model_pricing",
+    "app.repositories.eval_run_repository -> app.agents.llm_factory",
+]

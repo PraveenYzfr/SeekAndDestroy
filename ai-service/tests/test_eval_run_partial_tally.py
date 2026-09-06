@@ -23,8 +23,6 @@ hundred-row table inside an UPDATE that was happening anyway.
 
 from __future__ import annotations
 
-import pytest
-
 from app.repositories import eval_run_repository as repo
 
 

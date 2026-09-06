@@ -29,7 +29,6 @@ from app.graph.conversation import (
 from app.graph.nodes import _capacity_requirement_from_regex, classify_investigation_type
 from app.models.enums import InvestigationType
 
-
 # =============================================================================
 # Detection
 # =============================================================================

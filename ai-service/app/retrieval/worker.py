@@ -25,8 +25,8 @@ import time
 
 import structlog
 
-from app.repositories import index_run_repository
 from app.observability.logging import configure_logging
+from app.repositories import index_run_repository
 from app.retrieval import index_queue, pipeline
 
 logger = structlog.get_logger(__name__)

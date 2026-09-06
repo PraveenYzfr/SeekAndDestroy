@@ -326,7 +326,7 @@ class LlmSettings(_Base):
     daily_call_budget: int = 0
 
     # --- tiers -------------------------------------------------------------
-    # Roles map to tiers (app/agents/tiers.py); tiers map to the models below.
+    # Roles map to tiers (app/config/tiers.py); tiers map to the models below.
     # Blank means "use provider/model above", so an estate that has never
     # touched a tier behaves exactly as it did before tiers existed.
     #
@@ -414,7 +414,11 @@ class LlmSettings(_Base):
 
     @property
     def role_tier_map(self) -> dict[str, str]:
-        from app.agents.tiers import parse_role_tiers
+        #  Local import kept: settings is imported by app.config's __init__, and
+        #  a module-level import here would run tiers before the package is
+        #  finished initialising. Sideways within config, so it no longer drags
+        #  app.agents into the dependency graph of everything that reads config.
+        from app.config.tiers import parse_role_tiers
 
         return parse_role_tiers(self.role_tiers)
 

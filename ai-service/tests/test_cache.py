@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 
 from app.agents.structured import run_structured
-from app.cache.store import InMemoryCacheStore, RedisCacheStore, build_cache_store
+from app.cache.store import InMemoryCacheStore, build_cache_store
 from app.config import get_settings
 from app.models.agent_contracts import GroundedAnswer
 

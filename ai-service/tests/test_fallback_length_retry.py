@@ -9,7 +9,6 @@ because this loop sits inside the model that structured calls.
 
 from __future__ import annotations
 
-import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration, ChatResult

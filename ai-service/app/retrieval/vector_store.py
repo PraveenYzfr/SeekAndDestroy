@@ -207,7 +207,10 @@ class QdrantVectorStore:
 
     def _ensure_collection(self) -> None:
         from qdrant_client.models import (
-            Distance, SparseIndexParams, SparseVectorParams, VectorParams,
+            Distance,
+            SparseIndexParams,
+            SparseVectorParams,
+            VectorParams,
         )
 
         # Both vectors are always created and always written, regardless of
@@ -333,7 +336,13 @@ class QdrantVectorStore:
 
     def search(self, query: str, *, top_k: int = 8, filters: dict | None = None) -> list[SearchResult]:
         from qdrant_client.models import (
-            FieldCondition, Filter, Fusion, FusionQuery, MatchValue, Prefetch, SparseVector,
+            FieldCondition,
+            Filter,
+            Fusion,
+            FusionQuery,
+            MatchValue,
+            Prefetch,
+            SparseVector,
         )
 
         qdrant_filter = None

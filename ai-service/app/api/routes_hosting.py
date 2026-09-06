@@ -8,9 +8,13 @@ from app.agents.chains import summarize_tradeoffs
 from app.agents.llm_factory import get_chat_model_for_role
 from app.api import narration
 from app.api.auth import get_current_employee, require_matching_employee_id
-from app.api.rate_limit import enforce_llm_rate_limit
 from app.api.errors import ProblemDetailsError
-from app.api.schemas import CapacityRecommendationRequest, HostingRecommendationRequest, QuickRecommendationRequest
+from app.api.rate_limit import enforce_llm_rate_limit
+from app.api.schemas import (
+    CapacityRecommendationRequest,
+    HostingRecommendationRequest,
+    QuickRecommendationRequest,
+)
 from app.config import get_settings
 from app.models.requirements import HostingRequirement
 from app.repositories import application_repository, capacity_request_repository

@@ -7,9 +7,8 @@ from __future__ import annotations
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage
-from langchain_core.outputs import ChatResult, ChatGeneration
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 from app.agents.llm_factory import FallbackChatModel, build_chat_model
 from app.agents.mock_llm import MockChatModel

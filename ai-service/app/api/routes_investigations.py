@@ -7,14 +7,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from app.utils.json_utils import to_jsonable
 
 from app.api.auth import get_current_employee, require_matching_employee_id
 from app.api.errors import ProblemDetailsError
 from app.api.rate_limit import enforce_llm_rate_limit
 from app.api.schemas import CreateInvestigationRequest, ResumeInvestigationRequest
-from app.repositories import conversation_repository, investigation_repository, recommendation_repository
+from app.repositories import (
+    conversation_repository,
+    investigation_repository,
+    recommendation_repository,
+)
 from app.security.jwt_service import AuthenticatedEmployee
+from app.utils.json_utils import to_jsonable
 
 router = APIRouter(tags=["investigations"])
 

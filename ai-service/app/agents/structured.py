@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import threading
 import json
+import threading
 from typing import TypeVar
 
 import structlog
@@ -36,9 +36,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel
 
-from app.agents.gemini_chat_model import GeminiChatModel
 from app.agents.http_chat_model import EmptyCompletionError
-from app.agents.mock_llm import MockChatModel
 from app.cache.store import get_cache_store
 from app.config import get_settings
 from app.repositories import audit_repository

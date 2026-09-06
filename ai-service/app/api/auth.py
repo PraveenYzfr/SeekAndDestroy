@@ -8,16 +8,20 @@ from __future__ import annotations
 
 from typing import Optional
 
+import structlog
 from fastapi import APIRouter, Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-
-import structlog
 
 from app.api.errors import ProblemDetailsError
 from app.api.schemas import DevTokenRequest, LoginRequest
 from app.config import get_settings
 from app.repositories import employee_repository
-from app.security.jwt_service import AuthenticatedEmployee, TokenError, create_local_token, validate_token
+from app.security.jwt_service import (
+    AuthenticatedEmployee,
+    TokenError,
+    create_local_token,
+    validate_token,
+)
 from app.security.passwords import hash_password, needs_rehash, verify_password
 
 logger = structlog.get_logger(__name__)

@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import json
 
-from app.prompts.templates import with_evidence
-
 import pytest
 
 from app.agents.structured import AUDIT_LIMIT, _audit_payload
@@ -28,7 +26,7 @@ from app.evaluation.graders import (
     required_fields_for,
     was_truncated,
 )
-
+from app.prompts.templates import with_evidence
 
 # =============================================================================
 # Numbers

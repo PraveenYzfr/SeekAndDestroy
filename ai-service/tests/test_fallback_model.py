@@ -46,8 +46,6 @@ class TestTheFallbackCarriesItsOwnModel:
     def test_it_does_not_inherit_the_primarys_model(self):
         """The bug, stated as a test: an OpenAI client must never be built asking
         for a DeepSeek model name."""
-        model = llm_factory.build_chat_model_for_provider.__wrapped__ if hasattr(
-            llm_factory.build_chat_model_for_provider, "__wrapped__") else None
         s = _settings()
         assert s.fallback_model and s.fallback_model != s.model
 

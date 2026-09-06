@@ -12,7 +12,12 @@ import pytest
 
 import app.security.jwt_service as jwt_service
 from app.config import get_settings
-from app.security.jwt_service import AuthenticatedEmployee, TokenError, create_local_token, validate_token
+from app.security.jwt_service import (
+    AuthenticatedEmployee,
+    TokenError,
+    create_local_token,
+    validate_token,
+)
 
 
 def _set_auth(**overrides):

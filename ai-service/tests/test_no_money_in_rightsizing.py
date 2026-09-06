@@ -18,8 +18,6 @@ exists must not reach a prompt. This half says it must not exist here at all.
 
 from __future__ import annotations
 
-from decimal import Decimal
-
 import pytest
 
 from app.models.agent_contracts import RightSizingExplanation

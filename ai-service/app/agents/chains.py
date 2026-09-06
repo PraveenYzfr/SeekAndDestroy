@@ -17,8 +17,8 @@ from app.models.agent_contracts import (
     ApplicationHostingRequirement,
     CandidateExplanation,
     CapacityRequirement,
-    ForecastExplanation,
     FinalRecommendationReport,
+    ForecastExplanation,
     GroundedAnswer,
     RightSizingExplanation,
     TradeOffSummary,
@@ -37,7 +37,6 @@ from app.prompts.templates import (
     TRADEOFF_SYSTEM,
     with_evidence,
 )
-
 
 # REMOVED: parse_investigation_plan.
 #

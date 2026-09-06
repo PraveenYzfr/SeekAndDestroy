@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from app.forecasting.engine import forecast_resource, cluster_breaches_within_horizon
+from app.forecasting.engine import cluster_breaches_within_horizon, forecast_resource
 from app.repositories import cluster_repository
 
 

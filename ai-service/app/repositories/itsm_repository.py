@@ -15,7 +15,7 @@ so the query plan stays stable no matter how large the corpus grows.
 
 from __future__ import annotations
 
-from app.models.entities import Change, IncidentComment, Problem
+from app.models.entities import Change, Problem
 from app.repositories.base import T, fetch_all
 
 

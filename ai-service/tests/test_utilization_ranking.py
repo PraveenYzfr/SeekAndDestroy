@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from decimal import Decimal
-
 from app.repositories import application_repository, cluster_repository
 from app.services import placement, utilization_ranking
 

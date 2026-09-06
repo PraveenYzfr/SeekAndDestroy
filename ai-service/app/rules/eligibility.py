@@ -22,7 +22,6 @@ one-line spec text (see docs/business-rules.md for the full rationale):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal
 
 from app.config import get_settings
 from app.models.capacity import ProjectedUtilization

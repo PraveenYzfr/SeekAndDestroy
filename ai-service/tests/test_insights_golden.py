@@ -11,8 +11,6 @@ read already-recorded calls rather than making new ones during tests.
 
 from __future__ import annotations
 
-import pytest
-
 from app.agents.mock_llm import MockChatModel
 from app.evaluation import insights_golden
 from app.evaluation.insights_golden import (

@@ -10,7 +10,7 @@ raising the ceiling a bet rather than a fix.
 from __future__ import annotations
 
 import pytest
-from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents import structured
 from app.agents.http_chat_model import EmptyCompletionError

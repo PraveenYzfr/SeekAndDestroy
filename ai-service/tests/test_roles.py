@@ -72,6 +72,7 @@ def test_require_role_rejects_a_role_below_the_minimum():
 
     dependency = require_role("Administrator")
     import pytest
+
     from app.api.errors import ProblemDetailsError
 
     with pytest.raises(ProblemDetailsError) as exc_info:

@@ -9,9 +9,8 @@ IMPLEMENTATION_PLAN.md §3.
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
 import re
+from typing import Any, Optional
 
 import httpx
 import structlog

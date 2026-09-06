@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents import llm_factory, provider_models
-from app.config import get_settings, settings as settings_module
+from app.config import get_settings
 
 
 #: Built directly, never through get_settings(). These assert the RESOLUTION

@@ -19,26 +19,28 @@ import re
 
 import structlog
 
+from app.agents import query_capability
 from app.agents.chains import (
     answer_grounded_question,
     answer_rejection_question,
     explain_candidate,
     explain_cluster_right_sizing,
     extract_capacity_requirement,
+)
+from app.agents.chains import (
     generate_final_report as generate_final_report_chain,
 )
+
 # get_chat_model is deliberately NOT imported. Every call site here uses
 # get_chat_model_for_role, and keeping the unused name in this namespace is
 # what allowed tests to monkeypatch it successfully while binding nothing -
 # monkeypatch.setattr only objects to an attribute that does not exist.
 from app.agents.llm_factory import get_chat_model_for_role
-from app.graph import scope
 from app.agents.mock_llm import MockChatModel
-from app.forecasting.engine import forecast_cluster
-from app.agents import query_capability
-from app.services import incident_lookup
-from app.graph.state import InfrastructureRecommendationState
 from app.config import get_settings
+from app.forecasting.engine import forecast_cluster
+from app.graph import scope
+from app.graph.state import InfrastructureRecommendationState
 from app.models.enums import (
     AvailabilityTier,
     DataClassification,
@@ -55,7 +57,14 @@ from app.repositories import (
     recommendation_repository,
 )
 from app.retrieval.vector_store import get_vector_store
-from app.services import consolidation, node_placement, placement, refinement, rightsizing
+from app.services import (
+    consolidation,
+    incident_lookup,
+    node_placement,
+    placement,
+    refinement,
+    rightsizing,
+)
 from app.utils.json_utils import to_jsonable
 
 logger = structlog.get_logger(__name__)

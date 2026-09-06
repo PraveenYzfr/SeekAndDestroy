@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from fastapi import Depends, APIRouter
-from app.utils.json_utils import to_jsonable
+from fastapi import APIRouter, Depends
 
 from app.agents.chains import explain_forecast
 from app.agents.llm_factory import get_chat_model_for_role
 from app.api import narration
-from app.api.rate_limit import enforce_llm_rate_limit
-from app.security.jwt_service import AuthenticatedEmployee
 from app.api.errors import ProblemDetailsError
+from app.api.rate_limit import enforce_llm_rate_limit
 from app.api.schemas import ForecastRequest
 from app.forecasting.engine import forecast_cluster
 from app.repositories import cluster_repository
+from app.security.jwt_service import AuthenticatedEmployee
+from app.utils.json_utils import to_jsonable
 
 router = APIRouter(tags=["forecast"])
 

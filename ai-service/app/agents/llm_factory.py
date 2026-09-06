@@ -15,13 +15,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatResult
 
-from app.agents.gemini_chat_model import (
-    DEFAULT_BASE_URL as GEMINI_DEFAULT_BASE_URL,
-    DEFAULT_MODEL as GEMINI_DEFAULT_MODEL,
-    GeminiChatModel,
-)
-from app.agents.http_chat_model import EmptyCompletionError, HttpChatModel
-from app.agents.mock_llm import MockChatModel
+from app.agents.http_chat_model import EmptyCompletionError
 from app.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -248,7 +242,7 @@ def _is_judge_role(role_name: str) -> bool:
 def resolve_role(role_name: str, overrides: dict | None = None) -> dict:
     """Which provider and model a role runs on, and which layer decided.
 
-    Walks the four layers in app/agents/tiers.py, narrowest first: force-single,
+    Walks the four layers in app/config/tiers.py, narrowest first: force-single,
     then the per-role override, then the tier slot, then base config. The layer
     that answered is returned as ``source`` - "which model" without "why" leaves
     an operator unable to tell an override from a default that happens to match.
@@ -257,7 +251,7 @@ def resolve_role(role_name: str, overrides: dict | None = None) -> dict:
     Querying per role could straddle an edit and give one investigation two
     different configurations.
     """
-    from app.agents import tiers
+    from app.config import tiers
     from app.repositories import llm_role_repository
 
     settings = get_settings().llm

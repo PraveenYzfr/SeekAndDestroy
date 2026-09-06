@@ -15,7 +15,7 @@ from app.config import get_settings
 from app.models.capacity import ProjectedUtilization
 from app.repositories import application_repository, cluster_repository, node_repository
 from app.scoring import subscores
-from app.scoring.engine import compute_node_overall_score, rank_node_candidates
+from app.scoring.engine import compute_node_overall_score
 from app.scoring.weights import get_node_weights
 from app.services import node_placement, placement
 

@@ -15,7 +15,9 @@ import httpx
 import pytest
 
 from app.agents.http_chat_model import (
-    _TOKEN_PARAM, _UNSUPPORTED_PARAMS, HttpChatModel,
+    _TOKEN_PARAM,
+    _UNSUPPORTED_PARAMS,
+    HttpChatModel,
 )
 
 OK_BODY = {

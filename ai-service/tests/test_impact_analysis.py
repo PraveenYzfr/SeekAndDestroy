@@ -12,8 +12,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.insights import impact_analysis
-from app.insights.impact_analysis import UnknownCiError, blast_radius, blast_radius_for_name, resolve_ci_id
+from app.insights.impact_analysis import (
+    UnknownCiError,
+    blast_radius,
+    blast_radius_for_name,
+    resolve_ci_id,
+)
 from app.repositories.base import T, fetch_all
 
 

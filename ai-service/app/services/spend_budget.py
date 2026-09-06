@@ -16,9 +16,9 @@ provider's quota, not a precise metering system.
 
 from __future__ import annotations
 
-import structlog
-
 from datetime import datetime, timezone
+
+import structlog
 
 from app.cache.store import get_cache_store
 

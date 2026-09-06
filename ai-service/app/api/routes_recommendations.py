@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from app.utils.json_utils import to_jsonable
 
 from app.api.auth import get_current_employee, require_matching_employee_id
 from app.api.errors import ProblemDetailsError
@@ -9,6 +8,7 @@ from app.api.schemas import RecommendationDecisionRequest
 from app.models.enums import DecisionType, RecommendationStatus
 from app.repositories import recommendation_repository
 from app.security.jwt_service import AuthenticatedEmployee
+from app.utils.json_utils import to_jsonable
 
 router = APIRouter(tags=["recommendations"])
 

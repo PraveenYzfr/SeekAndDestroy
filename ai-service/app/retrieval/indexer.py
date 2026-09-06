@@ -7,9 +7,6 @@ import structlog
 from app.repositories import (
     application_repository,
     cluster_repository,
-    dependency_repository,
-    incident_repository,
-    node_repository,
 )
 from app.retrieval import documents
 from app.retrieval.vector_store import get_vector_store

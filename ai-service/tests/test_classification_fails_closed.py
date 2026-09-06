@@ -26,8 +26,8 @@ from __future__ import annotations
 
 from app.graph.nodes import _clarification_for, _coerce_enum
 from app.models.enums import (
-    CLASSIFICATION_LEVEL,
     AVAILABILITY_RANK,
+    CLASSIFICATION_LEVEL,
     AvailabilityTier,
     DataClassification,
     availability_satisfies,

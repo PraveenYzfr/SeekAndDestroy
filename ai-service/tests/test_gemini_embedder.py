@@ -17,7 +17,6 @@ from app.config import get_settings
 from app.retrieval.embedder import DeterministicHashEmbedder
 from app.retrieval.gemini_embedder import GeminiEmbedder
 
-
 # ---------------------------------------------------------------------------
 # GeminiEmbedder wire format (httpx.MockTransport - no real network)
 # ---------------------------------------------------------------------------

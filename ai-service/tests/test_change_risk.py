@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-
 from app.rules.eligibility import rule_011_change_freeze
 from app.scoring.subscores import change_risk_subscore
 

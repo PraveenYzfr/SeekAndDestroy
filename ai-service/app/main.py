@@ -7,7 +7,6 @@ Run with:
 
 from __future__ import annotations
 
-import logging
 import time
 import uuid
 
@@ -16,7 +15,18 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.api import auth, routes_admin, routes_cmdb, routes_forecast, routes_hosting, routes_insights, routes_investigations, routes_recommendations, routes_rightsizing, routes_system
+from app.api import (
+    auth,
+    routes_admin,
+    routes_cmdb,
+    routes_forecast,
+    routes_hosting,
+    routes_insights,
+    routes_investigations,
+    routes_recommendations,
+    routes_rightsizing,
+    routes_system,
+)
 from app.api.auth import get_current_employee
 from app.api.errors import register_exception_handlers
 from app.config import get_settings

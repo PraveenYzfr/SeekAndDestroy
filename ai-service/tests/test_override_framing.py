@@ -26,7 +26,6 @@ import pytest
 
 from app.graph import scope
 
-
 #: Override framing, by shape. The comment on each is the reason it is here
 #: rather than a paraphrase of the string.
 OVERRIDE_QUERIES = [

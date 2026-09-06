@@ -43,8 +43,6 @@ same cluster. That is not a property a risk number may have.
 
 from __future__ import annotations
 
-from decimal import Decimal
-
 import structlog
 
 from app.repositories import ci_graph_repository as graph
@@ -52,34 +50,17 @@ from app.repositories.base import T, fetch_all
 
 logger = structlog.get_logger(__name__)
 
-#: Dependent applications at which the churn penalty is doubled. Chosen from the
-#: estate as measured - the busiest cluster in a forty-cluster sample carries 27
-#: dependent applications against a median of 4 - so this sits just above the
-#: observed top and a typical cluster lands well under it.
-#:
-#: The estate is about to grow roughly forty-fold. Revisit this then: it is an
-#: absolute threshold by deliberate choice (see the module docstring), which
-#: means it does not self-calibrate and will understate exposure if the average
-#: cluster ends up carrying far more than it does today.
-EXPOSURE_REFERENCE_APPS = Decimal("30")
-
-#: Ceiling on the multiplier. Without it a hub cluster could contribute an
-#: unbounded penalty and dominate a score that has six other dimensions.
-MAX_EXPOSURE_MULTIPLIER = Decimal("2.0")
-
-
-def exposure_multiplier(dependent_applications: int | None) -> Decimal:
-    """1.0 for a cluster nothing depends on, rising to MAX at the reference.
-
-    Returns 1.0 - no effect - for None. Absent exposure data must leave the
-    change score exactly as it was rather than inventing a penalty, for the same
-    reason RULE-012 passes on silence: an incomplete CMDB must not quietly make
-    an estate look dangerous.
-    """
-    if not dependent_applications or dependent_applications <= 0:
-        return Decimal("1.0")
-    ratio = Decimal(dependent_applications) / EXPOSURE_REFERENCE_APPS
-    return min(MAX_EXPOSURE_MULTIPLIER, Decimal("1.0") + ratio)
+#  exposure_multiplier and its two constants MOVED to app.scoring.exposure.
+#
+#  They were arithmetic - an int in, a Decimal out, no database - sitting here
+#  because their caller's DATA comes from this module. app.scoring.subscores had
+#  to reach UP into services to call them, with a function-local import written
+#  to break the cycle a module-level one would have caused.
+#
+#  scoring is the layer the trust boundary rests on. A scoring module that
+#  depends on a service is one whose result depends on what that service later
+#  becomes. This module still answers WHAT DEPENDS ON A CLUSTER; what that is
+#  worth is now decided next to the rest of the arithmetic.
 
 
 def exposure_for_clusters(cluster_ids: list[int]) -> dict[int, dict]:

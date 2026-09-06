@@ -18,7 +18,6 @@ from app.models.retrieval import RetrievalDocument
 from app.retrieval.embedder import DeterministicHashEmbedder, HttpEmbedder
 from app.retrieval.vector_store import InMemoryVectorStore
 
-
 # ---------------------------------------------------------------------------
 # HttpEmbedder wire format (httpx.MockTransport - no real network)
 # ---------------------------------------------------------------------------

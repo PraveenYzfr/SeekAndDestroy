@@ -42,8 +42,8 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.agents.guards import NumberDriftError
-from app.services.spend_budget import BudgetExceededError
 from app.repositories.base import RowLimitExceeded
+from app.services.spend_budget import BudgetExceededError
 
 logger = structlog.get_logger(__name__)
 

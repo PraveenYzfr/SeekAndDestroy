@@ -13,14 +13,11 @@ from decimal import Decimal
 import pytest
 
 from app.agents.guards import NumberDriftError, assert_no_number_drift
-from app.forecasting.engine import cluster_breaches_within_horizon
 from app.graph.graph import resume_investigation, run_investigation
 from app.models.agent_contracts import CandidateExplanation
 from app.models.requirements import HostingRequirement
 from app.repositories import cluster_repository, recommendation_repository
 from app.repositories.base import T, fetch_one
-from app.rules import eligibility
-from app.scoring.engine import rank_candidates
 from app.services import capacity, placement, rightsizing
 
 

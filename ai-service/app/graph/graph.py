@@ -413,11 +413,11 @@ def _counted_answer(query: str, conversation_id: str | None) -> dict | None:
 def run_investigation(*, query: str, created_by: int, conversation_id: str | None = None) -> dict:
     from app.graph.nodes import quick_reply
     from app.insights import router as insights_router
-    from app.services import answer_evaluation
     from app.observability.metrics import (
         investigation_duration_seconds,
         investigations_total,
     )
+    from app.services import answer_evaluation
 
     graph_started = time.perf_counter()
 
@@ -815,7 +815,6 @@ def resume_investigation(
     the whole shortlist - three approved placements for one workload is not a
     decision, it is the absence of one.
     """
-    from langgraph.types import Command
 
     compiled = get_compiled_graph()
     config = _thread_config(investigation_id)

@@ -1,0 +1,9 @@
+# Development and CI tooling. NOT installed into the runtime image - the
+# Dockerfile installs requirements.txt only, and a linter in a production
+# container is attack surface that lints nothing.
+#
+# Pinned exactly. A floating linter turns somebody else's release into a red
+# build on a branch that changed nothing, which is how a gate stops being
+# trusted and then stops being required.
+ruff==0.16.6
+import-linter==2.15

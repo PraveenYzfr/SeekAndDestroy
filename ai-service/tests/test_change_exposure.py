@@ -19,7 +19,7 @@ import pytest
 
 from app.repositories import ci_graph_repository as graph
 from app.repositories.base import fetch_all
-from app.scoring import subscores
+from app.scoring import exposure, subscores
 from app.services import change_exposure
 
 from ._cmdb_load_state import require_loaded_graph
@@ -30,23 +30,23 @@ _RECORD = {"upcoming_changes": 3, "recent_changes": 20, "recent_failures": 2}
 class TestMultiplier:
     def test_absent_exposure_has_no_effect(self):
         """None must mean "unknown", not "nothing depends on it"."""
-        assert change_exposure.exposure_multiplier(None) == Decimal("1.0")
+        assert exposure.exposure_multiplier(None) == Decimal("1.0")
 
     def test_zero_dependents_has_no_effect(self):
-        assert change_exposure.exposure_multiplier(0) == Decimal("1.0")
+        assert exposure.exposure_multiplier(0) == Decimal("1.0")
 
     def test_it_rises_with_dependents(self):
-        values = [change_exposure.exposure_multiplier(n) for n in (1, 5, 15, 29)]
+        values = [exposure.exposure_multiplier(n) for n in (1, 5, 15, 29)]
         assert values == sorted(values)
         assert all(v > Decimal("1.0") for v in values)
 
     def test_it_is_capped(self):
         """Uncapped, a hub cluster could contribute an unbounded penalty and
         dominate a score with six other dimensions in it."""
-        assert change_exposure.exposure_multiplier(10_000) == change_exposure.MAX_EXPOSURE_MULTIPLIER
+        assert exposure.exposure_multiplier(10_000) == exposure.MAX_EXPOSURE_MULTIPLIER
 
     def test_a_negative_count_is_treated_as_unknown(self):
-        assert change_exposure.exposure_multiplier(-5) == Decimal("1.0")
+        assert exposure.exposure_multiplier(-5) == Decimal("1.0")
 
 
 class TestChangeRiskScoring:

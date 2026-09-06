@@ -164,7 +164,7 @@ def test_a_rescope_with_room_left_names_what_remains():
 # already in the browser rather than a fresh walk of the estate. The narrower
 # bound still governs what the platform records as its recommendation.
 # ---------------------------------------------------------------------------
-from app.graph.nodes import build_review_payload, route_after_decision
+from app.graph.nodes import route_after_decision
 
 
 def _state(n: int) -> dict:

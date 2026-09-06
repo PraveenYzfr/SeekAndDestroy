@@ -17,7 +17,7 @@ Two costs, and the second is the one that bites tooling:
 from __future__ import annotations
 
 from app.repositories import eval_run_repository as repo
-from app.repositories.base import T, execute, fetch_one
+from app.repositories.base import T, execute
 
 
 def _age_run(run_id: int, minutes: int, *, beat: bool) -> None:

@@ -12,9 +12,10 @@ import statistics
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.models.capacity import ProjectedUtilization
-from app.models.entities import InfrastructureCluster, Incident
+from app.models.entities import Incident, InfrastructureCluster
 from app.models.enums import INCIDENT_SEVERITY_WEIGHT
 from app.models.requirements import HostingRequirement
+from app.scoring.exposure import exposure_multiplier
 
 TWOPLACES = Decimal("0.01")
 
@@ -316,8 +317,6 @@ def change_risk_subscore(risk: dict | None) -> Decimal:
     # Exposure weighting is applied BEFORE the cap, so the cap remains the real
     # ceiling on churn. Applying it after would let a hub cluster exceed a bound
     # that exists to stop any single dimension dominating six others.
-    from app.services.change_exposure import exposure_multiplier
-
     weighted = upcoming * _UPCOMING_CHANGE_PENALTY * exposure_multiplier(
         risk.get("dependent_applications")
     )

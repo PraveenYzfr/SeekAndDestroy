@@ -3,7 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.errors import ProblemDetailsError
-from app.repositories import application_repository, cluster_repository, hosting_repository, utilization_repository
+from app.repositories import (
+    application_repository,
+    cluster_repository,
+    hosting_repository,
+    utilization_repository,
+)
 from app.services import capacity, utilization_ranking
 from app.utils.json_utils import to_jsonable
 

@@ -13,9 +13,11 @@ from __future__ import annotations
 from dataclasses import asdict
 from decimal import Decimal
 
+import structlog
+
 from app.config import get_settings
 from app.forecasting.engine import cluster_breaches_within_horizon
-from app.models.capacity import ClusterCapacitySnapshot, ProjectedUtilization
+from app.models.capacity import ClusterCapacitySnapshot
 from app.models.entities import CmdbApplication, InfrastructureCluster
 from app.models.requirements import DependencyLocalityCheck, HostingRequirement
 from app.models.scoring import CandidateScore, SubScores
@@ -33,8 +35,6 @@ from app.scoring import subscores
 from app.scoring.engine import compute_overall_score, rank_candidates
 from app.scoring.subscores import round2
 from app.services import capacity
-
-import structlog
 
 logger = structlog.get_logger(__name__)
 
