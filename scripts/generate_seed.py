@@ -716,8 +716,36 @@ def _load_persisted_scenarios() -> None:
         stored = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return          # a corrupt fixture file must not stop the generator
-    for key, value in stored.items():
-        SCENARIOS.setdefault(key, value)
+    #  THE FILE WINS, and setdefault was the bug.
+    #
+    #  scenarios.json and the .sql that seeds the database are written by the
+    #  SAME run of this generator, so they are a matched pair describing the
+    #  estate that actually exists. Anything recomputed at import time is a
+    #  PREDICTION of what a future run would produce, and the two diverge the
+    #  moment the packer's inputs change without a re-seed.
+    #
+    #  That is not hypothetical - it was live, and it broke two tests in two
+    #  different areas for at least two days:
+    #
+    #      database                       87 applications with no hosting row
+    #      scenarios.json                 87  (written by the run that seeded it)
+    #      recomputed at import           84
+    #      SCENARIOS after setdefault     84  <- the prediction beat the record
+    #
+    #  test_cmdb_health asserted 87 == 84, and test_resiliency_graph reported
+    #  "only I see" the exact three applications the fixture was missing. Two
+    #  independent derivations both agreed with the DATABASE; only the fixture
+    #  disagreed, which is the one thing a fixture must never do.
+    #
+    #  Measured before changing this: of the 25 keys in the file, 24 were
+    #  already identical and none was missing - so this makes exactly one value
+    #  authoritative and leaves the rest untouched.
+    #
+    #  If the generator changes and nobody re-seeds, this now yields the OLD
+    #  values - which is correct, because the database is old too. A fixture
+    #  that describes a database nobody has created is worse than one that
+    #  describes the one in front of you.
+    SCENARIOS.update(stored)
 
 
 _load_persisted_scenarios()
