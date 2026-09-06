@@ -69,8 +69,17 @@ class TestAnApprovalCorrectsTheReport:
 
     def test_it_states_the_rank_and_the_platforms_own_choice(self):
         summary = self._approved()["executive_summary"]
-        assert "ranked #3 of 3" in summary
+        assert "ranked #3" in summary
         assert "SeekAndDestroy ranked cmh-p225 first" in summary
+
+    def test_the_rank_carries_no_denominator(self):
+        """It printed "#3 of 85" while the reviewer was looking at a deck of 5.
+        len(candidate_scores) is every cluster SCORED; the deck is
+        candidates[:policy.review_options]. Both numbers are true, they answer
+        different questions, and printing one against a sentence about the other
+        invents a third meaning - that 85 things were on screen."""
+        summary = self._approved()["executive_summary"]
+        assert " of " not in summary.split(".")[0], summary.split(".")[0]
 
     def test_the_trade_off_is_computed_in_both_directions(self):
         """The reviewer traded headroom and score for a cluster that is not
@@ -110,14 +119,52 @@ class TestAnApprovalCorrectsTheReport:
         assert "most robust environment" not in summary
         assert "considered five clusters" not in summary
 
-    def test_only_the_chosen_candidates_risks_are_kept(self):
-        """Five risk lines for a shortlist of five told the reviewer about four
-        clusters he had declined, and buried the one fact about the box he is
-        going to build on."""
+    def test_risks_name_only_the_chosen_candidate(self):
         risks = self._approved()["risks"]
-        assert len(risks) == 1
-        assert "den-p097" in risks[0]
-        assert not any("cmh-p225" in r for r in risks)
+        assert risks, "a chosen candidate with scores should carry risk facts"
+        assert all("den-p097" in r or "headroom" in r for r in risks)
+        assert not any("cmh-p225" in r or "phx-p167" in r for r in risks)
+
+    def test_a_single_sentence_naming_several_clusters_cannot_survive(self):
+        """THE CASE THAT BROKE THE FILTER, verbatim from production.
+
+        The old version selected risk ITEMS mentioning the chosen cluster, which
+        worked while the model emitted one entry per candidate. It stopped the
+        moment the model wrote ONE sentence covering three:
+
+            "Moderate risk scores (33.4 for cmh-p225, 33.07 for phx-p167,
+             3.42 for den-p097) indicate potential operational concerns..."
+
+        That item IS about the chosen cluster and names two others in passing, so
+        no filter over the list can remove them - they are inside the sentence.
+        Risks are now COMPUTED from the chosen candidate's own scores instead.
+        """
+        poisoned = dict(REPORT)
+        poisoned["risks"] = [
+            "Moderate risk scores (33.4 for cmh-p225, 33.07 for phx-p167, "
+            "3.42 for den-p097) indicate potential operational concerns that "
+            "should be monitored."
+        ]
+        out = _report_after_decision(
+            poisoned, decision="Approve", cluster="den-p097",
+            host="den-p097-NODE-11", candidate_scores=SCORES)
+        joined = " ".join(out["risks"])
+        assert "cmh-p225" not in joined and "phx-p167" not in joined
+        assert "den-p097" in joined
+
+    def test_the_risk_facts_say_which_way_is_good(self):
+        """A bare "risk score 3.42" is unreadable without knowing the direction,
+        and I had that backwards once already."""
+        joined = " ".join(self._approved()["risks"])
+        assert "higher is worse" in joined
+        assert "higher is better" in joined
+
+    def test_nothing_is_asserted_when_nothing_was_computed(self):
+        """An empty list is honest. Inventing a reassurance is not."""
+        out = _report_after_decision(
+            REPORT, decision="Approve", cluster="unknown-cluster",
+            host=None, candidate_scores=SCORES)
+        assert out["risks"] == []
 
     def test_choosing_the_ranked_winner_adds_no_contradiction_note(self):
         """Nothing was overridden, so there is nothing to explain."""

@@ -703,15 +703,16 @@ def _report_after_decision(report: dict | None, *, decision: str,
     top = _describe(next((c for c in (candidate_scores or []) if c.get("rank") == 1), None))
 
     lines = [f"YOU SELECTED {chosen_label}."]
-    total = len(candidate_scores or [])
     if mine.get("rank"):
-        # "of N" only when the arithmetic holds. A rank higher than the list
-        # length prints "#3 of 2", which reads as a bug in the ranking rather
-        # than a short list, and undermines the figures beside it.
-        lines[0] += (
-            f" It was ranked #{mine['rank']} of {total}."
-            if total and mine["rank"] <= total else f" It was ranked #{mine['rank']}."
-        )
+        # NO DENOMINATOR. It read "#3 of 85" while the reviewer was looking at a
+        # deck of 5 - len(candidate_scores) is every cluster SCORED, and the deck
+        # is candidates[:policy.review_options]. Both numbers are true and they
+        # answer different questions, so printing one against a sentence about
+        # the other invents a third meaning: that 85 things were on screen.
+        #
+        # The rank alone is unambiguous and is the fact the reviewer needs. A
+        # denominator can be added when it is the one they actually saw.
+        lines[0] += f" It was ranked #{mine['rank']}."
 
     same = top.get("code") and mine.get("code") and top["code"] == mine["code"]
     if top.get("code") and not same:
@@ -754,15 +755,49 @@ def _report_after_decision(report: dict | None, *, decision: str,
     corrected["platform_top_choice"] = top.get("code")
     corrected["selected_rank"] = mine.get("rank")
 
-    # RISKS FOR THE CHOSEN CANDIDATE ONLY. Listing all five told the reader about
-    # four clusters they had declined, and buried the one fact that applies to
-    # what they are about to build on.
-    kept = []
-    code = (mine.get("code") or "").lower()
-    for risk in report.get("risks") or []:
-        if code and code in str(risk).lower():
-            kept.append(risk)
-    corrected["risks"] = kept
+    # RISKS ARE COMPUTED, NOT FILTERED. The previous version selected risk ITEMS
+    # that named the chosen cluster, which worked while the model emitted one
+    # entry per candidate. It stopped working the moment the model wrote a single
+    # sentence covering several:
+    #
+    #   "Moderate risk scores (33.4 for cmh-p225, 33.07 for phx-p167, 3.42 for
+    #    den-p097) indicate potential operational concerns..."
+    #
+    # That item IS about the chosen cluster and names two others in passing, so
+    # no filter over the list can remove them - the clusters are inside the
+    # sentence. Filtering prose for the names it mentions is a losing game, and
+    # the reviewer asked not to be told about candidates they declined.
+    #
+    # So the risks after a decision are FACTS ABOUT THE CHOSEN CANDIDATE, taken
+    # from its own scores. Same rule as the comparison above and as the whole
+    # platform: figures come from the engines, prose never decides them.
+    risks: list[str] = []
+    code = mine.get("code")
+    if code:
+        lifecycle = mine.get("lifecycle")
+        if lifecycle and str(lifecycle).lower() == "deprecated":
+            risks.append(
+                f"{code} is Deprecated, which may affect future support."
+            )
+        if mine.get("risk") is not None:
+            risks.append(
+                f"{code} operational risk score {mine['risk']:.2f} "
+                f"(higher is worse; it rises with utilisation volatility, open "
+                f"severe incidents and a forecast breach)."
+            )
+        if mine.get("headroom") is not None:
+            risks.append(
+                f"Projected capacity headroom on {code} after this placement: "
+                f"{mine['headroom']:.2f}%."
+            )
+        if mine.get("historical") is not None:
+            risks.append(
+                f"{code} historical performance score {mine['historical']:.2f} "
+                f"(higher is better; it falls with weighted incident load)."
+            )
+    # Nothing computed means nothing asserted. An empty list is honest; inventing
+    # a reassurance is not.
+    corrected["risks"] = risks
 
     corrected["next_steps"] = [
         f"Place the workload on {chosen_label}.",
