@@ -118,8 +118,11 @@ UNMODELLED_ATTRIBUTES: tuple[UnmodelledAttribute, ...] = (
         #: the platform inventory of the entire bank - see the note on
         #: disclosure in the module docstring.
         instead=(
-            "What it does record is the hosting platform an application runs "
-            "on, not the language it is written in."
+            # Same voice as the sentence it follows. "I don't record X. What it
+            # does record is Y" changes person mid-thought and reads as two
+            # systems talking.
+            "I do have the hosting platform an application runs on, if that "
+            "helps."
         ),
     ),
 )
@@ -194,9 +197,37 @@ def mentions_any(query: str, words: tuple[str, ...]) -> bool:
     return bool(re.search(rf"\b(?:{alternatives})\b", query, re.IGNORECASE))
 
 
+#: Estate identifiers, blanked before any attribute term is looked for.
+#:
+#: EVERY NODE IN THIS ESTATE IS NAMED "<cluster>-NODE-nn", AND "node" IS A
+#: RUNTIME LANGUAGE. So "cmh-p234-NODE-01 is not an ideal choice?" - a question
+#: about one host - came back "I cannot filter by runtime language", because the
+#: hyphens either side of NODE are word boundaries and the boundary-aware match
+#: fired on the hostname.
+#:
+#: Word boundaries were the right fix for "java" inside "javadoc". They cannot
+#: help here: the token IS a whole word, it is simply part of an identifier
+#: rather than a request. The only reliable separator is what the string
+#: denotes, so identifiers are removed before the question is read.
+#:
+#: THIRD TIME THIS CLASS HAS BITTEN: "app" matched "apply", "report" matched
+#: "reporting service", now "node" matches every host we own.
+_IDENTIFIER_RE = re.compile(
+    r"\b[A-Z]{2,}-[A-Z0-9-]+\b"          # APP-CRM, APP-RISK-WORKER1135
+    r"|\b[a-z]{3}-p?\d+(?:-node-\d+)?\b"  # cmh-p234, cmh-p234-NODE-01, atl-03
+    r"|\b(?:INC|CHG|PRB)\d+\b",
+    re.IGNORECASE,
+)
+
+
 def unmodelled_attribute(query: str) -> UnmodelledAttribute | None:
-    """The attribute this query filters on that the CMDB does not record."""
-    lowered = query.lower()
+    """The attribute this query filters on that the CMDB does not record.
+
+    IDENTIFIERS ARE STRIPPED FIRST. A cluster code, a node name or an incident
+    number is a thing being asked ABOUT, never a filter being asked FOR, so an
+    attribute term inside one is never a request for that attribute.
+    """
+    lowered = _IDENTIFIER_RE.sub(" ", query).lower()
     for attribute in UNMODELLED_ATTRIBUTES:
         for term in attribute.terms:
             # Word boundaries: "java" must not match inside "javadoc", and
@@ -235,9 +266,17 @@ def capability_reply(query: str, *, has_app_code: bool, has_quantity: bool) -> s
 
     if attribute is not None:
         parts.append(
-            f"I cannot filter by {attribute.name} - this platform does not track it. "
-            f"That is a limit of what is recorded, not a search that came back empty, "
-            f"so rephrasing will not help. {attribute.instead}"
+            # PLAIN, AND NOTHING ABOUT HOW THIS WORKS INSIDE. The previous
+            # wording explained our own machinery to the reader - "a limit of
+            # what is recorded, not a search that came back empty" describes the
+            # difference between a schema gap and an empty result set, which is
+            # our concern and not theirs.
+            #
+            # "rewording will not help" stays, in plain words: it saves somebody
+            # trying the same question five ways, which is the one genuinely
+            # useful thing this reply can offer.
+            f"I don't record {attribute.name}, so I can't filter by it and "
+            f"rewording won't help. {attribute.instead}"
         )
 
     if placement and not has_app_code and not has_quantity:

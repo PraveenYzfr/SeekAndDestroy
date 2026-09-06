@@ -38,8 +38,27 @@ class TestTheQueryThatFailed:
         reply = qc.capability_reply(
             "give me best dc for java apps", has_app_code=False, has_quantity=False
         )
-        assert "does not track" in reply
-        assert "not a search that came back empty" in reply
+        # Asserted as MEANING, not as the sentence. The wording changed when
+        # the reply stopped explaining our machinery to the reader - it used to
+        # say "a limit of what is recorded, not a search that came back empty",
+        # which is the difference between a schema gap and an empty result set
+        # and is nobody's business but ours.
+        lowered = reply.lower()
+        assert "don't record" in lowered or "does not track" in lowered
+        assert "rewording won't help" in lowered or "rephrasing will not help" in lowered
+        # THIS ASSERTION USED TO REQUIRE THE LEAK. It read
+        #     assert "not a search that came back empty" in reply
+        # and so pinned, as a requirement, the one sentence a reader should
+        # never have seen - the difference between a schema gap and an empty
+        # result set, which is our concern and not theirs. Praveen asked why the
+        # platform was explaining its internals; this test was the reason it
+        # kept doing so.
+        #
+        # The MEANING it was defending is real and is kept: do not send somebody
+        # away to rephrase a question that can never work. That is now carried
+        # by "rewording won't help" above.
+        assert "came back empty" not in reply.lower()
+        assert "result set" not in reply.lower()
 
     def test_it_names_the_attribute_that_does_exist(self):
         """A refusal that only says no leaves the reader guessing whether to
@@ -49,7 +68,9 @@ class TestTheQueryThatFailed:
             "give me best dc for java apps", has_app_code=False, has_quantity=False
         )
         assert "hosting platform" in reply
-        assert "not the language it is written in" in reply
+        # The point is that it names something it DOES hold, so the reader has
+        # somewhere to go. The phrasing is free to change.
+        assert "hosting platform" in reply
 
     def test_it_asks_for_what_it_needs_to_rank(self):
         """The answerable half. "Best DC" is exactly what this platform does;
