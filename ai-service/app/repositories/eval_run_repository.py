@@ -16,6 +16,7 @@ swallowing in the other one already hid a real failure for a whole deploy.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from typing import Any
 
@@ -49,6 +50,21 @@ def current_models() -> dict[str, str]:
 def current_git_sha() -> str | None:
     """The commit under test. None when it cannot be determined - a wrong sha is
     worse than no sha, because it names an experiment that was never run."""
+    #  THE IMAGE HAS NO .git, so asking git inside a container can only ever
+    #  return nothing. Measured on run 44: GitSha empty, on a run that recorded
+    #  its model config and its cost correctly.
+    #
+    #  That is the one column the table exists for. EvalRun answers "same
+    #  hundred queries - what changed", and without the commit it can say the
+    #  score moved and not what moved it. Two runs a week apart are then only
+    #  comparable if somebody remembers.
+    #
+    #  Read from the build first, because the build is the only thing that KNOWS.
+    #  git stays as the fallback for a source checkout, where it is right and the
+    #  environment variable will not be set.
+    stamped = (os.environ.get("SAD_BUILD_SHA") or "").strip()
+    if stamped and stamped.lower() not in {"unknown", "none", "null"}:
+        return stamped[:40]
     try:
         out = subprocess.run(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5

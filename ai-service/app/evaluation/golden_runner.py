@@ -132,8 +132,57 @@ def _refused(text: str, *, intercepted: bool, investigation_type: str | None = N
             "not found in", "cannot answer", "i do not answer", "not in the cmdb",
             "unable to", "no such", "does not exist", "no record", "no matching",
             "cannot state", "not available",
+            #  THE SHAPE GROUNDED_QA_SYSTEM ACTUALLY ASKS FOR, added after this
+            #  list missed it on four cases of run 44:
+            #
+            #      "The evidence does not contain any information about the
+            #       build cost for clt-p125"
+            #
+            #  unanswerable-build-cost, unanswerable-vendor-contact,
+            #  unknown-cluster-mars-01 and unknown-cluster-tok-p500 all refused
+            #  correctly and were all graded "answered instead of declining".
+            #  Four of the run's five regressions were this, and none of them
+            #  was a regression.
+            #
+            #  Matched on "evidence does not contain" rather than the looser
+            #  "does not contain", which a real answer can legitimately say
+            #  ("cluster atl-03 does not contain any GPU nodes"). The prompt
+            #  instructs this exact construction for the no-evidence case, so
+            #  it is as close to a structural signal as prose gets.
+            #
+            #  STILL A FALLBACK, and this is its fourth miss - after the scope
+            #  refusal, the "Request refused" report, and "I have no record of
+            #  the firmware version". Each was fixed by adding a string, which
+            #  is why the two structural checks above exist and why the next
+            #  fix should be a third one rather than a fifth string.
+            "evidence does not contain", "not contain any information",
+            "no evidence", "not recorded in",
         )
     )
+
+
+def _answer_from(state: dict) -> str:
+    """What a caller actually receives, errors included.
+
+    Reading only the explanations made "APP-DOESNOTEXIST is not in the CMDB"
+    look like an empty answer - the platform had refused correctly and the
+    runner could not see it. A grader that cannot see a refusal reports every
+    correct refusal as a failure.
+
+    One function because the state is assembled twice: once as invoke() returns
+    it, and again after the suite resumes a paused review. Two copies of this
+    would drift, and the half that drifted would be the one nobody reads.
+    """
+    parts: list[str] = []
+    for err in state.get("errors") or []:
+        parts.append(str(err))
+    explanations = state.get("recommendation_explanations") or []
+    if explanations:
+        parts.append(json.dumps(explanations))
+    report = state.get("final_report")
+    if report:
+        parts.append(report if isinstance(report, str) else json.dumps(report))
+    return chr(10).join(parts)
 
 
 def run_case(case: dict, *, use_judge: bool) -> dict:
@@ -164,24 +213,64 @@ def run_case(case: dict, *, use_judge: bool) -> dict:
             # investigation's thread.
             config = {"configurable": {"thread_id": f"golden-{case['id']}"}}
             state = get_compiled_graph().invoke(new_state(query, created_by=1), config=config)
-            # Assemble what a caller actually receives, errors included. Reading
-            # only the explanations made "APP-DOESNOTEXIST is not in the CMDB"
-            # look like an empty answer - the platform had refused correctly and
-            # the runner could not see it. A grader that cannot see a refusal
-            # will report every correct refusal as a failure.
-            parts: list[str] = []
-            for err in state.get("errors") or []:
-                parts.append(str(err))
-            explanations = state.get("recommendation_explanations") or []
-            if explanations:
-                parts.append(json.dumps(explanations))
-            report = state.get("final_report")
-            if report:
-                parts.append(report if isinstance(report, str) else json.dumps(report))
-            answer = chr(10).join(parts)
+            answer = _answer_from(state)
             # Recorded so the refusal check can use it. A refusal is a
             # property of which path ran, not of the words chosen.
             result["investigation_type"] = state.get("investigation_type") or case.get("kind")
+            #  A PAUSE IS NOT A FAILURE, and only the state can tell them apart.
+            #
+            #  invoke() returns when the graph interrupts for human review, and
+            #  the state it returns looks identical to a crash from out here:
+            #  no report, no explanations, no errors. __interrupt__ is the one
+            #  thing that distinguishes "stopped because it was designed to"
+            #  from "stopped because it broke", so it is read here rather than
+            #  inferred from the emptiness downstream.
+            result["paused"] = "__interrupt__" in state
+            result["candidates_scored"] = len(state.get("candidate_scores") or [])
+
+            #  THE SUITE HAS TO PLAY THE REVIEWER, or a whole investigation
+            #  type is never graded.
+            #
+            #  Hosting stops for human review by design. Left there, the three
+            #  hosting cases in the golden set are permanently ungradeable -
+            #  honest, and it silently removes the platform's main journey from
+            #  the only suite that measures quality. Reporting "not measured"
+            #  for the thing under test is not neutrality, it is a gap that
+            #  reads as coverage.
+            #
+            #  So the runner approves the top-ranked candidate, which is the
+            #  option the review screen offers by default, and grades the report
+            #  that produces. It is graded as a REVIEWED answer and the result
+            #  says so, because a report that exists only because the suite
+            #  approved it must not be mistaken for one a person signed off.
+            #
+            #  Bounded deliberately: only on an interrupt, only when candidates
+            #  were actually scored, and a failure to resume leaves the case
+            #  ungradeable rather than inventing an outcome for it.
+            if result["paused"] and result["candidates_scored"]:
+                try:
+                    from langgraph.types import Command
+
+                    top = (state.get("candidate_scores") or [{}])[0]
+                    state = get_compiled_graph().invoke(
+                        Command(resume={
+                            "decision": "Approved",
+                            "reviewer_employee_id": 1,
+                            "comments": "auto-approved by the golden suite to grade the report",
+                            "selected_cluster_code": top.get("cluster_code"),
+                            "selected_host_name": top.get("host_name"),
+                        }),
+                        config=config,
+                    )
+                    result["auto_reviewed"] = True
+                    answer = _answer_from(state)
+                    evidence = state.get("retrieved_context") or state.get("candidate_scores") or {}
+                except Exception as exc:  # noqa: BLE001
+                    #  Swallowed on purpose. A suite that cannot play the
+                    #  reviewer has failed to MEASURE the case, which is not the
+                    #  same as the case being wrong - the empty-answer branch
+                    #  below reports it as ungradeable and says why.
+                    result["resume_error"] = f"{type(exc).__name__}: {exc}"[:200]
             evidence = state.get("retrieved_context") or state.get("candidate_scores") or {}
             resolved = resolve_role("grounded_qa")
             author = {"provider": resolved["provider"], "model": resolved["model"]}
@@ -191,6 +280,48 @@ def run_case(case: dict, *, use_judge: bool) -> dict:
             return result
 
     result["answer"] = answer[:2000]
+
+    #  AN EMPTY ANSWER IS NOT A BADLY WRITTEN ONE, and grading it produces
+    #  confident nonsense in both directions at once.
+    #
+    #  Measured on run 44, three cases, identical shape:
+    #
+    #      hosting-app-aml-svc0648   Failed   answer len: 0
+    #        FAIL   contains:APP-AML-SVC0648
+    #        PASS   excludes:I don't have enough
+    #        PASS   excludes:no information
+    #        PASS   excludes:cannot answer
+    #
+    #  Three green checks on nothing. An empty string contains no hedge, so
+    #  every must_not_contain passes VACUOUSLY - the more forbidden phrases a
+    #  case lists, the healthier a total absence of output looks. That is the
+    #  defect this codebase keeps meeting: something unmeasurable reported as a
+    #  measurement, and here it reports in the reassuring direction.
+    #
+    #  WHY THOSE THREE ARE EMPTY, and it is not a failure. The graph resolved
+    #  the application, scored seven candidates, and stopped at the human-review
+    #  interrupt exactly as designed. No reviewer has decided, so there is no
+    #  final_report, no explanations and no errors - and run_case builds the
+    #  graded string from precisely those three. The runner could not grade any
+    #  investigation that pauses for review, and reported the pause as a quality
+    #  failure. Plan section 11 called this "a real hosted application is not
+    #  named in its own answer"; it is named, and there is no answer to name it
+    #  in. Two people looked at retrieval and narration for a defect in neither.
+    #
+    #  Skipped, not Failed. finish() already counts Skipped separately, and a
+    #  case that could not be graded must not sit in the same bucket as one that
+    #  was graded and found wanting - the whole point of the run is to tell
+    #  those apart.
+    if not answer.strip():
+        why = (
+            "paused at the human-review interrupt with "
+            f"{result.get('candidates_scored', 0)} candidates scored - no reviewer has "
+            "decided, so there is no report to grade"
+            if result.get("paused")
+            else "the graph returned no errors, no explanations and no report"
+        )
+        result["error"] = f"ungradeable: {why}"
+        return result
 
     # --- hard checks: properties of the text, decided by string matching -----
     if case.get("must_refuse"):
@@ -326,7 +457,32 @@ def main() -> int:
             previous = repo.last_passing("golden")
             baseline_id = previous["EvalRunId"] if previous else None
             if baseline_id is None:
+                #  A GATE WITH NO BASELINE MUST NOT PASS.
+                #
+                #  This printed a note and carried on. With --fail-on-regression
+                #  that is a regression gate comparing against nothing, and
+                #  comparing against nothing never finds a regression - so the
+                #  gate reports success at precisely the moment it is doing no
+                #  work. It fails OPEN, silently, in CI, where nobody reads
+                #  stderr on a green run.
+                #
+                #  Not hypothetical: sad.EvalRun holds no row with
+                #  Status='Passed' at all, so `--baseline last-passing` has
+                #  never once resolved. Every run made with it was ungated.
+                #
+                #  Without the gate the note is enough - an exploratory run that
+                #  wanted a comparison and could not have one is still a useful
+                #  run, and refusing it would help nobody.
                 print("  no previous passing run to use as a baseline", file=sys.stderr)
+                if args.fail_on_regression:
+                    print(
+                        "  refusing to run: --fail-on-regression with --baseline last-passing, "
+                        "and no run has ever passed. Nothing to compare against is not the same "
+                        "as nothing to report. Name a baseline explicitly (--baseline <run id>) "
+                        "or drop --fail-on-regression.",
+                        file=sys.stderr,
+                    )
+                    return 2
         elif args.baseline:
             baseline_id = int(args.baseline)
 

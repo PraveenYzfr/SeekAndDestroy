@@ -162,6 +162,11 @@ services:
     build:
       context: ../ai-service
       dockerfile: Dockerfile
+      args:
+        # Empty unless the deploy exports it. current_git_sha() treats an unset
+        # stamp as "not known" and falls back to git, so a local build is
+        # unaffected and a wrong sha is never invented.
+        SAD_BUILD_SHA: "${SAD_BUILD_SHA:-}"
     # Loopback only: the browser never talks to ai-service directly. The UI's
     # nginx proxies /api/ to api-gateway, which calls ai-service over the
     # compose network. Only the ui service needs a public port.

@@ -18,6 +18,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+#  THE COMMIT, STAMPED AT BUILD TIME.
+#
+#  The image ships no .git, so `git rev-parse` inside the container returns
+#  nothing and sad.EvalRun.GitSha was empty on every containerised run - on rows
+#  that recorded model config and cost correctly. Without the commit, EvalRun
+#  can say the score moved and not what moved it, which is the one question the
+#  table exists to answer.
+#
+#  Defaults to empty rather than to a fake value: current_git_sha() treats an
+#  unset stamp as "not known" and falls back to git, and a WRONG sha is worse
+#  than none because it names an experiment that was never run.
+ARG SAD_BUILD_SHA=""
+ENV SAD_BUILD_SHA=$SAD_BUILD_SHA
+
 ENV SAD_SERVICE__HOST=0.0.0.0
 ENV SAD_SERVICE__PORT=8088
 ENV SAD_DB__ODBC_DRIVER="ODBC Driver 18 for SQL Server"
