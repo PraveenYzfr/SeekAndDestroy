@@ -1,6 +1,18 @@
 # The full Python suite, against a real SQL Server.
 #
-# NOT VERIFIED YET, AND DELIBERATELY NOT A REQUIRED CHECK.
+# STILL NOT VERIFIED, AND DELIBERATELY NOT A REQUIRED CHECK.
+#
+# Two defects were found in it by reading the settings defaults rather than by
+# running it, and both would have failed every database-backed test on the first
+# run - integrated_security defaults to true so the sa credentials were never
+# sent, and odbc_driver defaults to 17 while the install step brings 18. Fixed
+# below, and named here because "unverified" now means something narrower than
+# it did: the wiring has been checked against the code, the WALL-CLOCK and the
+# service behaviour have not.
+#
+# It needs one thing nobody has supplied: the repository secret
+# CI_MSSQL_SA_PASSWORD. Without it the container starts with an empty SA
+# password and never accepts a login, and the wait loop fails after ten minutes.
 #
 # Everything in ci.yml was run locally before being written down. This file
 # cannot be - it stands up service containers and loads a 78 MB seed, and the
@@ -145,6 +157,34 @@ jobs:
           SAD_DB__DATABASE: PraveenDB
           SAD_DB__USERNAME: sa
           SAD_DB__PASSWORD: ${{ secrets.CI_MSSQL_SA_PASSWORD }}
+          #  BOTH OF THESE ARE LOAD-BEARING, and without them the username and
+          #  password above are read and then never sent.
+          #
+          #  integrated_security defaults to TRUE (settings.py), and
+          #  odbc_connection_string branches on it: when true it appends
+          #  Trusted_Connection=yes and omits UID/PWD entirely. So a run with
+          #  SAD_DB__USERNAME and SAD_DB__PASSWORD set but this unset attempts
+          #  Windows authentication against SQL Server on Linux. Every one of
+          #  the 42 database-backed test files fails to connect, and the failure
+          #  reads as a broken database rather than a missing setting.
+          SAD_DB__INTEGRATED_SECURITY: "false"
+          #  odbc_driver defaults to "ODBC Driver 17 for SQL Server" and the
+          #  install step above brings mssql-tools18, which ships driver 18 and
+          #  not 17. The Dockerfile already sets this explicitly for the same
+          #  reason; the workflow inherited the gap rather than the fix.
+          SAD_DB__ODBC_DRIVER: "ODBC Driver 18 for SQL Server"
+          #  Driver 18 defaults Encrypt to yes and the container serves a
+          #  self-signed certificate. The connection string writes Encrypt=no
+          #  from the default, which makes this redundant today - set anyway
+          #  because the alternative is a certificate error the first time
+          #  anybody turns encryption on, in a workflow nobody watches.
+          SAD_DB__TRUST_SERVER_CERTIFICATE: "true"
+          #  command_timeout defaults to 0, which is NO timeout, so a query that
+          #  hangs consumes the whole 45-minute budget and the job is killed by
+          #  the runner rather than by the test. A killed run and a slow one are
+          #  not distinguishable from the summary, which is the shape this
+          #  repository keeps being caught by.
+          SAD_DB__COMMAND_TIMEOUT: "120"
           # Backends left at their defaults ("memory") deliberately - see the
           # header. Naming SAD_QDRANT__URL / SAD_REDIS__URL here would have been
           # worse than useless: neither prefix exists. The real ones are
