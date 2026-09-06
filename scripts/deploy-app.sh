@@ -276,12 +276,37 @@ echo "==> 1c. EVALUATION IN FLIGHT - a deploy must not move the ruler mid-measur
 # process either exists or it does not. The cost is that a suite running
 # somewhere other than this box is invisible here - a real gap, and a smaller one
 # than the alternative.
+# THE PATTERN LISTS BOTH NAMES ON PURPOSE. The runner moved into the package as
+# app/evaluation/golden_runner.py so it ships inside the image, which means the
+# process is now `python -m app.evaluation.golden_runner` and contains no
+# "eval_golden" at all. A guard written against the old name would have kept
+# passing while a suite ran - silently, and for the same reason the first
+# version of it always fired: nobody re-reads a check that is not complaining.
+# scripts/eval_golden.py survives as a wrapper and still matches.
+#
 # SELF AND PARENT EXCLUDED. The first version was `pgrep -f "eval_golden" | wc -l`
 # and it matched THE SHELL RUNNING THE CHECK, because on a login shell the
 # pattern appears in that shell's own command line. Tested with a pattern
 # matching nothing at all and it still refused - a guard that always fires is a
 # guard nobody keeps.
-EVAL_PROCS=$(pgrep -f "eval_golden|run_golden_suite" 2>/dev/null              | grep -vx -e "$$" -e "${PPID:-0}" | wc -l)
+#  pgrep EXITS 1 WHEN IT MATCHES NOTHING, and this script runs under
+#  `set -euo pipefail`. So on the happy path - no suite running - pgrep's 1
+#  propagated through pipefail, the assignment failed, and set -e killed the
+#  deploy SILENTLY: step 1c printed its header and nothing after it ran. No
+#  error, no refusal, and a caller reading the tail saw a clean-looking stop.
+#
+#  It shipped that way and blocked the very next deploy. `git pull` had already
+#  moved prod's HEAD to 1bdc8b7 while migration_026 never reached the database -
+#  the checkout said one thing and the running containers another, which is the
+#  half-deployed state this script exists to prevent.
+#
+#  Same failure as the pgrep-matching-its-own-shell bug caught before it,
+#  arriving from the opposite side: that one always REFUSED, this one always
+#  ABORTED. A guard has to be correct in the case where it should do NOTHING,
+#  and that is the case nobody thinks to test.
+EVAL_PIDS=$(pgrep -f "golden_runner|eval_golden|run_golden_suite" 2>/dev/null || true)
+EVAL_PROCS=$(printf '%s
+' "$EVAL_PIDS" | grep -vx -e "" -e "$$" -e "${PPID:-0}" | wc -l || true)
 if [ "${EVAL_PROCS:-0}" -gt 0 ]; then
     echo ""
     echo "    REFUSING TO DEPLOY."
@@ -292,7 +317,7 @@ if [ "${EVAL_PROCS:-0}" -gt 0 ]; then
     echo "    different rules and the result cannot be compared with itself."
     echo ""
     echo "    Wait for it to finish. To see it:"
-    echo "      pgrep -af 'eval_golden|run_golden_suite'"
+    echo "      pgrep -af 'golden_runner|eval_golden|run_golden_suite'"
     echo ""
     echo "    If the suite is genuinely stale or you accept a split run, re-run"
     echo "    with ALLOW_DURING_EVAL=1 - and record the split in EvalRun.Notes,"
