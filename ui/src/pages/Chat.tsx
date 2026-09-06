@@ -5,6 +5,7 @@ import { describeCandidate, isNodeRow } from "@/utils/recommendations";
 import { getIdentity } from "@/auth/session";
 import ReviewChoice from "@/components/ReviewChoice";
 import AnswerFeedbackControl from "@/components/AnswerFeedbackControl";
+import MessageBoundary from "@/components/MessageBoundary";
 
 type MessageStatus = "loading" | "awaiting_review" | "completed" | "error";
 
@@ -344,8 +345,11 @@ export default function Chat() {
             clickable: `busy` went false when the follow-up landed and every
             earlier bubble came back to life. */}
         {messages.map((m) => (
+          // ONE BAD MESSAGE MUST NOT TAKE THE CONVERSATION WITH IT. Without
+          // this, a single unreadable field in one answer unmounts the whole
+          // tree - every earlier answer and the input box included.
+          <MessageBoundary key={m.id} investigationId={m.investigationId}>
           <ChatBubble
-            key={m.id}
             message={m}
             onDecide={decide}
             onAsk={send}
@@ -358,6 +362,7 @@ export default function Chat() {
               m.investigationId !== liveReviewId
             }
           />
+          </MessageBoundary>
         ))}
         <div ref={bottomRef} />
       </div>
@@ -621,7 +626,7 @@ function ChatBubble({
                 {message.finalReport.top_recommendation && (
                   <div className="explain-box">Top recommendation: {message.finalReport.top_recommendation}</div>
                 )}
-                {message.finalReport.risks.length > 0 && (
+                {(message.finalReport.risks?.length ?? 0) > 0 && (
                   <>
                     <div className="stat-label">Risks</div>
                     <ul>
@@ -631,7 +636,7 @@ function ChatBubble({
                     </ul>
                   </>
                 )}
-                {message.finalReport.next_steps.length > 0 && (
+                {(message.finalReport.next_steps?.length ?? 0) > 0 && (
                   <>
                     <div className="stat-label">Next steps</div>
                     <ul>
