@@ -65,7 +65,7 @@ def log_complete(
     # unpriced - a spend report reading zero, with nothing to indicate it was
     # wrong rather than free.
     cost = _price(model, prompt_tokens, completion_tokens)
-    _observe_cost(provider, model, cost)
+    _observe_cost(audit_id, provider, model, cost, success)
 
     execute(
         f"UPDATE {T('AgentAuditLog')} SET OutputJson = :output_json, CompletedAt = :completed_at, "
@@ -183,8 +183,34 @@ def _observe_timing(audit_id, provider, model, prompt_tokens, completion_tokens)
         pass
 
 
-def _observe_cost(provider: str | None, model: str | None, cost) -> None:
-    """Export what this call cost, at the moment it is priced.
+def _task_of(audit_id: int) -> str:
+    """The task label for an audit row: "llm:JudgeVerdict" -> "JudgeVerdict".
+
+    One indexed primary-key lookup, and _observe_timing does its own because it
+    needs StartedAt and CompletedAt from the same row AFTER the UPDATE writes
+    them. Two lookups on the completion path of a call that just spent seconds
+    talking to a provider is not a cost worth restructuring log_complete to
+    avoid - and merging them would mean moving the cost emit after the UPDATE,
+    so a failing UPDATE would stop recording spend that was genuinely incurred.
+
+    Never raises, and never returns None. A metric label that is sometimes
+    absent splits one series into two, and the gap looks like the task stopped
+    running rather than like the lookup failed.
+    """
+    try:
+        rows = fetch_all(
+            f"SELECT ToolName FROM {T('AgentAuditLog')} WHERE AuditId = :id", {"id": audit_id}
+        )
+        if not rows:
+            return "unknown"
+        return str(rows[0].get("ToolName") or "unknown").removeprefix("llm:")
+    except Exception:  # noqa: BLE001 - see docstring
+        return "unknown"
+
+
+def _observe_cost(audit_id: int, provider: str | None, model: str | None, cost,
+                  success: bool) -> None:
+    """Export what this call cost and that it happened, labelled by TASK.
 
     Here rather than in a nightly job over the audit table, because a dashboard
     that lags the spend it reports cannot answer the question people actually ask
@@ -193,14 +219,36 @@ def _observe_cost(provider: str | None, model: str | None, cost) -> None:
     An unpriced model is counted under model="UNPRICED" with zero dollars rather
     than dropped. A spend graph reading zero because a model was unknown is worse
     than one reading low: the second is visibly incomplete.
+
+    WHY TASK IS ON BOTH SERIES. Ranking operations by tokens gets the answer
+    wrong. Over one 100-case golden run, generate_final_report took 50.2% of the
+    tokens and 33% of the spend; JudgeVerdict took 24.7% of the tokens and 51%
+    of the spend, because it runs on a model whose output price is 8.3x the
+    cheapest in use. The token counter has carried a task label for a while and
+    the cost counter did not, so the cheaper question was answerable from
+    metrics and the expensive one was not.
+
+    The call count is the denominator for both. "Expensive because it runs
+    often" and "expensive because each run is huge" look identical in a total
+    and have opposite fixes.
     """
     try:
-        from app.observability.metrics import llm_cost_usd_total
+        from app.observability.metrics import llm_cost_usd_total, llm_task_calls_total
 
+        task = _task_of(audit_id)
         amount = float(getattr(cost, "cost", 0) or 0)
         priced = getattr(cost, "cost", None) is not None
         llm_cost_usd_total.labels(
-            provider=provider or "unknown", model=(model or "unknown") if priced else "UNPRICED"
+            provider=provider or "unknown",
+            model=(model or "unknown") if priced else "UNPRICED",
+            task=task,
         ).inc(amount)
+        # Counted whether or not it was priced, and whether or not it succeeded.
+        # A failed call still consumed a provider round trip, and a call counter
+        # that silently omits failures makes an outage look like idleness.
+        llm_task_calls_total.labels(
+            provider=provider or "unknown", model=model or "unknown", task=task,
+            outcome="success" if success else "error",
+        ).inc()
     except Exception:  # noqa: BLE001 - never fail a call to record what it cost
         pass

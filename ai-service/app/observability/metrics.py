@@ -82,8 +82,38 @@ narration_drift_total = Counter(
 #: model has no price row are counted under model="UNPRICED" instead of being
 #: dropped - a spend dashboard reading zero because a model was unknown is worse
 #: than one reading low, since the second is visibly incomplete.
+#: TASK IS ON HERE BECAUSE COST AND TOKENS DISAGREE ABOUT WHAT IS EXPENSIVE.
+#:
+#: Measured over one 100-case golden run: generate_final_report was 50.2% of
+#: tokens and 33% of spend, while JudgeVerdict was 24.7% of tokens and 51% of
+#: spend. The judge runs on a model whose OUTPUT price is 8.3x the cheapest one
+#: in use, so ranking operations by tokens puts the most expensive one second.
+#:
+#: Without this label that comparison could not be made from metrics at all.
+#: sad_llm_task_tokens_total already carried {provider, model, task, kind}, so
+#: "which operation burns tokens" was answerable and "which operation costs
+#: money" was not - and it is the second question people actually ask.
+#:
+#: Inferring it from {provider, model} works only while each task happens to use
+#: a distinct model. That is today's configuration, not a property: the moment
+#: two tasks share a model, or one task fails over to another provider, the
+#: inference silently attributes spend to the wrong operation.
 llm_cost_usd_total = Counter(
-    "sad_llm_cost_usd_total", "Cost in USD of completed model calls", ["provider", "model"]
+    "sad_llm_cost_usd_total", "Cost in USD of completed model calls",
+    ["provider", "model", "task"],
+)
+
+#: The DENOMINATOR. Tokens alone cannot answer "is this task expensive because
+#: it runs often, or because each run is huge" - and those have opposite fixes.
+#: sad_llm_calls_total is {provider, outcome} and cannot be joined to a task.
+#:
+#: outcome is on here and not on the cost counter deliberately: a failed call
+#: still costs money and belongs in spend, but a success rate needs the failures
+#: counted separately or it is not a rate.
+llm_task_calls_total = Counter(
+    "sad_llm_task_calls_total",
+    "Completed model calls by task, for per-call token and cost averages",
+    ["provider", "model", "task", "outcome"],
 )
 
 #: The deterministic graders, as a distribution rather than a mean.

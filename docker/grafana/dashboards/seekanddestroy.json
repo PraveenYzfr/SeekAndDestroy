@@ -398,6 +398,199 @@
       "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero budget denials is the healthy state.\n\nA denial is the budget control working. Sustained denials mean real work is being refused, which is a different problem from overspending."
     },
     {
+      "id": 112,
+      "type": "timeseries",
+      "title": "Spend by operation",
+      "description": "WHICH OPERATION COSTS MONEY - which is not the one that burns tokens. Measured over one 100-case golden run: generate_final_report was 50.2% of tokens and 33% of spend; JudgeVerdict was 24.7% of tokens and 51% of spend, because its model's output price is 8.3x the cheapest in use. Ranking by tokens puts the most expensive operation second. Panel 104 is the token view; read them together.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 52
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "custom": {
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (task) (increase(sad_llm_cost_usd_total[1h])) or vector(0)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "legendFormat": "{{task}}"
+        }
+      ]
+    },
+    {
+      "id": 113,
+      "type": "table",
+      "title": "Cost and tokens per operation, last 1h",
+      "description": "The denominator matters: 'expensive because it runs often' and 'expensive because each run is huge' look identical in a total and have opposite fixes. cost/call separates them. Empty rows are honest - a task with no calls in the window emits no series, which is not the same as a task that cost nothing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 52
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cost"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 4
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cost/call"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 6
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (task) (increase(sad_llm_task_calls_total[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "format": "table",
+          "range": false
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (task) (increase(sad_llm_task_tokens_total{kind=\"prompt\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "format": "table",
+          "range": false
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (task) (increase(sad_llm_task_tokens_total{kind=\"completion\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "format": "table",
+          "range": false
+        },
+        {
+          "refId": "D",
+          "expr": "sum by (task) (increase(sad_llm_cost_usd_total[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "format": "table",
+          "range": false
+        },
+        {
+          "refId": "E",
+          "expr": "sum by (task) (increase(sad_llm_cost_usd_total[1h])) / clamp_min(sum by (task) (increase(sad_llm_task_calls_total[1h])), 1)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "format": "table",
+          "range": false
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "task",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true
+            },
+            "renameByName": {
+              "task": "operation",
+              "Value #A": "calls",
+              "Value #B": "prompt",
+              "Value #C": "completion",
+              "Value #D": "cost",
+              "Value #E": "cost/call"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "cost",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
       "id": 101,
       "type": "row",
       "title": "AI operations - models, fallbacks, latency",
