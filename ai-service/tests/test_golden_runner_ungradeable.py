@@ -74,6 +74,34 @@ class TestAnEmptyAnswerIsNotGraded:
             {"investigation_type": "Hosting", "__interrupt__": object(), "candidate_scores": []},
         )
         assert "paused" in result["error"]
+        assert "did not attempt to approve it" in result["error"]
+
+    def test_each_way_the_resume_can_fail_reads_differently(self, monkeypatch):
+        """THE MESSAGE HAD ONE SENTENCE FOR THREE FAULTS.
+
+        Run 49 was read as "the auto-reviewer never fires, not once" from an
+        error that says the same thing whether the resume was never attempted,
+        threw, or ran and returned nothing. The reading was not supported by the
+        evidence, and it could not have been - which is this codebase's own
+        defect, in the message written to report a missing measurement.
+        """
+        paused = {
+            "investigation_type": "Hosting",
+            "__interrupt__": object(),
+            "candidate_scores": [{"cluster_code": "atl-03"}],
+        }
+
+        threw = _run_with_state(monkeypatch, dict(paused), resume_raises=RuntimeError("boom"))
+        ran_empty = _run_with_state(monkeypatch, dict(paused), resume_state={})
+        not_tried = _run_with_state(
+            monkeypatch,
+            {"investigation_type": "Hosting", "__interrupt__": object(), "candidate_scores": []},
+        )
+
+        assert "could not" in threw["error"] and "boom" in threw["error"]
+        assert "still produced no report" in ran_empty["error"]
+        assert "did not attempt" in not_tried["error"]
+        assert len({threw["error"], ran_empty["error"], not_tried["error"]}) == 3
 
     def test_an_empty_state_with_no_interrupt_says_so_instead(self, monkeypatch):
         """Not every empty answer is a pause, and calling one the other would

@@ -353,13 +353,42 @@ def run_case(case: dict, *, use_judge: bool) -> dict:
     #  was graded and found wanting - the whole point of the run is to tell
     #  those apart.
     if not answer.strip():
-        why = (
-            "paused at the human-review interrupt with "
-            f"{result.get('candidates_scored', 0)} candidates scored - no reviewer has "
-            "decided, so there is no report to grade"
-            if result.get("paused")
-            else "the graph returned no errors, no explanations and no report"
-        )
+        #  WHICH OF THE THREE, and this message could not say.
+        #
+        #  It reported "paused at the human-review interrupt with N candidates
+        #  scored" for every empty answer that had interrupted - whether the
+        #  resume was never attempted, attempted and threw, or succeeded and
+        #  still produced nothing. Three different faults, one sentence.
+        #
+        #  Run 49 was read as "the auto-reviewer never fires, not once" on the
+        #  strength of it. That reading is not supported by the message: it is
+        #  also what a resume that ran and returned an empty state prints. The
+        #  evidence could not distinguish them, so the diagnosis could not
+        #  either, and a night's conclusion rested on it.
+        #
+        #  Which makes this mine twice over. It is the same defect the whole
+        #  change set is about - something unmeasurable rendered as a definite
+        #  statement - committed in the very message written to explain that a
+        #  measurement was missing.
+        if not result.get("paused"):
+            why = "the graph returned no errors, no explanations and no report"
+        elif result.get("resume_error"):
+            why = (
+                f"the suite tried to approve the review and could not: "
+                f"{result['resume_error']}"
+            )
+        elif result.get("auto_reviewed"):
+            why = (
+                f"the suite approved the review of {result.get('candidates_scored', 0)} "
+                "candidates and the resumed graph still produced no report - the "
+                "resume is working and something after it is not"
+            )
+        else:
+            why = (
+                f"paused at the human-review interrupt with "
+                f"{result.get('candidates_scored', 0)} candidates scored, and the suite "
+                "did not attempt to approve it"
+            )
         result["error"] = f"ungradeable: {why}"
         return result
 
