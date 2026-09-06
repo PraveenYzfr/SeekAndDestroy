@@ -161,3 +161,49 @@ class TestAnEvidenceObjectThatCanGroundNothing:
         result = graders.number_fidelity("den-p096 scored 91.80 overall", evidence)
         assert result.applies
         assert "91.80" in result.ungrounded
+
+
+class TestTheModelDoesNotTypeAsciiHyphens:
+    """Investigation 144, "why was that rejected?", scored number_fidelity 0.191
+    and flagged "073" and "074" as invented figures. They are the tails of
+    atl-p073 and atl-p074, two clusters that exist.
+
+    The prose spelled them atl\u2011p073 - U+2011, a NON-BREAKING HYPHEN. Every
+    pattern in this module matches a literal ASCII "-", so the code was not
+    recognised and the tokeniser reached its digits. The same prose also carried
+    U+2013.
+
+    This silently defeats FOUR patterns at once - entity codes, rule ids, tier
+    and severity labels, and ISO dates - each of which was fixed once already
+    for a different reason and re-broken by a character nobody looked at.
+    """
+
+    DASHES = ["\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212"]
+
+    @pytest.mark.parametrize("dash", DASHES)
+    def test_a_cluster_code_survives_any_dash(self, dash):
+        text = f"CPU short by 9.74 cores for atl{dash}p073"
+        assert graders._numbers_in(text) == ["9.74"]
+
+    @pytest.mark.parametrize("dash", DASHES)
+    def test_a_rule_id_survives_any_dash(self, dash):
+        assert graders._numbers_in(f"RULE{dash}011 blocked the placement") == []
+
+    @pytest.mark.parametrize("dash", DASHES)
+    def test_a_tier_label_survives_any_dash(self, dash):
+        assert graders._numbers_in(f"a Tier{dash}1 workload") == []
+
+    @pytest.mark.parametrize("dash", DASHES)
+    def test_a_date_survives_any_dash(self, dash):
+        assert graders._numbers_in(f"opened 2026{dash}06{dash}24") == []
+
+    def test_the_exact_production_sentence(self):
+        """Verbatim from the audit row for investigation 144."""
+        text = "CPU short by 9.74 cores for atl\u2011p073, 15.90 percent headroom"
+        assert graders._numbers_in(text) == ["9.74", "15.90"]
+
+    def test_an_ascii_negative_number_is_still_a_figure(self):
+        """U+2212 is normalised because it is a DASH in this prose. A genuinely
+        negative measurement is written with an ASCII hyphen by every provider
+        observed here, and must still read as a number."""
+        assert graders._numbers_in("headroom changed by -3.5 points") == ["-3.5"]

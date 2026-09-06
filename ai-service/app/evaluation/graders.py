@@ -39,6 +39,11 @@ FREE_INTEGER_CEILING = 10
 
 _NUMBER_RE = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
 
+#: Typographic dashes a model writes where the schema uses an ASCII hyphen.
+#: U+2010 hyphen, U+2011 non-breaking hyphen, U+2012 figure dash, U+2013 en
+#: dash, U+2014 em dash, U+2212 minus sign.
+_DASHES = {ord(c): "-" for c in "‐‑‒–—−"}
+
 #: Cluster codes in this estate look like nyc-p006, atl-03, dal-p056; the CMDB
 #: also uses APP-CRM style application codes.
 #: Entity codes, matched CASE-INSENSITIVELY.
@@ -187,7 +192,31 @@ def _numbers_in(text: str) -> list[str]:
     it was, since those "numbers" always matched the evidence they came from.
     Entity codes are graded by entity_fidelity; their digits are not metrics.
     """
-    stripped = _LABEL_RE.sub(" ", _RULE_ID_RE.sub(" ", text or ""))
+    # THE MODEL DOES NOT TYPE ASCII HYPHENS, AND EVERY PATTERN BELOW ASSUMES IT DOES.
+    #
+    # Measured on investigation 144, "why was that rejected?", which scored
+    # number_fidelity 0.191 and flagged "073" and "074" as invented figures. Those
+    # are the tails of atl-p073 and atl-p074, two clusters that exist. The prose
+    # spelled them atl‑p073 - U+2011 NON-BREAKING HYPHEN - and _ENTITY_RE matches
+    # a literal ASCII "-", so the code was not recognised and the tokeniser reached
+    # its digits.
+    #
+    #     _numbers_in("... for atl‑p073")   -> ['9.74', '073']
+    #     _numbers_in("... for atl-p073")   -> ['9.74']
+    #
+    # The same prose also carried U+2013. Providers emit typographic dashes freely,
+    # so this is not one model's quirk, and it silently defeats FOUR patterns at
+    # once - entity codes, RULE-011, Tier-1/Sev2, and every ISO date. Each of those
+    # was fixed once already for a different reason; all four were re-broken by a
+    # character nobody looked at.
+    #
+    # Normalised first, so every pattern after this sees the ASCII form. Note this
+    # deliberately does NOT touch the minus sign a real negative number would use:
+    # U+2212 is included because it is a DASH in prose of this kind, and a genuinely
+    # negative measurement is written "-3" with an ASCII hyphen by every provider
+    # observed here.
+    text = (text or "").translate(_DASHES)
+    stripped = _LABEL_RE.sub(" ", _RULE_ID_RE.sub(" ", text))
     stripped = _ENTITY_RE.sub(" ", stripped)
     # IP before date: 10.4.185.2 contains no date, but stripping longest and most
     # specific shapes first is the rule this pipeline already follows, and an
