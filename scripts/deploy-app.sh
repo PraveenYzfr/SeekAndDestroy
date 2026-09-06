@@ -248,6 +248,62 @@ for svc in $STATEFUL_SERVICES; do
     fi
 done
 
+echo "==> 1c. EVALUATION IN FLIGHT - a deploy must not move the ruler mid-measurement"
+# WHY THIS EXISTS
+#
+# On 2026-09-06 at 01:15:58Z this script recreated ai-service while the FIRST
+# golden baseline ever run against production was at case 67 of 100. sad.EvalRun
+# had been empty; that run was the thing being established.
+#
+# A restart alone would have been survivable. The deploy also shipped 3a55d90,
+# which adds a third deterministic grader - attribution_fidelity - to
+# grade_call. So cases 1..67 were scored against two graders and 68..100 against
+# three, and any case whose answer misattributes a record fails a check that did
+# not exist for the earlier two thirds.
+#
+# It did not even survive to be split. The recreate KILLED the suite at case 67:
+# sad.EvalRun 27 still reads status=Running with FinishedAt NULL and 67 of 100
+# case results, and no process remains on the host. A dead run that reports
+# itself as running is the worst of the three outcomes - it is neither a result
+# nor an obvious failure, and it will sit in that table until someone reads the
+# process list to find out it is gone.
+#
+# Nobody was careless. The deployer was told to deploy, the suite was running in
+# another session, and there was no signal between the two. This is that signal.
+#
+# Checked on the HOST rather than in the database, deliberately: a suite that has
+# crashed without writing a completion row would block deploys forever, whereas a
+# process either exists or it does not. The cost is that a suite running
+# somewhere other than this box is invisible here - a real gap, and a smaller one
+# than the alternative.
+# SELF AND PARENT EXCLUDED. The first version was `pgrep -f "eval_golden" | wc -l`
+# and it matched THE SHELL RUNNING THE CHECK, because on a login shell the
+# pattern appears in that shell's own command line. Tested with a pattern
+# matching nothing at all and it still refused - a guard that always fires is a
+# guard nobody keeps.
+EVAL_PROCS=$(pgrep -f "eval_golden|run_golden_suite" 2>/dev/null              | grep -vx -e "$$" -e "${PPID:-0}" | wc -l)
+if [ "${EVAL_PROCS:-0}" -gt 0 ]; then
+    echo ""
+    echo "    REFUSING TO DEPLOY."
+    echo "    An evaluation suite is running on this host ($EVAL_PROCS process(es))."
+    echo ""
+    echo "    Recreating ai-service now would split that run across two images."
+    echo "    If the deploy also changes a grader, the halves are scored by"
+    echo "    different rules and the result cannot be compared with itself."
+    echo ""
+    echo "    Wait for it to finish. To see it:"
+    echo "      pgrep -af 'eval_golden|run_golden_suite'"
+    echo ""
+    echo "    If the suite is genuinely stale or you accept a split run, re-run"
+    echo "    with ALLOW_DURING_EVAL=1 - and record the split in EvalRun.Notes,"
+    echo "    because the next reader cannot see it from the number."
+    echo ""
+    [ "${ALLOW_DURING_EVAL:-0}" = "1" ] || exit 1
+    echo "    ALLOW_DURING_EVAL=1 - proceeding anyway."
+else
+    echo "    no evaluation suite running on this host"
+fi
+
 echo "==> 2. stage migrations where the database container can read them"
 sudo docker exec hub-sqlserver mkdir -p /database
 sudo docker cp database/. hub-sqlserver:/database/ >/dev/null
