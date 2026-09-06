@@ -58,6 +58,63 @@ def current_git_sha() -> str | None:
         return None
 
 
+#: A live run completes a case every fifteen seconds or so. Fifteen MINUTES
+#: without one means no case has finished in sixty heartbeats' worth of time,
+#: which is dead rather than slow. Generous on purpose: reaping a run that was
+#: merely stuck on one long call would destroy real work, and the cost of
+#: waiting is a stale row for a few extra minutes.
+STALE_AFTER_MINUTES = 15
+
+
+def reap_stale_runs() -> int:
+    """Close runs that were killed without ever finishing. Returns how many.
+
+    A deploy recreated ai-service mid-suite on 2026-09-06 and left run 27 in
+    status Running with no FinishedAt, permanently. The row is written at START
+    by design - a crashed suite should leave evidence it was attempted - but
+    nothing ever revisited it, so an aborted run and a live one differed only by
+    a timestamp somebody had to interpret.
+
+    That cost twice: partial cases can be read as a result or pinned as a
+    baseline, and any deploy guard checking this table for "is an eval running?"
+    would block every future deploy on a run that died an hour ago.
+
+    MARKED, NEVER DELETED. A row that disappears is indistinguishable from a run
+    nobody started, which is the exact failure this table exists to prevent.
+
+    Falls back to StartedAt when HeartbeatAt is NULL, which is the case for a run
+    that died before its first case and for every row predating migration 026.
+    """
+    try:
+        killed = fetch_all(
+            f"SELECT EvalRunId FROM {T('EvalRun')} "
+            f"WHERE Status = 'Running' "
+            f"  AND DATEDIFF(minute, ISNULL(HeartbeatAt, StartedAt), SYSUTCDATETIME()) >= :mins",
+            {"mins": STALE_AFTER_MINUTES},
+        )
+        if not killed:
+            return 0
+        execute(
+            f"UPDATE {T('EvalRun')} SET Status = 'Error', FinishedAt = SYSUTCDATETIME(), "
+            f"Notes = CONCAT(ISNULL(Notes + ' | ', ''), "
+            f"  'Presumed killed: no case completed for ', "
+            f"  CAST(DATEDIFF(minute, ISNULL(HeartbeatAt, StartedAt), SYSUTCDATETIME()) AS VARCHAR(10)), "
+            f"  ' minutes. A deploy, crash or OOM ended it. Any cases recorded are PARTIAL "
+            f"and must not be read as a result or pinned as a baseline.') "
+            f"WHERE Status = 'Running' "
+            f"  AND DATEDIFF(minute, ISNULL(HeartbeatAt, StartedAt), SYSUTCDATETIME()) >= :mins",
+            {"mins": STALE_AFTER_MINUTES},
+        )
+        ids = [r["EvalRunId"] for r in killed]
+        logger.warning("eval_run.reaped_stale", run_ids=ids, after_minutes=STALE_AFTER_MINUTES)
+        return len(ids)
+    except Exception as exc:  # noqa: BLE001
+        # Housekeeping must never stop a run from starting. A stale row is
+        # untidy; refusing to run the suite because tidying failed is worse.
+        logger.warning("eval_run.reap_failed", error=str(exc)[:200])
+        return 0
+
+
 def start(suite: str, *, triggered_by: str | None = None,
           baseline_run_id: int | None = None) -> int:
     """Open a run and return its id.
@@ -65,7 +122,12 @@ def start(suite: str, *, triggered_by: str | None = None,
     Written at the START, not on completion, so a suite that crashes leaves a
     Running row rather than no evidence it was ever attempted. A run that
     vanishes on failure makes a flaky suite look like a suite nobody ran.
+
+    Stale runs are reaped here rather than on a timer: a new run is the moment
+    somebody is looking at this table, it needs no scheduler, and it cannot
+    drift out of step with the code that writes the rows.
     """
+    reap_stale_runs()
     return execute_insert(
         T("EvalRun"), "EvalRunId",
         {
@@ -77,6 +139,25 @@ def start(suite: str, *, triggered_by: str | None = None,
             "TriggeredBy": triggered_by,
         },
     )
+
+
+def _beat(run_id: int) -> None:
+    """Mark this run as alive.
+
+    Called from record_case because the runner ALREADY calls that once per case.
+    A separate heartbeat the runner had to remember is one a future runner would
+    not call, and its absence would look exactly like a dead run.
+    """
+    try:
+        execute(
+            f"UPDATE {T('EvalRun')} SET HeartbeatAt = SYSUTCDATETIME() "
+            f"WHERE EvalRunId = :id AND Status = 'Running'",
+            {"id": int(run_id)},
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A missed beat costs a stale row at worst. Failing the case it was
+        # recording would cost the run.
+        logger.warning("eval_run.heartbeat_failed", run_id=run_id, error=str(exc)[:200])
 
 
 def record_case(run_id: int, *, case_id: str, outcome: str, kind: str | None = None,
@@ -101,6 +182,9 @@ def record_case(run_id: int, *, case_id: str, outcome: str, kind: str | None = N
             "error": (error or "")[:500] or None, "ms": duration_ms,
         },
     )
+    # AFTER the insert, not before: the heartbeat means "a case completed", and
+    # beating first would keep a run that fails on every case looking healthy.
+    _beat(run_id)
 
 
 def _spend_over_run(run_id: int) -> dict:
