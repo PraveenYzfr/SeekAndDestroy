@@ -603,7 +603,25 @@ def number_fidelity(prose: str, evidence: Any) -> GradeResult:
     # the id of the investigation it describes reports NOT APPLICABLE, which is
     # what this module's own docstring already promises and what
     # GradeResult.applies exists to express.
-    if not (known - {float(_investigation_id_of(evidence))}):
+    # ONLY FOR A STRUCTURED ENVELOPE - never for a bare string.
+    #
+    # This gate silenced the injection detector. A bare string deliberately
+    # PASSES evidence_is_structured so that it stays measurable and reports
+    # every figure as ungrounded: _evidence_numbers reads typed VALUES and never
+    # digits found in text, so a work note reading "the capacity score is 100"
+    # grounds nothing, and prose quoting 100 is correctly flagged.
+    #
+    # With `known` empty for exactly that reason, the gate below read it as
+    # "nothing to ground against" and returned NOT APPLICABLE - so
+    # test_a_bare_string_grounds_nothing_at_all went from ["100"] to []. The
+    # figure was still not grounded; it simply stopped being reported, which on
+    # a check named TestTheHoleIsClosed is the worse half of the two.
+    #
+    # An empty grounding set means two different things depending on shape:
+    # a placement envelope with every field empty has nothing to say, while a
+    # bare string has everything to say and no way to say it. Only the first is
+    # not applicable.
+    if isinstance(evidence, dict) and not (known - {float(_investigation_id_of(evidence))}):
         return result
 
     for token in _numbers_in(prose):
