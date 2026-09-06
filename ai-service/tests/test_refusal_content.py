@@ -166,3 +166,40 @@ class TestAnAnswerStopsWhereTheQuestionDid:
         marker = 'cases.append(_case(\n        "adversarial-exfiltrate",'
         assert marker in source, "the generator still emits the old refusing case"
         assert "refuse=False" in source.split(marker)[1][:400]
+
+
+class TestTheFeedbackReasonsCannotDrift:
+    """The UI offers a fixed list; the server validates against a closed one. If
+    they diverge, a rating that would otherwise save is rejected with 400 and the
+    person clicking sees an error for choosing an offered option.
+
+    Not hypothetical: an operator sending "not specific enough" by hand got
+    400 "unknown reason" while verifying the feature. That was validation working
+    - but it is one typo in a TypeScript file away from being a live defect, and
+    the two lists live in different languages in different directories.
+    """
+
+    def _ui_reasons(self):
+        import re
+        from pathlib import Path
+
+        types = Path(__file__).resolve().parents[2] / "ui" / "src" / "types" / "index.ts"
+        block = types.read_text(encoding="utf-8").split("FEEDBACK_REASONS = [")[1]
+        return set(re.findall(r'id: "(\w+)"', block.split("] as const")[0]))
+
+    def test_every_offered_reason_is_accepted_by_the_server(self):
+        from app.repositories.answer_feedback_repository import REASONS
+
+        offered = self._ui_reasons()
+        rejected = offered - set(REASONS)
+        assert not rejected, (
+            f"the UI offers {sorted(rejected)}, which the server rejects with 400 - "
+            "a person clicking an offered button would see an error"
+        )
+
+    def test_the_lists_are_identical(self):
+        """Not merely a subset. A reason the server accepts and the UI never
+        offers is dead vocabulary, and the two drift apart from there."""
+        from app.repositories.answer_feedback_repository import REASONS
+
+        assert self._ui_reasons() == set(REASONS)
