@@ -151,6 +151,76 @@ fi
 git pull --ff-only
 echo "    now at $(git rev-parse --short HEAD): $(git log -1 --format=%s)"
 
+echo "==> 1b. VERSION DIRECTION - a pin must never move a stateful service BACKWARDS"
+# WHY THIS EXISTS
+#
+# 8d2a748 pinned three floating images, which was right - :latest means a
+# redeploy can silently change versions and nothing in the repo records what it
+# resolved to. Two of the three pins matched what was running. The third set
+# grafana to 11.5.1 while production was on 13.2.1: two major versions back, on
+# the one service in that commit that keeps state.
+#
+# The pin recorded an INTENTION where it needed an OBSERVATION. Nothing read the
+# running version before writing the number down, and 11.5.1 is exactly the
+# shape of a version somebody recalls rather than checks.
+#
+# It matters here and not for prometheus or alertmanager because Grafana
+# migrates its SQLite schema FORWARD and has no downgrade path. An older binary
+# opening a newer grafana.db can refuse to start or damage it - and that volume
+# holds the dashboards, the datasources, and an admin password this file
+# elsewhere notes is only ever applied at FIRST INIT. Losing it is a rebuild,
+# not a restart.
+#
+# So: compare the tag about to be deployed against the tag actually running, and
+# REFUSE on a downgrade. Forward moves are allowed silently; that is an upgrade
+# and it is the normal case.
+#
+# Deliberately AFTER the pull, so it reads the compose file that is about to be
+# used, and BEFORE any build or recreate, so a refusal costs nothing.
+STATEFUL_SERVICES="grafana prometheus"
+for svc in $STATEFUL_SERVICES; do
+    container=$(sudo docker ps -a --filter "name=docker-${svc}-1" --format "{{.Names}}" | head -1)
+    [ -z "$container" ] && continue
+
+    running=$(sudo docker inspect -f "{{.Config.Image}}" "$container" 2>/dev/null | sed "s/.*://")
+    wanted=$(awk -v s="  ${svc}:" '$0==s{f=1} f&&/image:/{sub(/.*:/,"");print;exit}' "$REPO/docker/docker-compose.yml")
+
+    # A tag that is not a version - "latest", a digest, an empty read - cannot be
+    # ordered, so it cannot be checked. Said out loud rather than passed over:
+    # an unpinned stateful service is the condition this guard was written for,
+    # and silence would read as approval.
+    case "$running$wanted" in
+        *[!0-9.v]*|"") echo "    $svc: cannot compare '$running' -> '$wanted', not both versions - SKIPPED"; continue ;;
+    esac
+    [ "$running" = "$wanted" ] && { echo "    $svc: $running (unchanged)"; continue; }
+
+    # sort -V orders versions. If the wanted tag sorts FIRST, it is older.
+    older=$(printf "%s
+%s
+" "${running#v}" "${wanted#v}" | sort -V | head -1)
+    if [ "$older" = "${wanted#v}" ]; then
+        echo ""
+        echo "    REFUSING TO DEPLOY."
+        echo "    $svc would go BACKWARDS: running $running, compose says $wanted."
+        echo ""
+        echo "    $svc keeps state. An older binary opening a newer database can"
+        echo "    refuse to start or damage it, and there is no downgrade migration."
+        echo ""
+        echo "    If the downgrade is deliberate, back up the volume first:"
+        echo "      sudo docker run --rm -v ${svc}_data:/d -v \$PWD:/b alpine tar czf /b/${svc}-backup.tgz /d"
+        echo "    then re-run with ALLOW_DOWNGRADE=1."
+        echo ""
+        echo "    If it is not deliberate - and it was not last time - read the"
+        echo "    running version and pin THAT:"
+        echo "      sudo docker inspect -f '{{.Config.Image}}' $container"
+        echo ""
+        [ "${ALLOW_DOWNGRADE:-0}" = "1" ] || exit 1
+        echo "    ALLOW_DOWNGRADE=1 - proceeding anyway."
+    else
+        echo "    $svc: $running -> $wanted (forward)"
+    fi
+done
+
 echo "==> 2. stage migrations where the database container can read them"
 sudo docker exec hub-sqlserver mkdir -p /database
 sudo docker cp database/. hub-sqlserver:/database/ >/dev/null
