@@ -142,16 +142,56 @@ def start(suite: str, *, triggered_by: str | None = None,
 
 
 def _beat(run_id: int) -> None:
-    """Mark this run as alive.
+    """Mark this run as alive, and keep its tally current.
 
     Called from record_case because the runner ALREADY calls that once per case.
     A separate heartbeat the runner had to remember is one a future runner would
     not call, and its absence would look exactly like a dead run.
+
+    THE TALLY IS UPDATED HERE FOR THE SAME REASON THE BEAT IS.
+
+    CasesTotal was written only by complete(), so a run that did not complete
+    reported ZERO cases however much work it had done. Run 39 was aborted after
+    51 cases and read:
+
+        run 39  Error  cases=0  passed=0        with 51 EvalCaseResult rows
+
+    Praveen read that as a run that failed instantly. It had run for ten minutes.
+    A row saying zero when the answer is fifty-one is not missing information -
+    it is wrong information, and it is the shape this codebase keeps being caught
+    by: absent reported as a value.
+
+    Counted from EvalCaseResult rather than incremented, so the tally cannot
+    drift from the rows it describes - a retried case or a lost UPDATE corrects
+    itself on the next beat instead of accumulating an error. One extra COUNT per
+    case, on a table with a hundred rows, inside an UPDATE that was happening
+    anyway.
+
+    complete() still writes the final figures. It agrees with this one, and where
+    it does not, its numbers win: it is the only place that knows a run FINISHED
+    rather than stopped.
     """
     try:
         execute(
-            f"UPDATE {T('EvalRun')} SET HeartbeatAt = SYSUTCDATETIME() "
-            f"WHERE EvalRunId = :id AND Status = 'Running'",
+            f"UPDATE r SET HeartbeatAt = SYSUTCDATETIME(), "
+            f"    CasesTotal   = c.total, "
+            f"    CasesPassed  = c.passed, "
+            f"    CasesFailed  = c.failed, "
+            f"    CasesSkipped = c.skipped "
+            f"FROM {T('EvalRun')} r "
+            f"CROSS APPLY ( "
+            f"    SELECT COUNT(*) AS total, "
+            # UPPER() rather than matching the stored casing. The rows say 'Passed'
+            # and 'Failed'; SQL Server's default collation here is
+            # case-insensitive so a lowercase literal happens to work, and a
+            # tally that silently depends on a server collation setting is a
+            # tally that reads zero on a differently-configured box.
+            f"           SUM(CASE WHEN UPPER(Outcome) = 'PASSED'  THEN 1 ELSE 0 END) AS passed, "
+            f"           SUM(CASE WHEN UPPER(Outcome) = 'FAILED'  THEN 1 ELSE 0 END) AS failed, "
+            f"           SUM(CASE WHEN UPPER(Outcome) = 'SKIPPED' THEN 1 ELSE 0 END) AS skipped "
+            f"    FROM {T('EvalCaseResult')} WHERE EvalRunId = r.EvalRunId "
+            f") c "
+            f"WHERE r.EvalRunId = :id AND r.Status = 'Running'",
             {"id": int(run_id)},
         )
     except Exception as exc:  # noqa: BLE001
