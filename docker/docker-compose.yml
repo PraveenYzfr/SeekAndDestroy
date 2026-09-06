@@ -321,7 +321,11 @@ services:
       hub:
         aliases: ["prometheus"]
     profiles: ["observability"]
-    image: prom/prometheus:latest
+    #: PINNED. All three observability images were :latest, so a redeploy could
+    #: change the version under a configuration written for the previous one -
+    #: silently, at whatever moment the image happened to be pulled, with no
+    #: commit to point at afterwards.
+    image: prom/prometheus:v3.1.0
     # Loopback only - Prometheus has no auth and its /api/v1/query endpoint
     # will answer anyone who asks.
     ports:
@@ -330,6 +334,30 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
+    # RETENTION. There was no `command:` block at all, so Prometheus ran on the
+    # image default of 15 DAYS while the agreed figure was 30 - a month of
+    # history that quietly did not exist, and the kind of gap only discovered by
+    # going to look for last month's data and finding half of it.
+    #
+    # TRAP, and the reason this is not a one-line addition: adding `command:`
+    # REPLACES the image's own default arguments. --config.file must be given
+    # back explicitly or Prometheus starts with no configuration, finds no
+    # scrape targets and no rules, and comes up perfectly healthy scraping
+    # nothing.
+    #
+    # Two ceilings, not one. retention.size binds first if cardinality grows,
+    # so an explosion in series costs old data rather than the disk - and a full
+    # disk on this VM takes SQL Server and the vector store down with it, which
+    # is a far worse outcome than a short history. 2GB against a measured
+    # estimate of ~0.4GB for 30 days at the current 1,243 active series.
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=2GB
+      # Lets the config be reloaded with a POST to /-/reload instead of a
+      # restart, which loses no data and no scrape continuity.
+      - --web.enable-lifecycle
     # No depends_on ai-service/api-gateway on purpose - this profile must work
     # standalone (--profile observability without --profile core). Prometheus
     # just retries scraping until a target exists; a target being down shows
@@ -337,7 +365,8 @@ services:
 
   alertmanager:
     profiles: ["observability"]
-    image: prom/alertmanager:latest
+    #: Pinned with prometheus - see the note there.
+    image: prom/alertmanager:v0.28.0
     networks:
       default:
       hub:
@@ -359,7 +388,10 @@ services:
       hub:
         aliases: ["grafana"]
     profiles: ["observability"]
-    image: grafana/grafana:latest
+    #: Pinned with prometheus - see the note there. Grafana in particular
+    #: writes its admin password into grafana_data on FIRST INIT ONLY, so a
+    #: version change that recreates the volume silently resets that too.
+    image: grafana/grafana:11.5.1
     ports:
       - "127.0.0.1:3000:3000"
     environment:
