@@ -437,10 +437,31 @@ echo "==> 3b. GRANTS - a created table is not a writable one"
 }
 
 echo "==> 4. build and restart the application containers"
+# THE COMMIT, STAMPED INTO THE IMAGE.
+#
+# The image ships no .git, so `git rev-parse` inside the container returns
+# nothing and sad.EvalRun.GitSha was empty on every containerised run - on rows
+# that recorded model config and cost perfectly. A run history that can say the
+# score moved but not what moved it fails at the one question it exists for.
+#
+# PASSED THROUGH sudo EXPLICITLY, NOT EXPORTED. `export SAD_BUILD_SHA=...`
+# followed by `sudo docker compose build` does NOT work: sudo runs with
+# env_reset, so the variable is stripped before compose interpolates
+# ${SAD_BUILD_SHA:-} and the build arg resolves to empty. That failure is
+# invisible - the build succeeds, the image is fine, and the column stays empty
+# exactly as it was, which reads as "this change did not land" rather than
+# "this change landed and sudo threw it away".
+#
+# Read from the VM's own checkout, which step 1 has already reset to
+# origin/main, so it is the sha of what is being BUILT rather than of whatever
+# the laptop happened to have.
+SAD_BUILD_SHA="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo "")"
+echo "    stamping image with sha ${SAD_BUILD_SHA:-(none - GitSha falls back to git)}"
+
 # --no-deps so restarting ai-service does not take sqlserver, qdrant or redis
 # with it. Those hold state this script is explicitly not touching.
 ( cd "$REPO/docker" \
-  && sudo docker compose build ai-service ai-indexer api-gateway ui \
+  && sudo SAD_BUILD_SHA="$SAD_BUILD_SHA" docker compose build ai-service ai-indexer api-gateway ui \
   && sudo docker run --rm --network hub docker-ui:latest nginx -t \
   && sudo docker compose up -d --no-deps ai-service ai-indexer api-gateway ui )
 
