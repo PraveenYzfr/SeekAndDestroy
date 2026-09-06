@@ -13,8 +13,8 @@
     {
       "id": 100,
       "type": "row",
-      "title": "AI quality - was the answer right",
-      "description": "Whether the platform is producing CORRECT answers. First because a wrong answer returned successfully is this platform's characteristic failure, and every panel below this one would call that healthy.",
+      "title": "AI quality and spend - was the answer right, and what did it cost",
+      "description": "Whether the platform is producing CORRECT answers, and what they cost. First because a wrong answer returned successfully is this platform's characteristic failure, and every panel below this one would call that healthy.\n\nSpend sits here rather than under operations because cost per answer is a property of the answer, and a model that got cheaper by getting worse is only visible when the two are read together.",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -303,150 +303,19 @@
       ]
     },
     {
-      "id": 101,
-      "type": "row",
-      "title": "AI operations - models, fallbacks, spend",
-      "description": "What the models are doing and what they cost. A degraded provider shows here BEFORE it shows as a quality problem above.",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 29
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 3,
-      "title": "Real LLM calls by provider/outcome",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 30
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_llm_calls_total[5m])) by (provider, outcome) or vector(0)",
-          "legendFormat": "{{provider}} [{{outcome}}]"
-        }
-      ],
-      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero model calls in the window."
-    },
-    {
-      "id": 4,
-      "title": "Real embedding calls by provider/outcome",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 30
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_embedding_calls_total[5m])) by (provider, outcome) or vector(0)",
-          "legendFormat": "{{provider}} [{{outcome}}]"
-        }
-      ],
-      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero embedding calls in the window."
-    },
-    {
-      "id": 5,
-      "title": "LLM fallback activations",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 38
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_llm_fallback_total[5m])) by (from_provider) or vector(0)",
-          "legendFormat": "from {{from_provider}}"
-        }
-      ],
-      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero fallbacks means every primary answered - the healthy state."
-    },
-    {
-      "id": 28,
-      "type": "timeseries",
-      "title": "Fallback activations by provider",
-      "description": "How often a primary provider failed and its backup answered. Sustained non-zero means a provider is degraded and the platform is quietly absorbing it - answers are still being produced, by a different model than the one configured.\n\nGrouped by from_provider, which is the metric's ONLY label. It grouped by 'provider' - a label that does not exist - so every provider collapsed into a single unlabelled series and the panel could not answer the question in its own title. The title said 'by role'; the metric is by provider.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 38
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (from_provider) (rate(sad_llm_fallback_total[15m])) or vector(0)",
-          "legendFormat": "{{from_provider}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 6,
-      "title": "Narration cache hit rate",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 38
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_narration_cache_total[5m])) by (result) or vector(0)",
-          "legendFormat": "{{result}}"
-        }
-      ],
-      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero cache events in the window."
-    },
-    {
-      "id": 7,
-      "title": "Spend-budget denials",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 46
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_budget_denied_total[5m])) by (namespace) or vector(0)",
-          "legendFormat": "{{namespace}}"
-        }
-      ],
-      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero budget denials is the healthy state."
-    },
-    {
       "id": 23,
       "type": "timeseries",
       "title": "Spend per hour by model",
-      "description": "Priced from sad.ModelPrice at the moment of each call, so a later price change does not rewrite history. Calls whose model has no price row appear as UNPRICED - a spend graph reading zero because a model was unknown is worse than one reading low, because the second is visibly incomplete.\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero spend. Read it beside 'Real LLM calls': zero spend WITH calls happening means the calls are unpriced, not that they were free.",
+      "description": "Priced from sad.ModelPrice at the moment of each call, so a later price change does not rewrite history. Calls whose model has no price row appear as UNPRICED - a spend graph reading zero because a model was unknown is worse than one reading low, because the second is visibly incomplete.\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero spend. Read it beside 'Real LLM calls': zero spend WITH calls happening means the calls are unpriced, not that they were free.\n\nPromoted from the operations section 2026-09-06, once every call priced again. It was held back deliberately while deepseek was unpriced - 37 of 63 calls returning no cost - because a spend panel missing the majority of traffic shows a plausible low number rather than an obviously broken one, and a plausible wrong number is the harder of the two to catch.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 8,
-        "x": 8,
-        "y": 46
+        "x": 0,
+        "y": 29
       },
       "targets": [
         {
@@ -470,16 +339,16 @@
       "id": 24,
       "type": "timeseries",
       "title": "Cost per investigation",
-      "description": "The number that decides whether a faster model is worth it. Latency and cost move together when roles are switched, and this is the half that shows up on a bill.\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero spend per investigation, subject to the same caveat as the panel beside it.",
+      "description": "The number that decides whether a faster model is worth it. Latency and cost move together when roles are switched, and this is the half that shows up on a bill.\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero spend per investigation, subject to the same caveat as the panel beside it.\n\nCost per investigation, beside the quality panels on purpose: a model that got cheaper by getting worse is only visible when both are read together.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 8,
-        "x": 16,
-        "y": 46
+        "x": 8,
+        "y": 29
       },
       "targets": [
         {
@@ -500,70 +369,135 @@
       }
     },
     {
-      "id": 102,
+      "id": 7,
+      "title": "Spend-budget denials",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 29
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_budget_denied_total[5m])) by (namespace) or vector(0)",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero budget denials is the healthy state.\n\nA denial is the budget control working. Sustained denials mean real work is being refused, which is a different problem from overspending."
+    },
+    {
+      "id": 101,
       "type": "row",
-      "title": "Platform - traffic and throughput",
-      "description": "The web tier. Healthy here says nothing about whether the answers were right, which is why it is last rather than first.",
+      "title": "AI operations - models, fallbacks, latency",
+      "description": "What the models are doing, and how long they take. A degraded provider shows here BEFORE it shows as a quality problem above.",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 70
+        "y": 35
       },
       "collapsed": false,
       "panels": []
     },
     {
-      "id": 8,
-      "title": "Investigations created by type",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 71
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(sad_investigations_total[5m])) by (investigation_type) or vector(0)",
-          "legendFormat": "{{investigation_type}}"
-        }
-      ],
-      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero investigations created in the window."
-    },
-    {
-      "id": 1,
-      "title": "HTTP request rate (ai-service)",
+      "id": 3,
+      "title": "Real LLM calls by provider/outcome",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 79
+        "y": 36
       },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total{job=\"ai-service\"}[5m])) by (handler, status)",
-          "legendFormat": "{{handler}} [{{status}}]"
+          "expr": "sum(rate(sad_llm_calls_total[5m])) by (provider, outcome) or vector(0)",
+          "legendFormat": "{{provider}} [{{outcome}}]"
         }
-      ]
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero model calls in the window."
     },
     {
-      "id": 2,
-      "title": "HTTP request rate (api-gateway)",
+      "id": 4,
+      "title": "Real embedding calls by provider/outcome",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 79
+        "y": 36
       },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_received_total{job=\"api-gateway\"}[5m])) by (code)",
-          "legendFormat": "status {{code}}"
+          "expr": "sum(rate(sad_embedding_calls_total[5m])) by (provider, outcome) or vector(0)",
+          "legendFormat": "{{provider}} [{{outcome}}]"
+        }
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero embedding calls in the window."
+    },
+    {
+      "id": 5,
+      "title": "LLM fallback activations",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 44
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_llm_fallback_total[5m])) by (from_provider) or vector(0)",
+          "legendFormat": "from {{from_provider}}"
+        }
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero fallbacks means every primary answered - the healthy state."
+    },
+    {
+      "id": 28,
+      "type": "timeseries",
+      "title": "Fallback activations by provider",
+      "description": "How often a primary provider failed and its backup answered. Sustained non-zero means a provider is degraded and the platform is quietly absorbing it - answers are still being produced, by a different model than the one configured.\n\nGrouped by from_provider, which is the metric's ONLY label. It grouped by 'provider' - a label that does not exist - so every provider collapsed into a single unlabelled series and the panel could not answer the question in its own title. The title said 'by role'; the metric is by provider.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 44
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (from_provider) (rate(sad_llm_fallback_total[15m])) or vector(0)",
+          "legendFormat": "{{from_provider}}",
+          "refId": "A"
         }
       ]
+    },
+    {
+      "id": 6,
+      "title": "Narration cache hit rate",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 44
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_narration_cache_total[5m])) by (result) or vector(0)",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero cache events in the window."
     },
     {
       "id": 103,
@@ -578,7 +512,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 54
+        "y": 52
       },
       "fieldConfig": {
         "defaults": {
@@ -614,7 +548,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 54
+        "y": 52
       },
       "fieldConfig": {
         "defaults": {
@@ -650,7 +584,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 62
+        "y": 60
       },
       "fieldConfig": {
         "defaults": {
@@ -674,6 +608,72 @@
       ]
     },
     {
+      "id": 102,
+      "type": "row",
+      "title": "Platform - traffic and throughput",
+      "description": "The web tier. Healthy here says nothing about whether the answers were right, which is why it is last rather than first.",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 68
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 8,
+      "title": "Investigations created by type",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 69
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(sad_investigations_total[5m])) by (investigation_type) or vector(0)",
+          "legendFormat": "{{investigation_type}}"
+        }
+      ],
+      "description": "\n\nReads a flat ZERO when nothing happened. It used to read 'No data', which is also what a metric that has never fired looks like - so a healthy system and a broken one rendered identically. Zero investigations created in the window."
+    },
+    {
+      "id": 1,
+      "title": "HTTP request rate (ai-service)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 77
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"ai-service\"}[5m])) by (handler, status)",
+          "legendFormat": "{{handler}} [{{status}}]"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "HTTP request rate (api-gateway)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 77
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_received_total{job=\"api-gateway\"}[5m])) by (code)",
+          "legendFormat": "status {{code}}"
+        }
+      ]
+    },
+    {
       "id": 106,
       "type": "timeseries",
       "title": "Host CPU",
@@ -686,7 +686,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 87
+        "y": 85
       },
       "fieldConfig": {
         "defaults": {
@@ -722,7 +722,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 87
+        "y": 85
       },
       "fieldConfig": {
         "defaults": {
@@ -758,7 +758,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 95
+        "y": 93
       },
       "fieldConfig": {
         "defaults": {
