@@ -36,6 +36,7 @@ from app.graph import scope
 from app.agents.mock_llm import MockChatModel
 from app.forecasting.engine import forecast_cluster
 from app.agents import query_capability
+from app.services import incident_lookup
 from app.graph.state import InfrastructureRecommendationState
 from app.config import get_settings
 from app.models.enums import (
@@ -1184,6 +1185,34 @@ def generate_recommendation_explanations(state: InfrastructureRecommendationStat
         return {"recommendation_explanations": explanations}
 
     if itype == InvestigationType.QUESTION:
+        #  AN INCIDENT NUMBER HAS A RECORD. USE IT.
+        #
+        #  "Explain INC1008138" had no engine behind it, so it degraded to
+        #  retrieval: the indexed text was found, a model narrated it, and the
+        #  reporting chain - handed an empty evidence envelope and still asked
+        #  for a recommendation shape - filled the gaps with invention. It
+        #  advised monitoring a NIC and updating documentation for a ticket that
+        #  had closed months earlier.
+        #
+        #  The prose was never the problem. A narration of retrieved text cannot
+        #  produce a Severity, a duration or a resolution status; it can only
+        #  produce sentences that mention them. Reading the row can.
+        #
+        #  Checked BEFORE retrieval rather than after, for the same reason the
+        #  override-framing guard is: a path that runs second only gets to
+        #  re-word whatever the first one already decided.
+        incident_number = incident_lookup.find_incident_number(state["user_query"])
+        if incident_number:
+            report = incident_lookup.build_incident_report(
+                incident_number, investigation_id=state.get("investigation_id")
+            )
+            #  None means NO SUCH RECORD, and that is not the same as "this
+            #  incident does not exist" - it may live in another system, or the
+            #  number may be mistyped. Falling through to the normal path is the
+            #  honest response; asserting absence is not.
+            if report is not None:
+                return {"final_report": report, "recommendation_explanations": []}
+
         context = state.get("retrieved_context", [])
         # A rejection question gets its own, shorter path. The general grounded-QA
         # prompt has no length instruction, so it writes an essay - which is why
@@ -1620,6 +1649,17 @@ def _review_option(candidate: dict) -> dict:
 def generate_final_report(state: InfrastructureRecommendationState) -> dict:
     itype = state["investigation_type"]
     investigation_id = state.get("investigation_id")
+
+    #  ALREADY ANSWERED FROM A RECORD - do not narrate over it.
+    #
+    #  The incident path builds every field from the incident row. Running the
+    #  reporting chain on top would ask a model to improve figures it is not
+    #  allowed to decide, and would refill exactly the sections that were
+    #  emptied on purpose: an incident lookup has no top_recommendation, and a
+    #  closed ticket has no risks and no next steps.
+    existing = state.get("final_report")
+    if existing:
+        return {"final_report": existing}
 
     if itype == InvestigationType.REFUSED:
         report = {

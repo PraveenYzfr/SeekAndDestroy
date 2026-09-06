@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models.entities import Incident
+from app.models.entities import Incident, IncidentComment
 from app.repositories.base import T, fetch_all
 
 
@@ -137,3 +137,61 @@ def closed_since(since, last_id: int = 0, limit: int = 500) -> list[Incident]:
             max_rows=limit,
         )
     return [Incident(**r) for r in rows]
+
+
+def get_by_number(number: str) -> Incident | None:
+    """One incident by its ticket number, or None.
+
+    WHY THIS DID NOT EXIST UNTIL NOW, which is the interesting part.
+
+    "Explain INC1008138" had no engine behind it. There was no way to fetch an
+    incident by the identifier a person actually types, so the question fell
+    through to retrieval - which found the incident's indexed text, handed it to
+    a model, and got a fluent paragraph back. That paragraph was correct. The
+    report built around it was not: with no structured evidence, the reporting
+    chain was still asked for a recommendation shape and filled
+    top_recommendation, risks and next_steps with plausible invention
+    ("continue to monitor the link", "update documentation with the hardware
+    replacement details") for a ticket closed months earlier.
+
+    This is the shape the plan calls out: a question type with no engine behind
+    it degrades to retrieval, and retrieval answers confidently. The fix is not
+    a better prompt - it is having a record to answer from.
+
+    Matched case-insensitively and trimmed, because the number arrives from a
+    person's typing. Not a LIKE: a number is exact, and a prefix match would
+    make INC100 return whatever INC1008138 happened to sort first.
+    """
+    cleaned = (number or "").strip().upper()
+    if not cleaned:
+        return None
+    rows = fetch_all(
+        f"SELECT TOP (2) * FROM {T('Incident')} WHERE UPPER(Number) = :n",
+        {"n": cleaned},
+    )
+    #  Exactly one, or nothing. Number has no unique constraint in the schema,
+    #  and answering "here are the facts of INC1008138" from an arbitrary one of
+    #  two rows would be worse than declining - the reader cannot tell.
+    if len(rows) != 1:
+        return None
+    return Incident(**rows[0])
+
+
+def comments_for(incident_id: int, limit: int = 50) -> list[IncidentComment]:
+    """The work-note timeline for one incident, oldest first.
+
+    ATTACKER-WRITABLE TEXT. Anyone who can touch a ticket can write these, and
+    this platform's whole grounding rule is that a figure in prose is not
+    evidence. So these are shown as QUOTED TIMELINE ENTRIES attributed to their
+    author, never parsed for facts and never used to derive a field. The
+    structured columns on the incident are the record; this is testimony about
+    it.
+    """
+    rows = fetch_all(
+        f"""
+        SELECT TOP (:limit) * FROM {T('IncidentComment')}
+        WHERE IncidentId = :id ORDER BY Sequence ASC
+        """,
+        {"id": incident_id, "limit": limit},
+    )
+    return [IncidentComment(**r) for r in rows]
