@@ -597,6 +597,65 @@ def run_investigation(*, query: str, created_by: int, conversation_id: str | Non
     return answered({**_summarize(result), "conversation_id": conversation_id})
 
 
+def _report_after_decision(report: dict | None, *, decision: str,
+                           cluster: str | None, host: str | None) -> dict | None:
+    """Correct a report that was written BEFORE the reviewer chose.
+
+    THE DEFECT THIS FIXES, reported from production. The reviewer approved
+    den-p097 / den-p097-NODE-03. The report on screen still read:
+
+        Top recommendation: Cluster cmh-p225 (Columbus-DC1)
+        Next steps: Allocate the required 4 CPU cores ... on cluster cmh-p225.
+                    Update the application deployment manifest to target the
+                    cmh-p225 cluster code.
+
+    The shortlist knew - den-p097 said Approved, everything else said Superseded.
+    The REPORT did not, because it is generated once during the investigation and
+    never revisited. So the platform issued written instructions to deploy onto a
+    cluster the reviewer had just rejected.
+
+    DETERMINISTIC, NOT REGENERATED. Which candidate was chosen is a FACT the
+    platform owns, not something to ask a model about - the same boundary that
+    stops the LLM computing a score. Re-narrating would cost a call, add latency
+    to a click, and could drift from the decision it was meant to describe.
+
+    The model's own prose is KEPT AND LABELLED rather than edited. Rewriting
+    sentences it wrote would produce text nobody authored and nobody checked; the
+    honest thing is to say plainly that the analysis below preceded the decision.
+    """
+    if not report or not isinstance(report, dict):
+        return report
+    corrected = dict(report)
+    chosen = " / ".join(p for p in (cluster, host) if p)
+
+    if decision == "Approve" and chosen:
+        previous = (report.get("top_recommendation") or "").strip()
+        corrected["top_recommendation"] = chosen
+        # The steps named the ranked winner. They are instructions, so a stale
+        # one is worse than none: it tells somebody to build on the wrong box.
+        corrected["next_steps"] = [
+            f"Place the workload on {chosen}.",
+            "Confirm the target capacity figures on that candidate before allocating.",
+        ]
+        note = f"REVIEWER SELECTED {chosen}."
+        if previous and previous.lower() not in chosen.lower():
+            note += (
+                f" The analysis below was written before that choice and ranked "
+                f"{previous} highest; it is retained as the reasoning that was "
+                f"available at the time, not as current advice."
+            )
+        corrected["executive_summary"] = note + "\n\n" + (report.get("executive_summary") or "")
+    elif decision != "Approve":
+        corrected["top_recommendation"] = None
+        corrected["next_steps"] = ["No placement was approved from this shortlist."]
+        corrected["executive_summary"] = (
+            f"REVIEWER DECISION: {decision}. No candidate below was accepted. The "
+            "analysis is retained as the reasoning that was available at the time.\n\n"
+            + (report.get("executive_summary") or "")
+        )
+    return corrected
+
+
 def resume_investigation(
     *, investigation_id: int, decision: str, reviewer_employee_id: int, comments: str | None,
     selected_cluster_code: str | None = None, selected_host_name: str | None = None,
@@ -629,7 +688,14 @@ def resume_investigation(
             + (f", {chosen}." if chosen else "."),
             investigation_id=investigation_id,
         )
-    return {**_summarize(result), "conversation_id": conversation_id}
+    summary = _summarize(result)
+    # The report was written before this decision existed. Left alone it keeps
+    # recommending, in writing, the candidate the reviewer just rejected.
+    summary["final_report"] = _report_after_decision(
+        summary.get("final_report"), decision=decision,
+        cluster=selected_cluster_code, host=selected_host_name,
+    )
+    return {**summary, "conversation_id": conversation_id}
 
 
 def get_investigation_state(investigation_id: int) -> dict | None:
