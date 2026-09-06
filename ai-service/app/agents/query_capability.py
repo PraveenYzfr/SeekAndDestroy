@@ -169,6 +169,48 @@ DATACENTRE_WORDS: tuple[str, ...] = (
 _INFLECTIONS = ("", "s", "es", "ing")
 
 
+#: Estate identifiers, blanked before any word in this module is looked for.
+#:
+#: EVERY NODE IN THIS ESTATE IS NAMED "<cluster>-NODE-nn", AND "node" IS BOTH A
+#: RUNTIME LANGUAGE AND AN INFRASTRUCTURE NOUN. So "cmh-p234-NODE-01 is not an
+#: ideal choice?" - a question about one host - first came back "I cannot filter
+#: by runtime language"; once that was fixed it was STILL intercepted, now as a
+#: vague infrastructure fragment. Both times the hyphens either side of NODE
+#: acted as word boundaries and a boundary-aware match fired on the hostname.
+#:
+#: Word boundaries were the right fix for "java" inside "javadoc". They cannot
+#: help here: the token IS a whole word, it is simply part of an identifier
+#: rather than a request. The only reliable separator is what the string
+#: DENOTES, so identifiers are removed before any question is read.
+#:
+#: FOURTH TIME THIS CLASS HAS BITTEN: "app" matched "apply", "report" matched
+#: "reporting service", "node" matched every host we own in the attribute
+#: matcher - and then "node" matched every host we own again one function away.
+#: Fixing the first site and leaving the shared primitive is what bought the
+#: fourth, which is why this now lives below mentions_any rather than beside
+#: the single function that had been repaired.
+_IDENTIFIER_RE = re.compile(
+    r"\b[A-Z]{2,}-[A-Z0-9-]+\b"          # APP-CRM, APP-RISK-WORKER1135
+    r"|\b[a-z]{3}-p?\d+(?:-node-\d+)?\b"  # cmh-p234, cmh-p234-NODE-01, atl-03
+    r"|\b(?:INC|CHG|PRB)\d+\b",
+    re.IGNORECASE,
+)
+
+
+def strip_identifiers(text: str) -> str:
+    """``text`` with estate identifiers blanked out.
+
+    A cluster code, a node name, an application code or an incident number is a
+    thing being asked ABOUT. It is never vocabulary the asker chose, so no word
+    inside one may decide how their question is routed.
+
+    Public on purpose. Every reader of estate vocabulary needs it, and the
+    fourth instance of this bug happened because the mask was private to the one
+    function that had been fixed.
+    """
+    return _IDENTIFIER_RE.sub(" ", text)
+
+
 def mentions_any(query: str, words: tuple[str, ...]) -> bool:
     """Whether the query uses any of ``words`` AS WORDS, not as substrings.
 
@@ -185,6 +227,13 @@ def mentions_any(query: str, words: tuple[str, ...]) -> bool:
     Bounded at BOTH ends, with a closed set of inflections between - so "app"
     matches "app", "apps" and "hosting" matches "host", while "apply",
     "apparently" and "happened" match nothing.
+
+    IDENTIFIERS ARE BLANKED FIRST, for the same reason one level down. A word
+    boundary cannot tell "node" the noun from the NODE in a hostname, because
+    there it IS a whole word - see strip_identifiers. Stripping HERE rather than
+    at each call site is deliberate: two callers read estate vocabulary through
+    this function, one was fixed alone, and the same bug was still live in the
+    other on the same day.
     """
     forms = {
         f"{w}{suffix}"
@@ -194,30 +243,9 @@ def mentions_any(query: str, words: tuple[str, ...]) -> bool:
         if " " not in w or suffix == ""
     }
     alternatives = "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
-    return bool(re.search(rf"\b(?:{alternatives})\b", query, re.IGNORECASE))
-
-
-#: Estate identifiers, blanked before any attribute term is looked for.
-#:
-#: EVERY NODE IN THIS ESTATE IS NAMED "<cluster>-NODE-nn", AND "node" IS A
-#: RUNTIME LANGUAGE. So "cmh-p234-NODE-01 is not an ideal choice?" - a question
-#: about one host - came back "I cannot filter by runtime language", because the
-#: hyphens either side of NODE are word boundaries and the boundary-aware match
-#: fired on the hostname.
-#:
-#: Word boundaries were the right fix for "java" inside "javadoc". They cannot
-#: help here: the token IS a whole word, it is simply part of an identifier
-#: rather than a request. The only reliable separator is what the string
-#: denotes, so identifiers are removed before the question is read.
-#:
-#: THIRD TIME THIS CLASS HAS BITTEN: "app" matched "apply", "report" matched
-#: "reporting service", now "node" matches every host we own.
-_IDENTIFIER_RE = re.compile(
-    r"\b[A-Z]{2,}-[A-Z0-9-]+\b"          # APP-CRM, APP-RISK-WORKER1135
-    r"|\b[a-z]{3}-p?\d+(?:-node-\d+)?\b"  # cmh-p234, cmh-p234-NODE-01, atl-03
-    r"|\b(?:INC|CHG|PRB)\d+\b",
-    re.IGNORECASE,
-)
+    return bool(
+        re.search(rf"\b(?:{alternatives})\b", strip_identifiers(query), re.IGNORECASE)
+    )
 
 
 def unmodelled_attribute(query: str) -> UnmodelledAttribute | None:
@@ -227,7 +255,7 @@ def unmodelled_attribute(query: str) -> UnmodelledAttribute | None:
     number is a thing being asked ABOUT, never a filter being asked FOR, so an
     attribute term inside one is never a request for that attribute.
     """
-    lowered = _IDENTIFIER_RE.sub(" ", query).lower()
+    lowered = strip_identifiers(query).lower()
     for attribute in UNMODELLED_ATTRIBUTES:
         for term in attribute.terms:
             # Word boundaries: "java" must not match inside "javadoc", and

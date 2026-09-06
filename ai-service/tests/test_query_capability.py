@@ -269,3 +269,77 @@ class TestWordsNotSubstrings:
         from app.graph.nodes import quick_reply
 
         assert quick_reply("What happened in INC1009985?") is None
+
+
+class TestIdentifiersAreNotVocabulary:
+    """Every node in this estate is named "<cluster>-NODE-nn", and the hyphens
+    either side of NODE are word boundaries.
+
+    So the word-boundary matcher above - which was the right fix for "app"
+    inside "apply" - fired on the hostname itself. It bit twice. First in
+    unmodelled_attribute, where "node" is a RUNTIME LANGUAGE, so asking about
+    one host was answered "I cannot filter by runtime language". That was fixed
+    by masking identifiers inside that one function.
+
+    Then it bit again one function away, because "node" is ALSO in
+    _INFRA_INTENT_WORDS: the same query was intercepted as a vague
+    infrastructure fragment and answered "name the application or the resources"
+    - to somebody who had named a specific host.
+
+    The mask now lives in mentions_any, which both readers of estate vocabulary
+    go through, because fixing the first site and leaving the shared primitive
+    is exactly what produced the second.
+    """
+
+    def test_a_node_name_is_not_infrastructure_vocabulary(self):
+        from app.graph.nodes import _INFRA_INTENT_WORDS
+
+        assert not qc.mentions_any(
+            "cmh-p234-NODE-01 is not an ideal choice?",
+            _INFRA_INTENT_WORDS + qc.DATACENTRE_WORDS,
+        )
+
+    @pytest.mark.parametrize("text", [
+        "how many nodes in cmh-p234?",
+        "nodes in production",
+        "which cluster has capacity",
+    ])
+    def test_the_words_themselves_still_match(self, text):
+        """The mask removes identifiers, not vocabulary. "nodes" used as a word
+        is still a mention even when an identifier sits in the same sentence."""
+        from app.graph.nodes import _INFRA_INTENT_WORDS
+
+        assert qc.mentions_any(text, _INFRA_INTENT_WORDS + qc.DATACENTRE_WORDS)
+
+    @pytest.mark.parametrize("cluster_form, node_form", [
+        ("cmh-p234 is not an ideal choice?", "cmh-p234-NODE-01 is not an ideal choice?"),
+        ("why was cmh-p212 rejected?", "why was cmh-p212-NODE-04 rejected?"),
+        ("tell me about den-p097", "tell me about den-p097-NODE-11"),
+    ])
+    def test_a_node_question_routes_like_its_cluster_question(self, cluster_form, node_form):
+        """THE INVARIANT, and the reason this is a property rather than three
+        string assertions.
+
+        The same question about a cluster and about a host in that cluster took
+        different paths: the cluster form was investigated, the node form was
+        refused as too vague. Nothing about the QUESTION differed - only whether
+        the identifier happened to contain an infrastructure noun.
+
+        Asserting the pair agree survives the next shape of this; asserting the
+        one sentence that leaked would not.
+        """
+        from app.graph.nodes import quick_reply
+
+        assert quick_reply(node_form) == quick_reply(cluster_form)
+
+    def test_the_reported_query_reaches_the_graph(self):
+        """Verbatim, as Praveen asked it."""
+        from app.graph.nodes import quick_reply
+
+        assert quick_reply("cmh-p234-NODE-01 is not an ideal choice?") is None
+
+    def test_the_runtime_language_refusal_is_unchanged(self):
+        """The 49f61ed regression, re-asserted through the shared helper - the
+        mask moved, so this must be proved again rather than assumed."""
+        assert qc.unmodelled_attribute("cmh-p234-NODE-01 is not an ideal choice?") is None
+        assert qc.unmodelled_attribute("best dc for java apps") is not None
