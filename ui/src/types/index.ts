@@ -425,6 +425,16 @@ export interface RunInvestigationResult {
  *  rather than living in separate languages. Enforced server-side by
  *  CK_AnswerFeedback_Reason - this copy exists so the control can offer the
  *  real set rather than a free-text box nobody can aggregate. */
+/** FALLBACK ONLY. The server owns this list and the control fetches it from
+ *  /api/feedback/reasons; this is what renders if that call fails, so a person
+ *  can still say what was wrong when the endpoint is unreachable.
+ *
+ *  It is deliberately NOT the source of truth. Two hand-maintained copies in
+ *  two languages is how a reason gets added on one side only - the rating then
+ *  400s and the row silently does not save. Kept because a feedback control
+ *  with no reasons at all is worse than a slightly stale list, and going stale
+ *  costs a label, not a rejected rating: the ids are validated server-side
+ *  either way. */
 export const FEEDBACK_REASONS = [
   { id: "wrong_numbers", label: "A figure looked wrong" },
   { id: "wrong_entity", label: "Wrong cluster or application" },

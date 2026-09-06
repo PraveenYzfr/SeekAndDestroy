@@ -43,4 +43,15 @@ public sealed class InvestigationsController(IAiServiceClient aiServiceClient) :
     [HttpGet("{id:int}/feedback")]
     public async Task<IActionResult> GetMyFeedback(int id, CancellationToken ct) =>
         Ok(await aiServiceClient.GetMyAnswerFeedbackAsync(id, ct));
+
+    /// <summary>The reasons a rating may carry, served from the AI service so
+    /// the UI does not keep its own copy.
+    ///
+    /// Two hand-maintained lists in two languages is how a reason gets added on
+    /// one side only: the rating then 400s and the row silently does not save,
+    /// which is indistinguishable from the missing UPDATE grant that made this
+    /// table unwritable for a day.</summary>
+    [HttpGet("/api/feedback/reasons")]
+    public async Task<IActionResult> FeedbackReasons(CancellationToken ct) =>
+        Ok(await aiServiceClient.GetFeedbackReasonsAsync(ct));
 }

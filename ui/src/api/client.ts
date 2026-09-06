@@ -137,6 +137,16 @@ export const api = {
    *
    *  No employee id in the payload: the AI service takes it from the token, so
    *  nobody can rate as somebody else. */
+  /** The reasons a rating may carry, from the server.
+   *
+   *  The UI used to hold its own copy in types/index.ts. Both lists were
+   *  correct and nothing enforced they stayed correct together - a reason added
+   *  server-side and not here makes the rating 400 and the row silently not
+   *  save, which looks exactly like the missing UPDATE grant that made this
+   *  table unwritable for a day. */
+  getFeedbackReasons: () =>
+    request<{ reasons: { id: string; label: string }[] }>("/feedback/reasons"),
+
   submitAnswerFeedback: (
     investigationId: number,
     body: { rating: number; reason?: string | null; comment?: string | null; conversationId?: string | null },

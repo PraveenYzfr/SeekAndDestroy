@@ -64,6 +64,10 @@ public interface IAiServiceClient
     /// vote.</summary>
     Task<JsonNode?> GetMyAnswerFeedbackAsync(int investigationId, CancellationToken ct);
 
+    /// <summary>The reasons a rating may carry. Served from the AI service so
+    /// the UI keeps no copy of a list that must match the server's.</summary>
+    Task<JsonNode?> GetFeedbackReasonsAsync(CancellationToken ct);
+
     Task<JsonNode?> SubmitRecommendationDecisionAsync(int recommendationId, RecommendationDecisionRequestDto request, CancellationToken ct);
 
     /// <summary>Proxies to the AI service's own dev-token issuance

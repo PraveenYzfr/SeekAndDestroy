@@ -150,6 +150,48 @@ def submit_feedback(
     return {"investigation_id": investigation_id, "rating": payload.rating, "recorded": True}
 
 
+@router.get("/api/feedback/reasons")
+def feedback_reasons(current: AuthenticatedEmployee = Depends(get_current_employee)):
+    """The reasons a person may give for a rating, from the ONE place they are
+    defined.
+
+    The UI carried its own copy of this list. Both were correct, and nothing
+    enforced that they stayed correct together - a reason added on one side and
+    not the other makes the rating 400 and the row silently not save, which
+    looks exactly like the missing UPDATE grant that made this table unwritable
+    for a day.
+
+    That is the same shape as a deploy guard keyed on a process name written in
+    another file: a promise held by convention, with nothing failing when it
+    breaks. The fix in both cases is to make the check depend on something the
+    subject owns, so the copy cannot drift because there is no copy.
+
+    Ids are the contract and are never translated. Labels are display text and
+    live here rather than in the UI so that adding a reason is one change in one
+    file - the point of the endpoint.
+
+    Authenticated, like every other route on this router: the list is not
+    sensitive, and an unauthenticated exception would be one more path to
+    reason about for no gain.
+    """
+    from app.repositories.answer_feedback_repository import REASONS
+
+    labels = {
+        "wrong_numbers": "A figure looked wrong",
+        "wrong_entity": "Wrong cluster or application",
+        "missing_evidence": "Missing evidence",
+        "did_not_answer": "Did not answer the question",
+        "not_actionable": "Nothing I can act on",
+        "too_slow": "Too slow",
+        "other": "Something else",
+    }
+    # Driven from REASONS, not from the dict, so a reason added to the tuple
+    # appears immediately - with its id as the label if nobody wrote one. A
+    # missing label is a cosmetic gap; a missing OPTION is a person unable to
+    # say what was wrong.
+    return {"reasons": [{"id": r, "label": labels.get(r, r)} for r in REASONS]}
+
+
 @router.get("/api/investigations/{investigation_id}/feedback")
 def get_my_feedback(
     investigation_id: int,

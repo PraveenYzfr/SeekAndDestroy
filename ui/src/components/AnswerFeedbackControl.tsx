@@ -44,12 +44,25 @@ export default function AnswerFeedbackControl({
   //: an interrogation.
   const [detailOpen, setDetailOpen] = useState(false);
   const [saved, setSaved] = useState(false);
+  //: Fetched from the server, which owns the list. FEEDBACK_REASONS is the
+  //: fallback if that call fails - a control with no reasons is worse than a
+  //: slightly stale one, and staleness costs a label rather than a rejected
+  //: rating, because the ids are validated server-side either way.
+  const [reasons, setReasons] = useState<readonly { id: string; label: string }[]>(FEEDBACK_REASONS);
 
   useEffect(() => {
     let cancelled = false;
     // Render in the state this person left it. Without this the control resets
     // on every re-render and invites a second, contradictory vote from someone
     // who already voted.
+    api
+      .getFeedbackReasons()
+      .then((r) => {
+        if (!cancelled && r.reasons?.length) setReasons(r.reasons);
+      })
+      // Falling back to the bundled list is the point - see the state above.
+      .catch(() => undefined);
+
     api
       .getMyAnswerFeedback(investigationId)
       .then((existing) => {
@@ -134,7 +147,7 @@ export default function AnswerFeedbackControl({
         <div className="feedback-detail">
           <div className="stat-label">What went wrong? (optional)</div>
           <div className="feedback-reasons">
-            {FEEDBACK_REASONS.map((r) => (
+            {reasons.map((r) => (
               <button
                 type="button"
                 key={r.id}
