@@ -49,11 +49,19 @@
 name: Full suite
 
 on:
-  schedule:
-    # 02:00 UTC. Deliberately not "nightly" in local terms - this repository has
-    # already shipped a migration dated from the local clock that opened its
-    # window three hours in the future.
-    - cron: "0 2 * * *"
+  # MANUAL ONLY. There was a nightly 02:00 UTC schedule here and it was removed
+  # before it ever fired.
+  #
+  # A job nobody has watched should not run unattended, and this one starts a
+  # SQL Server, applies 27 migrations and loads a 78 MB seed on somebody else's
+  # minutes. Scheduling it first would have meant a red badge every morning for
+  # a workflow whose wall-clock nobody knows, plus a repository secret owed by
+  # the one person not writing any of this.
+  #
+  # To turn it on: add a CI_MSSQL_SA_PASSWORD repository secret (any invented
+  # password - the database it protects is created and destroyed inside the
+  # run), press Run workflow here, and watch it. Restore the schedule only
+  # after it has passed twice and the wall-clock is known.
   workflow_dispatch:
 
 permissions:
