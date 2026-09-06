@@ -328,9 +328,39 @@ echo "==> 1c. EVALUATION IN FLIGHT - a deploy must not move the ruler mid-measur
 # blocking every deploy on a run that ended hours ago. A heartbeat expires by
 # itself, so a killed suite stops blocking without anyone tidying up.
 #
-# HeartbeatAt IS NULL is the startup window: open_run writes the row BEFORE the
-# first case, so a suite that has not finished case one is running and has never
+# HeartbeatAt IS NULL is the startup window: the row is written before the first
+# case, so a suite that has not finished case one is running and has never
 # beaten. StartedAt covers it.
+#
+# THAT SENTENCE IS CONDITIONAL, AND IT USED TO READ AS AN INVARIANT.
+#
+# Two things were wrong with the version above. The function is repo.start(),
+# not open_run - a name that was never in the codebase, so nobody grepping for
+# it would find the thing this guard depends on. And the claim is true of the
+# CODE PATH while saying nothing about whether that path is reached:
+#
+#     record = args.record or bool(args.baseline)     # golden_runner.py
+#     if record:
+#         run_id = repo.start(...)                    # everything above is here
+#
+# Recording was opt-in. So the invocation everyone actually types -
+# `python -m app.evaluation.golden_runner` - wrote NO EvalRun ROW AT ALL. Not a
+# Running row, not a partial one: nothing. This guard then found nothing to
+# block on and passed, correctly and uselessly, while a hundred-case suite ran.
+#
+# It cost runs 27 and 40. I diagnosed it as a late write and told two sessions
+# the guard was blind; it was neither. The row is not late, it is absent, and
+# the guard's premise was sound for every run it could actually see.
+#
+# a2 has made recording the DEFAULT for a full-suite run (--no-record opts out,
+# --case stays unrecorded), which is what restores the premise. NOTE WHAT THAT
+# MEANS FOR THIS GUARD: it still cannot see an unrecorded run, and that is
+# accepted rather than overlooked. Matching the process name instead was
+# considered and rejected - see the paragraph above about a string living in
+# another file. That defect is not hypothetical here twice over: the "eval_golden"
+# pattern silently stopped matching when the runner moved into the package, and
+# an inspection script written while diagnosing THIS comment matched its own
+# cmdline, because its source contained the word it was searching for.
 EVAL_RUNNING=$(runq <<'SQL' 2>/dev/null | tr -d '[:space:]'
 SET NOCOUNT ON;
 SELECT COUNT(*) FROM sad.EvalRun
