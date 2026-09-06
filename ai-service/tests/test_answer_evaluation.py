@@ -172,7 +172,27 @@ class TestMissingIsNotZero:
         answer_evaluation.evaluate(
             question="q", result={"investigation_id": 1, "final_report": {"summary": "Coventry."}}
         )
-        assert set(captured[0]) == set(repo.COLUMNS)
+        missing = set(repo.COLUMNS) - set(captured[0])
+        assert not missing, (
+            f"columns absent from the row: {sorted(missing)} - a dict whose keys "
+            "depend on which branch ran is one a reader will eventually probe wrong"
+        )
+        # EXTRA KEYS ARE ALLOWED, and this assertion used to be an equality that
+        # forbade them. AttributionFidelity is computed per answer and
+        # deliberately NOT stored - sad.AnswerEvaluation has no such column - so
+        # it rides in the values dict for the metrics observer and is dropped by
+        # record(), which projects onto _COLUMNS.
+        #
+        # The property that matters is that nothing is MISSING. An absent column
+        # is a KeyError landing far from the branch that caused it; a present
+        # extra is inert.
+        extra = set(captured[0]) - set(repo.COLUMNS)
+        assert extra <= {"AttributionFidelity"}, (
+            f"unexpected keys not projected onto any column: {sorted(extra - {'AttributionFidelity'})}. "
+            "If one of these was meant to be stored, it needs a migration and a "
+            "line in _COLUMNS - computing a value and never storing it is how "
+            "the platform graded every answer and threw the verdict away."
+        )
 
 
 class TestSelfJudgingIsDisclosedNotExported:

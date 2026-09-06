@@ -103,6 +103,47 @@ def record_case(run_id: int, *, case_id: str, outcome: str, kind: str | None = N
     )
 
 
+def _spend_over_run(run_id: int) -> dict:
+    """What this run cost, summed from the calls it actually made.
+
+    SUMMED, NEVER RE-PRICED. Cost is computed at call time from sad.ModelPrice
+    and copied onto the audit row; re-deriving it here would let a price change
+    rewrite what last month's run cost.
+
+    UnpricedCalls is the reason this returns a dict rather than a number.
+    A run whose models had no price in force produces a cost that is a FLOOR,
+    not a total - and a small confident wrong figure is far harder to catch than
+    a zero. On 2026-09-06 deepseek was 37 of 63 live calls with none of them
+    priced; a run over that estate would have stored a plausible number missing
+    most of its own traffic.
+
+    Never raises. A run's VERDICT must not be lost because the accounting query
+    failed - the scores are the point and the spend is commentary on them.
+    """
+    empty = {"cost": None, "tin": None, "tout": None, "unpriced": 0}
+    try:
+        row = fetch_one(
+            f"SELECT SUM(a.CostUsd) AS CostUsd, "
+            f"       SUM(a.PromptTokens) AS TokensIn, "
+            f"       SUM(a.CompletionTokens) AS TokensOut, "
+            f"       SUM(CASE WHEN a.CostUsd IS NULL THEN 1 ELSE 0 END) AS Unpriced "
+            f"  FROM {T('AgentAuditLog')} a "
+            f"  JOIN {T('EvalRun')} r ON r.EvalRunId = :id "
+            f" WHERE a.StartedAt >= r.StartedAt "
+            f"   AND a.StartedAt <= ISNULL(r.FinishedAt, SYSUTCDATETIME())",
+            {"id": int(run_id)},
+        )
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        logger.warning("eval_run.spend_read_failed", run_id=run_id, error=str(exc)[:200])
+        return empty
+    if not row:
+        return empty
+    return {
+        "cost": row.get("CostUsd"), "tin": row.get("TokensIn"),
+        "tout": row.get("TokensOut"), "unpriced": int(row.get("Unpriced") or 0),
+    }
+
+
 def finish(run_id: int, *, status: str, totals: dict, hard_rate: float | None = None,
            judge_mean: float | None = None, judge_excluded: int = 0,
            notes: str | None = None) -> None:
@@ -111,18 +152,35 @@ def finish(run_id: int, *, status: str, totals: dict, hard_rate: float | None = 
     The verdict is stored, never re-derived. Thresholds change - they changed
     five times in one night while the graders were being fixed - and recomputing
     an old run under today's rules produces a verdict nobody ever acted on.
+
+    SPEND IS RECORDED HERE TOO, for the same reason and with the same rule.
+    Without it this table could show a run was BETTER and never whether it was
+    cheaper or slower - and for a model swap that is most of the decision.
+    "Worse but a third of the price" and "worse for no saving" are different
+    answers and the table could not tell them apart.
     """
+    spend = _spend_over_run(run_id)
     execute(
         f"UPDATE {T('EvalRun')} SET Status = :status, FinishedAt = SYSUTCDATETIME(), "
         f"CasesTotal = :total, CasesPassed = :passed, CasesFailed = :failed, "
         f"CasesSkipped = :skipped, HardCheckRate = :hard, JudgeMeanScore = :judge, "
-        f"JudgeExcluded = :excluded, Notes = :notes WHERE EvalRunId = :id",
+        f"JudgeExcluded = :excluded, Notes = :notes, "
+        f"CostUsd = :cost, TokensIn = :tin, TokensOut = :tout, "
+        f"UnpricedCalls = :unpriced, "
+        # Wall clock, not the sum of the calls. A run that parallelises and one
+        # that does not can burn identical model time and take very different
+        # amounts of somebody's afternoon - and the eval gate is something a
+        # person waits for.
+        f"DurationMs = DATEDIFF(millisecond, StartedAt, SYSUTCDATETIME()) "
+        f"WHERE EvalRunId = :id",
         {
             "id": run_id, "status": status,
             "total": totals.get("total", 0), "passed": totals.get("passed", 0),
             "failed": totals.get("failed", 0), "skipped": totals.get("skipped", 0),
             "hard": hard_rate, "judge": judge_mean, "excluded": judge_excluded,
             "notes": (notes or "")[:2000] or None,
+            "cost": spend["cost"], "tin": spend["tin"], "tout": spend["tout"],
+            "unpriced": spend["unpriced"],
         },
     )
 
