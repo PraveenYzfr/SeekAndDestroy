@@ -133,6 +133,14 @@ GROUNDED_QA_SYSTEM = SYSTEM_BASE + (
     "itself. \"The retrieved context contains no Java-specific information\" tells the reader "
     "about our plumbing; \"I have no record of which clusters host Java workloads\" tells them "
     "about their estate, which is what they asked."
+    "\n\nANSWER WHAT WAS ASKED AND STOP. The evidence you are given is retrieved by "
+    "similarity, so it routinely carries far more about an entity than the question "
+    "touched - where it runs, how large those clusters are, what else sits beside it. "
+    "Do NOT volunteer a field the reader did not ask for. Asked WHICH applications "
+    "exist, name them and stop: do not add the clusters they run on, the CPU, memory "
+    "or storage of those clusters, or their utilisation. Asked WHERE something runs, "
+    "name the cluster and stop. The reader can ask for the rest, and an answer that "
+    "pre-empts three questions they did not ask is harder to read than three answers."
 )
 
 REJECTION_ANSWER_SYSTEM = SYSTEM_BASE + (
