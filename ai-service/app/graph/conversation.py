@@ -407,6 +407,21 @@ def resolve(query: str, prior: Optional[PriorInvestigation]) -> Resolution:
     # once it is given it; BM25 tokenises msp-p194 to three sparse terms and
     # ranks its documents top. It was never the retriever that failed.
     carried = carry_subject(query, prior)
+    if carried is None:
+        # NOT via carry_subject, deliberately. That helper is shared with
+        # INHERIT_SUBJECT, and giving it a cluster changed CLASSIFICATION as
+        # well as wording: "what about staging?" stopped falling through to a
+        # question about the previous turn and became a fresh placement-shaped
+        # run scoped to a cluster that already exists. That is the same drift
+        # this fix exists to stop, arriving through the fix itself, and
+        # test_a_continuation_with_no_subject_to_inherit_becomes_a_question_
+        # about_the_previous_turn caught it.
+        #
+        # Appended only here, where the kind is already decided, so the cluster
+        # can reach retrieval without moving any turn between branches.
+        cluster = prior.cluster_subject
+        if cluster:
+            carried = f"{query} (about cluster {cluster})"
     return Resolution(
         kind=ABOUT_PREVIOUS, resolved_query=carried or query, prior=prior
     )
@@ -555,19 +570,6 @@ def carry_subject(query: str, prior: PriorInvestigation) -> Optional[str]:
     """
     if prior.application_code:
         return f"{query} (continuing the request to find hosting for {prior.application_code})"
-
-    # A CLUSTER IS A SUBJECT TOO. Checked after the application code because an
-    # application is the stronger referent - "find hosting for APP-CRM" is
-    # about the app, and the clusters are the answer, not the topic.
-    #
-    # The wording says "about", not "find hosting for", and that difference is
-    # load-bearing: classify_investigation_type reads these tokens, and phrasing
-    # this as a hosting request would turn "is it stable?" into a placement run
-    # for a cluster that already exists. It stays a Question and simply gains
-    # the noun it was missing.
-    cluster = prior.cluster_subject
-    if cluster:
-        return f"{query} (about cluster {cluster})"
 
     requirement = prior.requirement or {}
     cpu = requirement.get("cpu_cores")
