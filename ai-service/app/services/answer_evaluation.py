@@ -231,12 +231,18 @@ def _grade_deterministic(investigation_id: int | None) -> dict:
     """
     empty = {
         "NumberFidelity": None, "EntityFidelity": None, "Completeness": None,
+        "NumberFidelityAbsence": "not_evaluated", "EntityFidelityAbsence": "not_evaluated",
         "UngroundedJson": None, "GradedCalls": 0, "UngradeableCalls": 0,
     }
     if not investigation_id:
         return empty
 
-    from app.evaluation.graders import grade_call, was_truncated
+    from app.evaluation.graders import (
+        evidence_from_prompt,
+        evidence_is_structured,
+        grade_call,
+        was_truncated,
+    )
     from app.repositories.base import T, fetch_all
 
     try:
@@ -254,10 +260,20 @@ def _grade_deterministic(investigation_id: int | None) -> dict:
     graded = 0
     ungradeable = 0
 
+    # Whether ANY call in this investigation carried evidence a grader could
+    # ground a figure against. Recomputed here rather than reached for inside
+    # grade_call, because the reason a score is absent has to be recorded beside
+    # the score and grade_call only reports the score.
+    saw_groundable_evidence = False
+
     for row in rows:
         if was_truncated(row.get("InputJson")):
             ungradeable += 1
             continue
+        if not saw_groundable_evidence:
+            recovered = evidence_from_prompt(row.get("InputJson"))
+            if recovered is not None and evidence_is_structured(recovered):
+                saw_groundable_evidence = True
         grades = grade_call(row.get("InputJson"), row.get("OutputJson"), row.get("ToolName") or "")
         if not grades:
             ungradeable += 1
@@ -273,9 +289,37 @@ def _grade_deterministic(investigation_id: int | None) -> dict:
         grounded, total = totals.get(name, [0, 0])
         return None if total == 0 else round(grounded / total, 4)
 
+    def absence(name: str) -> str | None:
+        """Which kind of nothing, or None when the score exists.
+
+        thresholds.py turns a NULL rate into PASS "not measured". On prod, eight
+        of thirteen answers passed that way and none passed on merit - so every
+        pass the gate recorded was a pass because it could not look, and nothing
+        said why. These four need different responses and were indistinguishable:
+
+            no_graded_calls       nothing was gradeable at all. If rows existed,
+                                  they were truncated - see UngradeableCalls.
+            all_calls_ungradeable rows existed and every one was rejected before
+                                  grading. A prompt-size or contract problem.
+            evidence_free_text    the answer was grounded in RETRIEVED PROSE. A
+                                  figure may have been quoted faithfully and this
+                                  grader cannot tell. The honest PASS.
+            nothing_to_check      evidence could ground figures; the prose quoted
+                                  none. Also honest, and a different fact.
+        """
+        if totals.get(name, [0, 0])[1] != 0:
+            return None
+        if graded == 0:
+            return "all_calls_ungradeable" if ungradeable else "no_graded_calls"
+        if not saw_groundable_evidence:
+            return "evidence_free_text"
+        return "nothing_to_check"
+
     return {
         "NumberFidelity": rate("number_fidelity"),
         "EntityFidelity": rate("entity_fidelity"),
+        "NumberFidelityAbsence": absence("number_fidelity"),
+        "EntityFidelityAbsence": absence("entity_fidelity"),
         # Measurable without evidence, and kept for exactly that reason: it is
         # the only deterministic score still available when a prompt was
         # truncated, so a call with unrecoverable evidence is not left with no

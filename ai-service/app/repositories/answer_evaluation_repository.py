@@ -24,6 +24,10 @@ logger = structlog.get_logger(__name__)
 _COLUMNS = (
     "InvestigationId", "ConversationId", "Question",
     "NumberFidelity", "EntityFidelity", "Completeness", "UngroundedJson",
+    # WHY a fidelity score is absent. NULL when the score has a value; see
+    # migration 024. A NULL rate becomes a PASS in thresholds.py, so without
+    # these an auto-PASS can only be trusted, never read.
+    "NumberFidelityAbsence", "EntityFidelityAbsence",
     "GradedCalls", "UngradeableCalls",
     "JudgeProvider", "JudgeModel",
     "JudgeRelevance", "JudgeGroundedness", "JudgeActionability",

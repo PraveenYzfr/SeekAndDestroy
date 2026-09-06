@@ -440,3 +440,82 @@ class TestWhichKindOfNothing:
         being unactionable and nobody will notice until it fires."""
         assert len({"evidence_read_failed", "no_evidence_gathered",
                     "evidence_unparseable", "evidence_truncated"}) == 4
+
+
+class TestWhyAScoreIsAbsent:
+    """An auto-PASS that cannot be read can only be trusted.
+
+    thresholds.py turns a NULL rate into PASS "not measured". Measured on prod:
+    thirteen answers, five measured and failing, eight not measured and passing,
+    and ZERO clean passes. Every pass the gate recorded was a pass because it
+    could not look - and nothing said why it could not look.
+
+    Four unrelated situations were producing that same NULL, and they need
+    different responses: an unusable prompt, a contract problem, evidence the
+    grader genuinely cannot ground against, and an answer with nothing to check.
+    """
+
+    def _det(self, monkeypatch, rows, grades_by_row, structured=True):
+        from app.services import answer_evaluation as ae
+
+        monkeypatch.setattr("app.repositories.base.fetch_all", lambda *a, **k: rows)
+        monkeypatch.setattr("app.evaluation.graders.was_truncated", lambda _j: False)
+        monkeypatch.setattr("app.evaluation.graders.evidence_from_prompt", lambda _j: {"a": 1})
+        monkeypatch.setattr("app.evaluation.graders.evidence_is_structured", lambda _e: structured)
+        it = iter(grades_by_row)
+        monkeypatch.setattr("app.evaluation.graders.grade_call", lambda *a, **k: next(it))
+        return ae._grade_deterministic(1)
+
+    def test_free_text_evidence_is_named_as_such(self, monkeypatch):
+        """The honest PASS: a figure may have been quoted faithfully from a
+        retrieved document and this grader cannot tell."""
+        from app.evaluation.graders import GradeResult
+
+        out = self._det(
+            monkeypatch,
+            rows=[{"InputJson": "{}", "OutputJson": "{}", "ToolName": "x"}],
+            grades_by_row=[[GradeResult("completeness", 1, 1)]],
+            structured=False,
+        )
+        assert out["NumberFidelity"] is None
+        assert out["NumberFidelityAbsence"] == "evidence_free_text"
+
+    def test_groundable_evidence_with_no_figures_is_a_different_fact(self, monkeypatch):
+        from app.evaluation.graders import GradeResult
+
+        out = self._det(
+            monkeypatch,
+            rows=[{"InputJson": "{}", "OutputJson": "{}", "ToolName": "x"}],
+            grades_by_row=[[GradeResult("completeness", 1, 1)]],
+            structured=True,
+        )
+        assert out["NumberFidelityAbsence"] == "nothing_to_check", (
+            "evidence that COULD ground a figure, and prose that quoted none, is "
+            "not the same as evidence that could ground nothing"
+        )
+
+    def test_nothing_gradeable_at_all_says_so(self, monkeypatch):
+        out = self._det(
+            monkeypatch,
+            rows=[{"InputJson": "{}", "OutputJson": "{}", "ToolName": "x"}],
+            grades_by_row=[[]],
+        )
+        assert out["NumberFidelityAbsence"] == "all_calls_ungradeable"
+        assert out["UngradeableCalls"] == 1
+
+    def test_a_measured_score_records_no_absence(self, monkeypatch):
+        """The column means "why is this missing". A reason beside a real score
+        would be read as a caveat on it."""
+        from app.evaluation.graders import GradeResult
+
+        out = self._det(
+            monkeypatch,
+            rows=[{"InputJson": "{}", "OutputJson": "{}", "ToolName": "x"}],
+            grades_by_row=[[GradeResult("number_fidelity", 1, 2)]],
+        )
+        assert out["NumberFidelity"] == 0.5
+        assert out["NumberFidelityAbsence"] is None
+
+    def test_the_reasons_are_distinct(self):
+        assert len({"no_graded_calls", "all_calls_ungradeable",
+                    "evidence_free_text", "nothing_to_check", "not_evaluated"}) == 5
