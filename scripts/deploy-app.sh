@@ -304,20 +304,55 @@ echo "==> 1c. EVALUATION IN FLIGHT - a deploy must not move the ruler mid-measur
 #  arriving from the opposite side: that one always REFUSED, this one always
 #  ABORTED. A guard has to be correct in the case where it should do NOTHING,
 #  and that is the case nobody thinks to test.
-EVAL_PIDS=$(pgrep -f "golden_runner|eval_golden|run_golden_suite" 2>/dev/null || true)
-EVAL_PROCS=$(printf '%s
-' "$EVAL_PIDS" | grep -vx -e "" -e "$$" -e "${PPID:-0}" | wc -l || true)
+# ASKED OF THE RUN ITSELF, NOT OF THE PROCESS TABLE.
+#
+# The first version grepped for "eval_golden". Then the runner moved into the
+# package and the process became `python -m app.evaluation.golden_runner`, which
+# contains no such string - so the guard would have kept passing while a suite
+# ran. It was caught by grepping for references to the moved path before
+# committing, not by any test, because a guard that stops firing looks exactly
+# like a guard with nothing to report.
+#
+# That is the real defect and it is not the pattern: the guard identified its
+# subject by a STRING LIVING IN ANOTHER FILE, with nothing enforcing the two
+# stayed in step. A rename anywhere silently disarmed it.
+#
+# The run now declares itself. eval_run_repository beats HeartbeatAt from inside
+# record_case - which the runner already calls once per case, so it is not a
+# thing a future runner has to remember - and this asks the database. The signal
+# is owned by the thing being detected, so it cannot drift out of sync with a
+# file that merely mentions it.
+#
+# TWO MINUTES, and staleness is the point. EvalRun 27 died mid-run and still
+# reads Status='Running' with no FinishedAt; a check on Status alone would be
+# blocking every deploy on a run that ended hours ago. A heartbeat expires by
+# itself, so a killed suite stops blocking without anyone tidying up.
+#
+# HeartbeatAt IS NULL is the startup window: open_run writes the row BEFORE the
+# first case, so a suite that has not finished case one is running and has never
+# beaten. StartedAt covers it.
+EVAL_RUNNING=$(runq <<'SQL' 2>/dev/null | tr -d '[:space:]'
+SET NOCOUNT ON;
+SELECT COUNT(*) FROM sad.EvalRun
+WHERE Status = 'Running'
+  AND COALESCE(HeartbeatAt, StartedAt) > DATEADD(MINUTE, -2, SYSUTCDATETIME());
+SQL
+)
+case "$EVAL_RUNNING" in ''|*[!0-9]*) EVAL_RUNNING=0 ;; esac
+EVAL_PROCS="$EVAL_RUNNING"
+
 if [ "${EVAL_PROCS:-0}" -gt 0 ]; then
     echo ""
     echo "    REFUSING TO DEPLOY."
-    echo "    An evaluation suite is running on this host ($EVAL_PROCS process(es))."
+    echo "    An evaluation suite is running ($EVAL_PROCS run(s) beating within 2 min)."
     echo ""
     echo "    Recreating ai-service now would split that run across two images."
     echo "    If the deploy also changes a grader, the halves are scored by"
     echo "    different rules and the result cannot be compared with itself."
     echo ""
     echo "    Wait for it to finish. To see it:"
-    echo "      pgrep -af 'golden_runner|eval_golden|run_golden_suite'"
+    echo "      SELECT EvalRunId, Status, StartedAt, HeartbeatAt FROM sad.EvalRun"
+    echo "       WHERE Status = 'Running' ORDER BY EvalRunId DESC;"
     echo ""
     echo "    If the suite is genuinely stale or you accept a split run, re-run"
     echo "    with ALLOW_DURING_EVAL=1 - and record the split in EvalRun.Notes,"
@@ -326,7 +361,7 @@ if [ "${EVAL_PROCS:-0}" -gt 0 ]; then
     [ "${ALLOW_DURING_EVAL:-0}" = "1" ] || exit 1
     echo "    ALLOW_DURING_EVAL=1 - proceeding anyway."
 else
-    echo "    no evaluation suite running on this host"
+    echo "    no evaluation suite beating in the last 2 minutes"
 fi
 
 echo "==> 2. stage migrations where the database container can read them"
