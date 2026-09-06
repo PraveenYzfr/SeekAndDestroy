@@ -150,3 +150,38 @@ def test_it_asks_about_classification_before_tier():
     )
     assert p["field"] == "data_classification"
     assert "availability_tier" in p["also_assumed"]
+
+
+# ---------------------------------------------------------------------------
+# A defined metric that nothing observes is a dead metric
+# ---------------------------------------------------------------------------
+# sad_investigation_duration_seconds was defined in metrics.py and observed
+# nowhere for several hours - 0 series on production. A labelled Histogram
+# emits nothing until it records once, so a panel for it reads "No data",
+# which is indistinguishable from a broken scrape or an undeployed build.
+#
+# It got there by half a recovery: the observe() call was swept into someone
+# else's commit, removed to restore production, and never put back when the
+# definition landed. Nothing failed, no test broke, and the only symptom was a
+# panel that had never worked looking exactly like a panel that had just
+# stopped.
+
+
+def test_every_timing_metric_is_actually_observed():
+    """Defined AND used. Asserted over the source rather than by scraping
+    /metrics, because an unobserved Histogram is invisible in a scrape - the
+    absence is precisely what makes this class of defect quiet."""
+    import inspect
+
+    from app.graph import graph as graph_module
+    from app.observability import metrics as metrics_module
+    from app.repositories import audit_repository
+
+    users = inspect.getsource(graph_module) + inspect.getsource(audit_repository)
+
+    for name in ("investigation_duration_seconds", "llm_duration_seconds"):
+        assert hasattr(metrics_module, name), f"{name} is not defined"
+        assert f"{name}.labels" in users, (
+            f"{name} is defined but never observed - it will emit zero series "
+            "and its panel will read 'No data' forever"
+        )

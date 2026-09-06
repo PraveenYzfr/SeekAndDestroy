@@ -414,7 +414,12 @@ def run_investigation(*, query: str, created_by: int, conversation_id: str | Non
     from app.graph.nodes import quick_reply
     from app.insights import router as insights_router
     from app.services import answer_evaluation
-    from app.observability.metrics import investigations_total
+    from app.observability.metrics import (
+        investigation_duration_seconds,
+        investigations_total,
+    )
+
+    graph_started = time.perf_counter()
 
     # What this turn refers to, if anything. Resolved before the Investigation
     # row exists, because two of the three answers below do not want a row at
@@ -520,6 +525,25 @@ def run_investigation(*, query: str, created_by: int, conversation_id: str | Non
     result = compiled.invoke(state, config=config)
     itype = result.get("investigation_type", "Unknown")
     investigations_total.labels(investigation_type=itype).inc()
+
+    #  END TO END, which is what the person actually waited for. Model time is
+    #  only part of it and often the smaller part: investigation 132 took 59.7s
+    #  wall against 6.9s of model time, and investigation 49 took 30s wall
+    #  against 0.1s. A dashboard timing only the model calls would call both of
+    #  those fast.
+    #
+    #  RESTORED, having been removed by me in f14d6c0. I had swept another
+    #  session's in-progress edit into a commit of mine, shipping this
+    #  observe() while its Histogram was still uncommitted - the import failed
+    #  and every investigation returned 500. I removed these lines to get
+    #  production back rather than commit more of their unfinished work. The
+    #  definition then landed properly in 3d96ce4, which left the metric
+    #  DEFINED AND OBSERVED NOWHERE: 0 series on prod, a panel reading "No
+    #  data", indistinguishable from broken. Half a recovery is its own defect,
+    #  and it is the quiet half.
+    investigation_duration_seconds.labels(investigation_type=itype).observe(
+        time.perf_counter() - graph_started
+    )
     if result.get("__interrupt__"):
         return answered({
             "investigation_id": investigation_id, "conversation_id": conversation_id,
