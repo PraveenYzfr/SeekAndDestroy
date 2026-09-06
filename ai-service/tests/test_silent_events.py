@@ -144,3 +144,56 @@ class TestOneLoggingConfigurationForEveryProcess:
             compose = yaml.safe_load(fh)
         unbounded = [n for n, v in compose["services"].items() if "logging" not in v]
         assert not unbounded, f"unbounded container logs: {unbounded}"
+
+
+class TestTheGuardCannotReportCleanWhenItCheckedNothing:
+    """sad_narration_drift_total{outcome="drift"} has never emitted a series in
+    production, and the panel over it could only ever draw a flat zero.
+
+    The reason is not that nothing drifts. `_count_drift(explanation, "ok")` ran
+    at the end of the function whether or not a single field had been COMPARED -
+    the loop skips a field when it is not numeric, when no evidence key matches
+    its name, when the evidence value is None, and when it will not parse. A call
+    that skipped every field scored exactly like a call that checked twenty
+    figures and found them all correct.
+    """
+
+    def _outcomes(self, monkeypatch):
+        seen = []
+
+        class _Counter:
+            def labels(self, **kw):
+                seen.append(kw["outcome"])
+                return self
+
+            def inc(self):
+                return None
+
+        import app.observability.metrics as metrics
+
+        monkeypatch.setattr(metrics, "narration_drift_total", _Counter())
+        return seen
+
+    def test_a_field_with_no_matching_evidence_key_is_unchecked_not_ok(self, monkeypatch):
+        seen = self._outcomes(monkeypatch)
+        assert_no_number_drift(_Explanation(overall_score=87.1), {"something_else": 1.0})
+        assert seen == ["unchecked"], (
+            "the guard compared nothing and reported a clean pass - which is how "
+            "a hallucination panel reads 0% over zero comparisons"
+        )
+
+    def test_a_real_comparison_that_matches_is_ok(self, monkeypatch):
+        seen = self._outcomes(monkeypatch)
+        assert_no_number_drift(_Explanation(overall_score=42.0), {"overall_score": 42.0})
+        assert seen == ["ok"]
+
+    def test_a_mismatch_is_still_drift(self, monkeypatch):
+        seen = self._outcomes(monkeypatch)
+        with pytest.raises(NumberDriftError):
+            assert_no_number_drift(_Explanation(overall_score=87.1), {"overall_score": 42.0})
+        assert seen == ["drift"]
+
+    def test_the_three_outcomes_are_distinct(self):
+        """If unchecked ever collapses back into ok, the panel silently returns
+        to reporting confidence it has not earned."""
+        assert len({"drift", "ok", "unchecked"}) == 3

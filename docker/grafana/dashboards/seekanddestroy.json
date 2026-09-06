@@ -27,8 +27,8 @@
     {
       "id": 21,
       "type": "timeseries",
-      "title": "Hallucination rate (number drift)",
-      "description": "Share of narrations REJECTED for stating a figure that was not in the evidence. This is the guard firing, not an estimate - the answer was refused rather than shown. A non-zero rate is not necessarily an incident: it is the platform working. A rate that CLIMBS after a model change is the signal, because it means the new model invents more.",
+      "title": "Number drift: rejected, and never checked",
+      "description": "THIS IS NOT A HALLUCINATION RATE, and it used to be titled as though it were. assert_no_number_drift BLOCKS at the request path - it throws, and the answer never ships - so this measures A GUARD FIRING, not an outcome that reached anybody.\n\nTWO LINES, and the second is the one to watch. `rejected` is the guard catching a figure that does not match its evidence. `never checked` is the guard running and comparing NOTHING - every field skipped because it was not numeric, or no evidence key matched its name. Both used to be counted as clean, so this panel could read a confident 0% over zero comparisons.\n\nA rising `never checked` share is a silent failure of the safety property this platform is built on: the evidence keys have stopped matching the field names and nothing is being verified.\n\nWHAT IT STILL CANNOT SEE: an answer where every figure is real and the ATTRIBUTION is wrong - incidents belonging to one cluster narrated against another. Every number matches its evidence and the answer is false. That is a grader question, not a guard one.\n\nThe axis is pinned 0-1. It previously auto-ranged to 10000% over an empty series, because a percentunit with no max and nothing to plot will scale to whatever the clamp produces.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -45,14 +45,25 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "(sum(rate(sad_narration_drift_total{outcome=\"drift\"}[15m])) or vector(0))\n  / clamp_min(sum(rate(sad_narration_drift_total[15m])), 0.0001)",
-          "legendFormat": "drift rate",
-          "refId": "A"
+          "refId": "A",
+          "expr": "(sum(rate(sad_narration_drift_total{outcome=\"drift\"}[15m])) or vector(0))\n  / clamp_min(sum(rate(sad_narration_drift_total[15m])), 0.001)",
+          "legendFormat": "rejected"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "(sum(rate(sad_narration_drift_total{outcome=\"unchecked\"}[15m])) or vector(0))\n  / clamp_min(sum(rate(sad_narration_drift_total[15m])), 0.001)",
+          "legendFormat": "never checked"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit"
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
         },
         "overrides": []
       }

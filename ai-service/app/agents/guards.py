@@ -70,6 +70,11 @@ def _find_evidence_key(evidence: dict, field_name: str) -> str | None:
 
 
 def assert_no_number_drift(explanation: BaseModel, evidence: dict, *, tolerance: float = 0.01) -> None:
+    # Did this call COMPARE anything, as opposed to merely run? The loop below
+    # skips a field for four separate reasons, and a call that skips every field
+    # used to be counted as a clean pass - see the outcome at the bottom.
+    compared = False
+
     for field_name, value in explanation.model_dump().items():
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             continue
@@ -83,6 +88,7 @@ def assert_no_number_drift(explanation: BaseModel, evidence: dict, *, tolerance:
             expected_f = float(expected)
         except (TypeError, ValueError):
             continue
+        compared = True
         if abs(float(value) - expected_f) > tolerance:
             # Counted here, not at the five call sites. A metric that each caller
             # has to remember is one that will be missed at whichever call site is
@@ -106,10 +112,29 @@ def assert_no_number_drift(explanation: BaseModel, evidence: dict, *, tolerance:
                 f"from the deterministic engines only."
             )
 
-    # The denominator. Without it the drift counter says how many were rejected
-    # and never what share that is - and "12 rejections" means nothing without
-    # knowing whether it was out of 20 narrations or 20,000.
-    _count_drift(explanation, "ok")
+    # THE DENOMINATOR, AND IT USED TO LIE BY A WHOLE CATEGORY.
+    #
+    # Without a denominator the drift counter says how many were rejected and
+    # never what share that is - "12 rejections" means nothing without knowing
+    # whether it was out of 20 narrations or 20,000. That part was right.
+    #
+    # But "ok" was recorded whether or not a single field had been COMPARED. The
+    # loop skips a field when it is not numeric, when _find_evidence_key finds no
+    # matching key, when the evidence value is None, and when it will not parse
+    # as a float. A call that skipped every field on every one of those grounds
+    # scored exactly like a call that checked twenty figures and found them all
+    # correct.
+    #
+    # So the hallucination panel could read a confident 0% over ZERO actual
+    # comparisons, and that is not a hypothetical: sad_narration_drift_total
+    # {outcome="drift"} has never emitted a single series in production.
+    #
+    # Three outcomes, because "we looked and it was fine" and "we looked at
+    # nothing" are different facts and only one of them is reassuring. A rising
+    # `unchecked` share means the guard is passing answers it never inspected -
+    # most likely because the evidence keys stopped matching the field names,
+    # which is a silent failure of the safety property this module exists for.
+    _count_drift(explanation, "ok" if compared else "unchecked")
 
 
 def _count_drift(explanation, outcome: str) -> None:
