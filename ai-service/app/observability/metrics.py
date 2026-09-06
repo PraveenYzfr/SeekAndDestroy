@@ -275,3 +275,50 @@ investigation_duration_seconds = Histogram(
     ["investigation_type"],
     buckets=(0.5, 1, 2, 5, 10, 20, 30, 60, 90, 120, 180, 300),
 )
+
+#: THE ENTERPRISE HALLUCINATION NUMBER: did this answer contain ANY claim that
+#: could not be traced to the evidence the model was given.
+#:
+#: One counter, one question, a stated denominator. The existing panel called
+#: "Hallucination rate" divides sad_narration_drift_total{outcome="drift"} by its
+#: total - and outcome="drift" has NEVER had a single series, because
+#: assert_no_number_drift BLOCKS: a drifted figure raises and the answer never
+#: ships. That panel can only ever draw a flat line at zero. It measures a guard
+#: that cannot fail, not an outcome.
+#:
+#: Meanwhile the failure that actually happened was invisible to it. Cluster
+#: msp-p194 - which has ZERO incidents - was told about four belonging to
+#: msp-p204 and dal-p044. Every figure was real and every code appeared in the
+#: evidence, so number_fidelity, entity_fidelity and the drift guard all passed.
+#:
+#: FOUR OUTCOMES, and the third is the one every previous version of this got
+#: wrong by folding into one of the others:
+#:
+#:     clean          every applicable check scored 1.0
+#:     hallucinated   at least one applicable check scored below 1.0
+#:     not_applicable nothing was checkable - a greeting, a refusal, a count,
+#:                    or evidence that can ground nothing. NOT a pass and NOT a
+#:                    failure, and it must stay out of both halves of the rate.
+#:     ungradeable    a truncated prompt or unrecoverable evidence. The answer
+#:                    may be perfect or invented and this platform cannot say
+#:                    which - which is a different thing from having nothing to
+#:                    check.
+#:
+#: So the rate a reader should quote is
+#:     hallucinated / (hallucinated + clean)
+#: and the honest panel shows the denominator beside it, because 3% of 400 and
+#: 3% of 4 are different statements.
+hallucination_total = Counter(
+    "sad_hallucination_total",
+    "Delivered answers by whether any claim failed to trace to its evidence",
+    ["outcome"],
+)
+
+#: WHICH check caught it, so a rise is diagnosable rather than merely alarming.
+#: An answer failing several increments several - this counts CHECKS FAILED, not
+#: answers, and must never be used as the numerator of the rate above.
+hallucination_by_check_total = Counter(
+    "sad_hallucination_by_check_total",
+    "Individual grader checks that failed on a delivered answer, by check",
+    ["check"],
+)

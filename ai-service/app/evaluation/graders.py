@@ -776,7 +776,16 @@ def grade_call(input_json: str | None, output_json: str | None, schema_name: str
     # would report either a false failure or - as it did - a false pass. Such a
     # call is UNGRADEABLE, which the harness already counts separately.
     if evidence is not None and not was_truncated(input_json):
-        grades.extend([number_fidelity(prose, evidence), entity_fidelity(prose, evidence)])
+        # Attribution alongside the other two, not instead of them: they answer
+        # different questions and an answer can pass either while failing this.
+        # msp-p194 was told about four incidents belonging to msp-p204 and
+        # dal-p044 - every figure real, every code present in the evidence, and
+        # both existing graders passed it.
+        grades.extend([
+            number_fidelity(prose, evidence),
+            entity_fidelity(prose, evidence),
+            attribution_fidelity(prose, evidence),
+        ])
     required = required_fields_for(schema_name)
     if required:
         grades.append(completeness(output, required))
@@ -805,3 +814,117 @@ def _strings_in(value: Any) -> list[str]:
     if isinstance(value, list):
         return [s for v in value for s in _strings_in(v)]
     return []
+
+
+#: A sentence boundary, good enough to decide co-occurrence. Deliberately crude:
+#: the alternative is a sentence tokeniser, and a wrong split here costs a false
+#: pairing rather than a wrong number - the grader reports what it could not
+#: match, and a reader sees the pair.
+#: How many unsupported pairings to keep. A report naming twenty records against
+#: the wrong cluster is one defect, not twenty, and the row this is stored in has
+#: a column budget. The COUNT is always exact; only the listing is capped.
+_MAX_UNGROUNDED_PAIRS = 12
+
+_SENTENCE_RE = re.compile(r"[.!?\n]+")
+
+#: Records this estate names. Same shapes _RECORD_ID_RE strips from the number
+#: tokeniser - there they are removed because they are not measurements, here
+#: they are the subject.
+_RECORD_REF_RE = re.compile(r"\b(?:INC|CHG|PRB|RITM|TASK)\d{4,}\b", re.IGNORECASE)
+
+
+def _evidence_texts(evidence: Any) -> list[str]:
+    """Every string in the evidence, flattened, one entry per document.
+
+    Per DOCUMENT rather than concatenated, and that is the whole mechanism: an
+    association is only supported if a SINGLE document asserts it. Concatenating
+    would make every record co-occur with every entity in the bag and the grader
+    would pass everything.
+    """
+    out: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, str):
+            out.append(node)
+        elif isinstance(node, dict):
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, (list, tuple)):
+            for value in node:
+                walk(value)
+
+    walk(evidence)
+    return out
+
+
+def attribution_fidelity(prose: str, evidence: Any) -> GradeResult:
+    """Does the prose attach each record to an entity the evidence attaches it to?
+
+    THE FAILURE THIS EXISTS FOR, AND WHY THE OTHER THREE GRADERS MISS IT
+    -------------------------------------------------------------------
+    An engineer asked about cluster msp-p194 and was told about four incidents:
+    INC1009430, INC1004913 and INC1002631 on msp-p204, and INC1003924 on
+    dal-p044. msp-p194 has ZERO incidents. The platform then said "two", then
+    "three", then insisted "the correct count is three, not two".
+
+    Every existing check passes that answer:
+
+        number_fidelity     every figure quoted was real
+        entity_fidelity     every code named appeared in the evidence
+        narration_drift     no structured field disagreed with anything
+        judge groundedness  the sentences ARE supported, taken individually
+
+    The numbers were right, the codes were right, and the answer was wrong -
+    because the facts were attached to the wrong thing. Attribution is the claim
+    none of the others makes.
+
+    HOW IT IS CHECKED
+    -----------------
+    A pairing is what the prose asserts by naming a record and an entity in the
+    same sentence. It is supported when a SINGLE evidence document names both.
+    Per document, never across the bag: concatenating the evidence would make
+    every record co-occur with every entity and the grader would pass anything.
+
+    A sentence naming a record but no entity asserts no pairing and is not
+    counted - the denominator is pairings, not sentences, so an answer that
+    carefully avoids attributing anything scores not-applicable rather than
+    perfect.
+
+    WHAT THIS DELIBERATELY DOES NOT DO
+    ----------------------------------
+    It does not consult the database. The question is whether the model followed
+    the evidence it was GIVEN, and a grader that went back to SQL would be
+    marking the retrieval rather than the narration - and would pass a model that
+    guessed a true pairing it was never shown.
+
+    Evidence text is attacker-writable (work notes), so a crafted note could
+    manufacture a pairing and mask a real misattribution. That is a false
+    NEGATIVE, not a hole: it cannot invent a failure, only hide one, and the same
+    note would have to fool the retriever first.
+    """
+    if not evidence_is_structured(evidence):
+        return GradeResult("attribution_fidelity")
+
+    documents = [d.translate(_DASHES) for d in _evidence_texts(evidence)]
+    if not documents:
+        return GradeResult("attribution_fidelity")
+
+    result = GradeResult("attribution_fidelity")
+    for sentence in _SENTENCE_RE.split((prose or "").translate(_DASHES)):
+        records = {m.group(0).upper() for m in _RECORD_REF_RE.finditer(sentence)}
+        entities = {m.group(0).lower() for m in _ENTITY_RE.finditer(sentence)}
+        if not records or not entities:
+            continue
+        for record in sorted(records):
+            for entity in sorted(entities):
+                result.total += 1
+                supported = any(
+                    record in doc.upper() and entity in doc.lower() for doc in documents
+                )
+                if supported:
+                    result.grounded += 1
+                elif len(result.ungrounded) < _MAX_UNGROUNDED_PAIRS:
+                    # The PAIR, not the token. "INC1009430" alone says nothing
+                    # about what went wrong; "INC1009430->msp-p194" is the claim.
+                    result.ungrounded.append(f"{record}->{entity}")
+    return result

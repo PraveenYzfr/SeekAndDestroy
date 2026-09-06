@@ -406,7 +406,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 51
       },
       "collapsed": false,
       "panels": []
@@ -419,7 +419,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 36
+        "y": 52
       },
       "targets": [
         {
@@ -437,7 +437,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 36
+        "y": 52
       },
       "targets": [
         {
@@ -455,7 +455,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 44
+        "y": 60
       },
       "targets": [
         {
@@ -478,7 +478,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 44
+        "y": 60
       },
       "targets": [
         {
@@ -500,7 +500,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 44
+        "y": 60
       },
       "targets": [
         {
@@ -523,7 +523,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 52
+        "y": 68
       },
       "fieldConfig": {
         "defaults": {
@@ -559,7 +559,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 52
+        "y": 68
       },
       "fieldConfig": {
         "defaults": {
@@ -595,7 +595,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 60
+        "y": 76
       },
       "fieldConfig": {
         "defaults": {
@@ -627,7 +627,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 68
+        "y": 84
       },
       "collapsed": false,
       "panels": []
@@ -640,7 +640,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 69
+        "y": 85
       },
       "targets": [
         {
@@ -658,7 +658,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 77
+        "y": 93
       },
       "targets": [
         {
@@ -675,7 +675,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 77
+        "y": 93
       },
       "targets": [
         {
@@ -697,7 +697,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 85
+        "y": 101
       },
       "fieldConfig": {
         "defaults": {
@@ -733,7 +733,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 85
+        "y": 101
       },
       "fieldConfig": {
         "defaults": {
@@ -769,7 +769,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 93
+        "y": 109
       },
       "fieldConfig": {
         "defaults": {
@@ -785,6 +785,116 @@
           "refId": "A",
           "expr": "node_filesystem_avail_bytes{mountpoint=\"/\"}",
           "legendFormat": "/",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 109,
+      "type": "timeseries",
+      "title": "HALLUCINATION RATE",
+      "description": "Share of GRADEABLE delivered answers containing at least one claim that could not be traced to the evidence the model was given. Fails on number fidelity, entity fidelity OR attribution - an answer is hallucinated if any of the three does. Denominator is hallucinated+clean ONLY: not_applicable and ungradeable are excluded from both halves, because counting a refusal as clean is how a platform that answers nothing scores 100%. clamp_min is 1, not 0.0001 - with no traffic this reads 0/1 = 0 rather than dividing by a fraction and exploding. Read it beside the verdict panel: 3% of 400 and 3% of 4 are different statements.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "fillOpacity": 8
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum(increase(sad_hallucination_total{outcome=\"hallucinated\"}[24h])) or vector(0)) / clamp_min(sum(increase(sad_hallucination_total{outcome=~\"hallucinated|clean\"}[24h])), 1)",
+          "legendFormat": "rate",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 110,
+      "type": "timeseries",
+      "title": "Verdicts, last 24h - the denominator",
+      "description": "All four outcomes, so the rate above can be read honestly. ungradeable means a truncated prompt or unrecoverable evidence - the answer may be perfect or invented and this platform cannot say which. not_applicable means nothing was checkable: a greeting, a refusal, a count. Neither is a pass and neither belongs in the rate.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (increase(sad_hallucination_total[24h])) or vector(0)",
+          "legendFormat": "{{outcome}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 111,
+      "type": "timeseries",
+      "title": "Which check caught it",
+      "description": "Counts CHECKS FAILED, not answers - one answer failing two checks increments two - so this must never be used as the numerator of the rate. attribution_fidelity is the newest and the one the others cannot see: cluster msp-p194, which has zero incidents, was told about four belonging to msp-p204 and dal-p044. Every figure was real and every code appeared in the evidence, so number and entity fidelity both passed it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (check) (increase(sad_hallucination_by_check_total[24h])) or vector(0)",
+          "legendFormat": "{{check}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"

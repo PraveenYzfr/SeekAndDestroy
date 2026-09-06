@@ -231,6 +231,7 @@ def _grade_deterministic(investigation_id: int | None) -> dict:
     """
     empty = {
         "NumberFidelity": None, "EntityFidelity": None, "Completeness": None,
+        "AttributionFidelity": None,
         "NumberFidelityAbsence": "not_evaluated", "EntityFidelityAbsence": "not_evaluated",
         "UngroundedJson": None, "GradedCalls": 0, "UngradeableCalls": 0,
     }
@@ -318,6 +319,12 @@ def _grade_deterministic(investigation_id: int | None) -> dict:
     return {
         "NumberFidelity": rate("number_fidelity"),
         "EntityFidelity": rate("entity_fidelity"),
+        # NOT a stored column - sad.AnswerEvaluation has no AttributionFidelity
+        # and adding one needs a migration. It is persisted per call in
+        # sad.CallEvaluation, which is keyed (AuditId, Grader, GraderVersion)
+        # and takes any grader by name, and it is carried here so the composite
+        # below and _observe can both see it without a schema change.
+        "AttributionFidelity": rate("attribution_fidelity"),
         "NumberFidelityAbsence": absence("number_fidelity"),
         "EntityFidelityAbsence": absence("entity_fidelity"),
         # Measurable without evidence, and kept for exactly that reason: it is
@@ -504,6 +511,66 @@ def _any_truncated(rows: list) -> bool:
 # ---------------------------------------------------------------------------
 
 
+
+#: The checks that make up the hallucination verdict, and the ONLY place that
+#: list is written down. A grader added to grade_call and forgotten here would
+#: silently stop counting toward the headline number.
+_HALLUCINATION_CHECKS = (
+    ("NumberFidelity", "number_fidelity"),
+    ("EntityFidelity", "entity_fidelity"),
+    ("AttributionFidelity", "attribution_fidelity"),
+)
+
+
+def _observe_hallucination(values: dict) -> None:
+    """One verdict per delivered answer: did ANY claim fail to trace?
+
+    FOUR OUTCOMES, and the two middle ones are what every previous version of
+    this number got wrong by collapsing into pass or fail:
+
+        ungradeable      the prompt was truncated or its evidence could not be
+                         recovered. The answer may be perfect or invented and
+                         this platform cannot say which.
+        not_applicable   nothing was checkable - a greeting, a refusal, a count,
+                         or evidence that grounds nothing. Neither a pass nor a
+                         failure, and it must stay out of BOTH halves of the
+                         rate. Reporting it as clean is how a platform that
+                         refuses everything scores 100%.
+        hallucinated     at least one applicable check scored below 1.0
+        clean            every applicable check scored exactly 1.0
+
+    So the rate to quote is hallucinated / (hallucinated + clean), and the
+    denominator has to travel with it: 3% of 400 and 3% of 4 are different
+    statements.
+
+    A note on strictness, because it is a real choice. "Below 1.0" means one
+    ungrounded figure in a forty-figure report marks the whole answer. That is
+    deliberate - the question is whether an engineer can trust the report, and
+    one invented capacity number is enough that they cannot. The per-check
+    counter below is what tells you how bad, once the headline tells you that it
+    happened.
+    """
+    from app.observability.metrics import hallucination_by_check_total, hallucination_total
+
+    if values.get("UngradeableCalls") and not values.get("GradedCalls"):
+        hallucination_total.labels(outcome="ungradeable").inc()
+        return
+
+    scored = [(name, values.get(column)) for column, name in _HALLUCINATION_CHECKS]
+    applicable = [(name, rate) for name, rate in scored if rate is not None]
+    if not applicable:
+        hallucination_total.labels(outcome="not_applicable").inc()
+        return
+
+    failed = [name for name, rate in applicable if float(rate) < 1.0]
+    if failed:
+        hallucination_total.labels(outcome="hallucinated").inc()
+        for name in failed:
+            hallucination_by_check_total.labels(check=name).inc()
+    else:
+        hallucination_total.labels(outcome="clean").inc()
+
+
 def _observe(values: dict) -> None:
     """Push the verdict to Prometheus. Never raises.
 
@@ -515,9 +582,12 @@ def _observe(values: dict) -> None:
     try:
         from app.observability.metrics import fidelity_score, judge_score
 
+        _observe_hallucination(values)
+
         for column, grader in (
             ("NumberFidelity", "number_fidelity"),
             ("EntityFidelity", "entity_fidelity"),
+            ("AttributionFidelity", "attribution_fidelity"),
             ("Completeness", "completeness"),
         ):
             score = values.get(column)
