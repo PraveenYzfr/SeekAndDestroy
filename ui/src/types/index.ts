@@ -420,6 +420,29 @@ export interface RunInvestigationResult {
  *  `_fallback_for`. `configured: false` means nobody has chosen one; the
  *  provider/model are then null rather than a guessed default, because a
  *  fallback nobody selected is a model nobody evaluated. */
+/** Why an answer was unhelpful. THE SAME VOCABULARY the remediation triage
+ *  uses, so a human verdict and a machine verdict are directly comparable
+ *  rather than living in separate languages. Enforced server-side by
+ *  CK_AnswerFeedback_Reason - this copy exists so the control can offer the
+ *  real set rather than a free-text box nobody can aggregate. */
+export const FEEDBACK_REASONS = [
+  { id: "wrong_numbers", label: "A figure looked wrong" },
+  { id: "wrong_entity", label: "Wrong cluster or application" },
+  { id: "missing_evidence", label: "Missing evidence" },
+  { id: "did_not_answer", label: "Did not answer the question" },
+  { id: "not_actionable", label: "Nothing I can act on" },
+  { id: "too_slow", label: "Too slow" },
+  { id: "other", label: "Something else" },
+] as const;
+
+export interface AnswerFeedback {
+  investigation_id: number;
+  /** -1 unhelpful, +1 helpful. Null when this person has not rated it. */
+  rating: number | null;
+  reason?: string | null;
+  comment?: string | null;
+}
+
 export interface ModelRoleFallback {
   /** The role name this fallback is stored under - "<role>.fallback" -
    *  which is also what PUT/DELETE /admin/model-roles/{role} expects. */

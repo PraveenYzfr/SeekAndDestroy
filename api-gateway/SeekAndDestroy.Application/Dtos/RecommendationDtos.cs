@@ -38,6 +38,19 @@ public sealed record AiServiceResponse(JsonNode? Payload);
 public sealed record CreateInvestigationRequestDto(
     string Query, int CreatedByEmployeeId, string? ConversationId = null);
 
+/// <summary>One person's verdict on one answer.
+///
+/// Rating is the only required field. Demanding a reason is how a feedback
+/// control stops being used, and a thumbs-up with no explanation is still the
+/// data point that matters.
+///
+/// There is deliberately NO EmployeeId here. The AI service takes it from the
+/// bearer token, so nobody can rate as somebody else by editing a payload -
+/// and this is the one table whose value depends entirely on each row being
+/// attributable to a real person.</summary>
+public sealed record AnswerFeedbackRequestDto(
+    int Rating, string? Reason = null, string? Comment = null, string? ConversationId = null);
+
 /// <summary>SelectedClusterCode/SelectedHostName name the option the reviewer
 /// chose. Approving without one leaves every recommendation PendingReview:
 /// three approved placements for one workload records no decision at all.</summary>

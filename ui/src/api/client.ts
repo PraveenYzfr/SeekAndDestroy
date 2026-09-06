@@ -1,4 +1,5 @@
 import type {
+  AnswerFeedback,
   ConversationDetail,
   ConversationSummary,
   EvaluationResult,
@@ -130,6 +131,33 @@ export const api = {
       model: string;
       source: ModelRole["source"];
     }>(`/admin/model-roles/${role}`, { method: "DELETE" }),
+
+  /** THE ONLY HUMAN GROUND TRUTH IN THIS PLATFORM. Everything else - fidelity,
+   *  completeness, the judge - is a machine's opinion of a machine's work.
+   *
+   *  No employee id in the payload: the AI service takes it from the token, so
+   *  nobody can rate as somebody else. */
+  submitAnswerFeedback: (
+    investigationId: number,
+    body: { rating: number; reason?: string | null; comment?: string | null; conversationId?: string | null },
+  ) =>
+    request<{ investigation_id: number; rating: number; recorded: boolean }>(
+      `/investigations/${investigationId}/feedback`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          rating: body.rating,
+          reason: body.reason ?? null,
+          comment: body.comment ?? null,
+          conversationId: body.conversationId ?? null,
+        }),
+      },
+    ),
+
+  /** This person's own rating, so the control renders in the state they left
+   *  rather than resetting and inviting a second, contradictory vote. */
+  getMyAnswerFeedback: (investigationId: number) =>
+    request<AnswerFeedback>(`/investigations/${investigationId}/feedback`),
 
   getApplications: (environment?: string) =>
     request<CmdbApplication[]>(`/cmdb/applications${environment ? `?environment=${environment}` : ""}`),

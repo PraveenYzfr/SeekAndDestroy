@@ -52,6 +52,18 @@ public interface IAiServiceClient
     Task<JsonNode?> ResumeInvestigationAsync(int investigationId, ResumeInvestigationRequestDto request, CancellationToken ct);
     Task<JsonNode?> GetInvestigationRecommendationsAsync(int investigationId, CancellationToken ct);
 
+    /// <summary>THE ONLY HUMAN GROUND TRUTH IN THIS PLATFORM. Fidelity is
+    /// arithmetic, completeness is field presence, and the judge is one model's
+    /// opinion of another's work - none of them has ever been checked against a
+    /// person. Without these two calls the table, the repository and the
+    /// endpoints all existed and NOBODY COULD REACH THEM.</summary>
+    Task<JsonNode?> SubmitAnswerFeedbackAsync(int investigationId, AnswerFeedbackRequestDto request, CancellationToken ct);
+
+    /// <summary>This caller's own rating, so the control renders in the state
+    /// they left rather than resetting and inviting a second, contradictory
+    /// vote.</summary>
+    Task<JsonNode?> GetMyAnswerFeedbackAsync(int investigationId, CancellationToken ct);
+
     Task<JsonNode?> SubmitRecommendationDecisionAsync(int recommendationId, RecommendationDecisionRequestDto request, CancellationToken ct);
 
     /// <summary>Proxies to the AI service's own dev-token issuance

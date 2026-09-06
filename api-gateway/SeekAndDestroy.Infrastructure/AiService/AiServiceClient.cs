@@ -156,6 +156,12 @@ public sealed class AiServiceClient(HttpClient httpClient, IHttpContextAccessor 
     public Task<JsonNode?> GetInvestigationRecommendationsAsync(int investigationId, CancellationToken ct) =>
         GetAsync($"/api/investigations/{investigationId}/recommendations", ct);
 
+    public Task<JsonNode?> SubmitAnswerFeedbackAsync(int investigationId, AnswerFeedbackRequestDto request, CancellationToken ct) =>
+        PostAsync($"/api/investigations/{investigationId}/feedback", request, ct);
+
+    public Task<JsonNode?> GetMyAnswerFeedbackAsync(int investigationId, CancellationToken ct) =>
+        GetAsync($"/api/investigations/{investigationId}/feedback", ct);
+
     public Task<JsonNode?> SubmitRecommendationDecisionAsync(int recommendationId, RecommendationDecisionRequestDto request, CancellationToken ct) =>
         PostAsync($"/api/recommendations/{recommendationId}/decision", request, ct);
 

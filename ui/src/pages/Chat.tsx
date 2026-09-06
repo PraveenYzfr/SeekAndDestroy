@@ -4,6 +4,7 @@ import type { InfrastructureRecommendation, RunInvestigationResult } from "@/typ
 import { describeCandidate, isNodeRow } from "@/utils/recommendations";
 import { getIdentity } from "@/auth/session";
 import ReviewChoice from "@/components/ReviewChoice";
+import AnswerFeedbackControl from "@/components/AnswerFeedbackControl";
 
 type MessageStatus = "loading" | "awaiting_review" | "completed" | "error";
 
@@ -349,6 +350,7 @@ export default function Chat() {
             onDecide={decide}
             onAsk={send}
             busy={busy}
+            conversationId={conversationId}
             superseded={
               m.status === "awaiting_review" &&
               !m.decided &&
@@ -511,8 +513,13 @@ function ChatBubble({
   onAsk,
   busy,
   superseded,
+  conversationId,
 }: {
   message: ChatMessage;
+  /** Recorded alongside a rating so feedback can be read per conversation as
+   *  well as per investigation - "this whole thread was useless" is a different
+   *  signal from one bad answer inside a good session. */
+  conversationId?: string | null;
   /** A later question has moved past this shortlist. Shown, not removed. */
   superseded?: boolean;
   onDecide: (
@@ -645,6 +652,20 @@ function ChatBubble({
 
             {message.recommendations && message.recommendations.length > 0 && (
               <Outcome recommendations={message.recommendations} />
+            )}
+
+            {/* THE ONLY HUMAN GROUND TRUTH THIS PLATFORM HAS, and until now it
+                was unreachable: the table, repository, endpoints and tests all
+                existed with no control and no gateway route.
+
+                Placed at the END of a completed answer rather than beside the
+                status line, because "was this useful" can only be answered by
+                somebody who has read the thing. */}
+            {message.investigationId != null && message.status === "completed" && (
+              <AnswerFeedbackControl
+                investigationId={message.investigationId}
+                conversationId={conversationId}
+              />
             )}
 
             {message.investigationId != null && (

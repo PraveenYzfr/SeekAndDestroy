@@ -202,3 +202,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .chat-input-bar { display: flex; gap: 10px; margin-top: 16px; }
 .chat-input-bar textarea { flex: 1; resize: none; }
 .chat-input-bar button { align-self: flex-end; }
+
+/* Answer feedback - the only human signal this platform collects.
+   Deliberately quiet: a control that shouts competes with the answer it is
+   asking about, and the reading matters more than the rating. */
+.answer-feedback { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; font-size: 13px; }
+.feedback-vote { padding: 2px 12px; font-size: 13px; border-radius: 12px; }
+.feedback-vote.chosen { outline: 2px solid var(--accent, #4c8bf5); }
+/* Reserved width, so the confirmation appearing does not shuffle the buttons
+   sideways under the pointer at the moment of clicking. */
+.feedback-status { min-width: 150px; opacity: 0.85; }
+.feedback-detail { flex-basis: 100%; margin-top: 6px; }
+.feedback-reasons { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.feedback-reasons .secondary { font-size: 12px; padding: 2px 10px; }
+.feedback-reasons .secondary.chosen { outline: 2px solid var(--accent, #4c8bf5); }
+.feedback-detail textarea { width: 100%; max-width: 520px; font-size: 13px; }
