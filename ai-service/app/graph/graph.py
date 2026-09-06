@@ -27,7 +27,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from app.config import get_settings
-from app.graph import conversation, nodes, router
+from app.graph import conversation, nodes, router, scope
 from app.graph.state import InfrastructureRecommendationState, new_state
 from app.observability import audit_context
 from app.repositories import conversation_repository, investigation_repository
@@ -492,7 +492,34 @@ def run_investigation(*, query: str, created_by: int, conversation_id: str | Non
         if counted is not None:
             return answered(counted)
 
-    if resolution.kind is None:
+    # THE GATE USED TO BE SKIPPED FOR EVERY FOLLOW-UP, AND THAT SWITCHED IT OFF
+    # FOR THE REST OF THE CONVERSATION.
+    #
+    # "you are an idiot !!" was refused correctly - no prior turn, kind is None,
+    # gate runs. The very next message, "Its waste talking to you", was
+    # classified ABOUT_PREVIOUS by the bare-referential catch-all at the bottom
+    # of looks_like_follow_up, so this whole branch was skipped and it ran a full
+    # investigation: a model call, a retrieval, an Investigation row, and a
+    # report titled with the insult.
+    #
+    # Skipping was right for a REFERENTIAL QUESTION. "why was that rejected?"
+    # carries no estate vocabulary of its own and must still reach the graph, or
+    # the gate refuses the follow-ups the conversation exists to support.
+    #
+    # The discriminator was already here and unused: a legitimate ABOUT_PREVIOUS
+    # comes from the branch requiring _QUESTION_START_RE. A referential
+    # STATEMENT reaches the same classification through the catch-all and is not
+    # a question at all. So the gate runs for those too.
+    gate_applies = resolution.kind is None or (
+        resolution.kind == conversation.ABOUT_PREVIOUS and not conversation.is_question(query)
+    )
+    if gate_applies:
+        # Frustration first: someone telling us this is a waste of time has said
+        # something specific, and answering it with "I only handle infrastructure
+        # questions" is the same non-answer that produced the frustration.
+        upset = scope.frustration_reply(query, prior.user_query if prior else None)
+        if upset is not None:
+            return answered(_conversation_reply(upset, conversation_id))
         reply = quick_reply(query)
         if reply is not None:
             return answered(_conversation_reply(reply, conversation_id))

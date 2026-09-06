@@ -187,6 +187,65 @@ def has_estate_signal(query: str) -> bool:
     return any(_is_domain_word(token) for token in _TOKEN.findall(text))
 
 
+#: Words that say the person is unhappy with the platform rather than asking it
+#: something. A CLOSED list, deliberately: this decides whether to answer
+#: differently, and a generous matcher would patronise an engineer who typed
+#: "this is the wrong cluster" - a precise, ordinary infrastructure statement.
+#: Better to miss a frustrated turn and give the plain refusal than to tell a
+#: working engineer they seem upset.
+_FRUSTRATION_RE = re.compile(
+    r"\b("
+    r"waste|wasting|useless|pointless|rubbish|garbage|nonsense|"
+    r"idiot|stupid|dumb|"
+    r"not helpful|unhelpful|no help|"
+    r"terrible|awful|horrible|"
+    r"give up|giving up|forget it|"
+    r"fuck|shit|crap|damn"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def frustration_reply(query: str, prior_query: str | None = None) -> str | None:
+    """A reply for someone who is fed up, or None when they are not.
+
+    WHY THIS EXISTS. A real transcript: the engineer typed "you are an idiot !!"
+    and got the capability refusal, then "Its waste talking to you" - and the
+    platform RAN A FULL INVESTIGATION on it, produced "Investigation Report for:
+    Its waste talking to you", invented a finding, and advised them to "obtain
+    relevant data or clarify the question". It answered a complaint about being
+    useless by being useless again, and filed the insult as a governance record.
+
+    What this does NOT do: guess at emotion with a model. The check is a closed
+    word list, and the response is a fixed template. A model asked "is the user
+    upset?" finds upset users everywhere, and the failure mode is patronising an
+    engineer who is working perfectly happily.
+
+    It also does not apologise repeatedly. One acknowledgement, then the two
+    questions that can actually move this forward - what was wrong with the last
+    answer, and what to do about it. The previous question is named when there
+    is one, because "which answer" is otherwise the first thing they have to
+    explain.
+    """
+    if not _FRUSTRATION_RE.search(query or ""):
+        return None
+
+    about = f' about "{prior_query.strip()[:120]}"' if prior_query else ""
+    return (
+        "That is fair, and I would rather fix it than leave it.\n\n"
+        f"The last answer I gave{about} clearly did not land. So that I correct "
+        "the right thing rather than guess:\n\n"
+        "  - What was wrong with it - a figure that looked incorrect, a cluster "
+        "that should not have been offered, or an answer that missed the "
+        "question entirely?\n"
+        "  - Should I re-run that request with different constraints, or is this "
+        "a different question I have been answering badly?\n\n"
+        "If it is easier, restate what you need in your own words and I will "
+        "start from there - naming an application code or the resources you "
+        "need is enough."
+    )
+
+
 def out_of_scope_reply(query: str) -> str | None:
     """The reply for a question this platform has no business answering, or
     None when the question should proceed to the graph."""

@@ -261,6 +261,19 @@ class Resolution:
     exclude_data_centers: list[str] = field(default_factory=list)
 
 
+def is_question(query: str) -> bool:
+    """Does this turn ASK something, by its opening word.
+
+    Exported because the scope gate needs it and the distinction is already made
+    here. A referential QUESTION - "why was that rejected?" - is a real follow-up
+    and must reach the graph. A referential STATEMENT - "its waste talking to
+    you" - reaches the same ABOUT_PREVIOUS classification through the bare
+    catch-all at the bottom of looks_like_follow_up, and is not a question at
+    all.
+    """
+    return bool(_QUESTION_START_RE.search(query or ""))
+
+
 def looks_like_follow_up(query: str) -> Optional[str]:
     """Which kind of follow-up this query is, from its wording alone.
 
