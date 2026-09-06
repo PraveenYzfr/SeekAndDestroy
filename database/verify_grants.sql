@@ -74,7 +74,22 @@ INSERT INTO @writable (TableName, Perm, Col) VALUES
     ('AgentAuditLog', 'INSERT', NULL),
     ('AgentAuditLog', 'UPDATE', NULL),
     ('AnswerEvaluation', 'INSERT', NULL),
+    --  INSERT *AND* UPDATE. answer_feedback_repository.record() uses MERGE so
+    --  that a person changing their mind revises their row rather than adding a
+    --  second contradictory one - and SQL Server checks the permissions for
+    --  every branch of a MERGE, so INSERT alone fails even on a first rating.
+    --
+    --  This line said INSERT only, and that is how the feature reached
+    --  production broken: docker/db-init.sh grants INSERT, UPDATE, the VM's
+    --  ~/infra/provision-databases.sh grants INSERT, and THIS CHECK AGREED WITH
+    --  THE WRONG ONE. The drift detector passed on every deploy while the
+    --  feature could not write.
+    --
+    --  A verifier is only as good as its expectations. Asking the right
+    --  question of the right principal is worth nothing if the expected answer
+    --  is itself wrong.
     ('AnswerFeedback', 'INSERT', NULL),
+    ('AnswerFeedback', 'UPDATE', NULL),
     ('CallEvaluation', 'INSERT', NULL),
     ('CapacityRequest', 'INSERT', NULL),
     ('Conversation', 'INSERT', NULL),
