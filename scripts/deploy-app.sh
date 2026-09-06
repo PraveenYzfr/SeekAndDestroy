@@ -177,13 +177,40 @@ echo "==> 1b. VERSION DIRECTION - a pin must never move a stateful service BACKW
 #
 # Deliberately AFTER the pull, so it reads the compose file that is about to be
 # used, and BEFORE any build or recreate, so a refusal costs nothing.
+#
+# INTERACTION WITH --stash-local, found by the Owner session running exactly
+# this by hand: that flag sets a working-tree edit aside BEFORE the pull, so an
+# UNCOMMITTED downgrade is invisible here and this prints "unchanged". That is
+# not a hole - the deploy then uses the stashed-clean tree, so the downgrade
+# never reaches a container either way - but the guard checks what is COMMITTED,
+# not what is in the tree, and a test of it must commit the change first.
 STATEFUL_SERVICES="grafana prometheus"
 for svc in $STATEFUL_SERVICES; do
     container=$(sudo docker ps -a --filter "name=docker-${svc}-1" --format "{{.Names}}" | head -1)
     [ -z "$container" ] && continue
 
     running=$(sudo docker inspect -f "{{.Config.Image}}" "$container" 2>/dev/null | sed "s/.*://")
-    wanted=$(awk -v s="  ${svc}:" '$0==s{f=1} f&&/image:/{sub(/.*:/,"");print;exit}' "$REPO/docker/docker-compose.yml")
+    # BOUNDED TO THE SERVICE BLOCK. The first version scanned forward from
+    # "  <svc>:" to the first image: line and stopped there - so a service
+    # without an image line would silently pick up the NEXT service's tag and
+    # compare grafana against alertmanager. All three have one today, which is
+    # exactly the kind of "true for now" that this file keeps being bitten by.
+    # `exit` on the next top-level key means an absent image line yields empty
+    # rather than someone else's version.
+    wanted=$(awk -v s="  ${svc}:" '
+        $0==s {f=1; next}
+        f && /^  [a-zA-Z_]/ {exit}
+        f && /^ *image:/ {sub(/.*:/,""); print; exit}
+    ' "$REPO/docker/docker-compose.yml")
+
+    # Empty is its own case, not a version. Without this the concatenation below
+    # passes the character-class test (nothing invalid in "13.2.1"), the empty
+    # string sorts first, and the guard REFUSES with "compose says ." - the
+    # right direction for the wrong reason, and a message nobody could act on.
+    if [ -z "$wanted" ]; then
+        echo "    $svc: no image line found in docker-compose.yml - SKIPPED"
+        continue
+    fi
 
     # A tag that is not a version - "latest", a digest, an empty read - cannot be
     # ordered, so it cannot be checked. Said out loud rather than passed over:
